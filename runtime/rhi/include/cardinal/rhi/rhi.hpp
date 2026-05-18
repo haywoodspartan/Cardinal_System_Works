@@ -1,10 +1,7 @@
 #pragma once
 
 #include <cardinal/core/types.hpp>
-
-#include <functional>
-#include <memory>
-#include <vector>
+#include <cardinal/core/containers.hpp>
 
 // =============================================================================
 // Cardinal RHI — Render Hardware Interface.
@@ -40,7 +37,7 @@ enum class ShaderStage : u32 {
 //   Vulkan : SPIR-V words (cast to u32* on use)
 //   D3D12  : DXIL bytes
 struct ShaderBlob {
-    std::vector<u8> bytes;
+    cardinal::vector<u8> bytes;
     bool ok() const noexcept { return !bytes.empty(); }
 };
 
@@ -179,7 +176,7 @@ struct BlasGeometryDesc {
 };
 
 struct BlasDesc {
-    std::vector<BlasGeometryDesc> geometries;
+    cardinal::vector<BlasGeometryDesc> geometries;
     bool prefer_fast_trace{true};   // false => prefer fast build
     bool allow_compaction{false};   // hand off to RTXMU when true (Phase 5.1)
 };
@@ -193,7 +190,7 @@ struct TlasInstance {
 };
 
 struct TlasDesc {
-    std::vector<TlasInstance> instances;
+    cardinal::vector<TlasInstance> instances;
     bool prefer_fast_trace{true};
 };
 
@@ -227,7 +224,7 @@ struct PipelineDesc {
     ShaderBlob               fragment_shader;
     const char*              vertex_entry{"VSMain"};
     const char*              fragment_entry{"PSMain"};
-    std::vector<VertexAttrib> vertex_attribs;
+    cardinal::vector<VertexAttrib> vertex_attribs;
     u32                      vertex_stride{0};       // 0 if no vertex buffer (uses SV_VertexID)
     PrimitiveTopology        topology{PrimitiveTopology::TriangleList};
     Format                   color_format{Format::B8G8R8A8_UNORM};
@@ -408,7 +405,7 @@ public:
     //
     // Single-callback (last writer wins). The engine sets it; UI hosts
     // chain through the engine's set_on_swapchain_resized hook.
-    using OnRebuilt = std::function<void()>;
+    using OnRebuilt = cardinal::function<void()>;
     virtual void set_on_rebuilt(OnRebuilt cb) = 0;
 
     // Viewport (render-to-texture) configuration.
@@ -648,25 +645,25 @@ public:
     virtual const RenderSettings& settings() const noexcept = 0;
     virtual void                  apply_settings(const RenderSettings& s) = 0;
 
-    virtual std::unique_ptr<Swapchain> create_swapchain(
+    virtual cardinal::unique_ptr<Swapchain> create_swapchain(
         void* native_window, u32 width, u32 height) = 0;
 
-    virtual std::unique_ptr<Buffer>   create_buffer(const BufferDesc& desc)     = 0;
-    virtual std::unique_ptr<Pipeline> create_pipeline(const PipelineDesc& desc) = 0;
+    virtual cardinal::unique_ptr<Buffer>   create_buffer(const BufferDesc& desc)     = 0;
+    virtual cardinal::unique_ptr<Pipeline> create_pipeline(const PipelineDesc& desc) = 0;
 
     // Off-screen texture (shadow-mapping arc). Default returns nullptr
     // so backends that haven't implemented it yet — and the existing
     // render path — are unaffected (same safe-incremental pattern as
     // bind_storage_buffer). Vulkan/D3D12 overrides land next.
-    virtual std::unique_ptr<Texture> create_texture(const TextureDesc& /*d*/) {
+    virtual cardinal::unique_ptr<Texture> create_texture(const TextureDesc& /*d*/) {
         return nullptr;
     }
 
     // RT primitives — return nullptr if caps.acceleration_structure is false.
     // Build is synchronous on the graphics queue (vkQueueWaitIdle internally).
     // Async build + RTXMU pooling lands in Phase 5.1.
-    virtual std::unique_ptr<AccelerationStructure> create_blas(const BlasDesc& desc) = 0;
-    virtual std::unique_ptr<AccelerationStructure> create_tlas(const TlasDesc& desc) = 0;
+    virtual cardinal::unique_ptr<AccelerationStructure> create_blas(const BlasDesc& desc) = 0;
+    virtual cardinal::unique_ptr<AccelerationStructure> create_tlas(const TlasDesc& desc) = 0;
 
     virtual ShaderBlob compile_shader(
         ShaderStage stage,
@@ -702,6 +699,6 @@ protected:
     Device() = default;
 };
 
-std::unique_ptr<Device> create_device(const DeviceDesc& desc);
+cardinal::unique_ptr<Device> create_device(const DeviceDesc& desc);
 
 }  // namespace cardinal::rhi

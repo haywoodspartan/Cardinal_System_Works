@@ -5,10 +5,10 @@
 namespace cardinal::rhi {
 
 // Backend factories implemented in rhi_<backend>.cpp.
-std::unique_ptr<Device> create_vulkan_device(const DeviceDesc& desc);
-std::unique_ptr<Device> create_d3d12_device (const DeviceDesc& desc);
+cardinal::unique_ptr<Device> create_vulkan_device(const DeviceDesc& desc);
+cardinal::unique_ptr<Device> create_d3d12_device (const DeviceDesc& desc);
 
-std::unique_ptr<Device> create_device(const DeviceDesc& desc) {
+cardinal::unique_ptr<Device> create_device(const DeviceDesc& desc) {
     Backend chosen = desc.backend;
     if (chosen == Backend::Auto) {
         // Auto prefers Vulkan today because Studio's editor overlay is

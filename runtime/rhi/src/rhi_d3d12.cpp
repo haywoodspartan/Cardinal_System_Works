@@ -31,7 +31,7 @@
 #if !CARDINAL_PLATFORM_WINDOWS
 
 namespace cardinal::rhi {
-std::unique_ptr<Device> create_d3d12_device(const DeviceDesc&) {
+cardinal::unique_ptr<Device> create_d3d12_device(const DeviceDesc&) {
     cardinal::log::warnf("rhi/d3d12", "D3D12 backend is Windows-only");
     return nullptr;
 }
@@ -68,11 +68,11 @@ std::unique_ptr<Device> create_d3d12_device(const DeviceDesc&) {
     #endif
 #endif
 
-#include <array>
-#include <cstdio>
-#include <cstring>
-#include <memory>
-#include <vector>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/utility.hpp>
 
 using Microsoft::WRL::ComPtr;
 
@@ -87,7 +87,7 @@ constexpr u32 kFramesInFlight = 2;
 // -----------------------------------------------------------------------------
 const char* hr_str(HRESULT hr) {
     static thread_local char buf[64];
-    std::snprintf(buf, sizeof(buf), "0x%08lx", hr);
+    cardinal::snprintf(buf, sizeof(buf), "0x%08lx", hr);
     return buf;
 }
 
@@ -136,7 +136,7 @@ D3D12_PRIMITIVE_TOPOLOGY to_d3d_topology(PrimitiveTopology t) {
 class D3D12Buffer final : public Buffer {
 public:
     D3D12Buffer(ComPtr<ID3D12Resource> r, usize size, bool cpu_writable)
-        : res_(std::move(r)), size_(size), cpu_writable_(cpu_writable) {
+        : res_(cardinal::move(r)), size_(size), cpu_writable_(cpu_writable) {
         gpu_va_ = res_->GetGPUVirtualAddress();
     }
 
@@ -157,7 +157,7 @@ public:
             cardinal::log::errorf("rhi/d3d12", "upload Map failed");
             return;
         }
-        std::memcpy(static_cast<u8*>(mapped) + offset, data, size);
+        cardinal::memcpy(static_cast<u8*>(mapped) + offset, data, size);
         res_->Unmap(0, nullptr);
     }
 
@@ -276,7 +276,7 @@ public:
     D3D12Pipeline(ComPtr<ID3D12RootSignature> rs, ComPtr<ID3D12PipelineState> pso,
                   PrimitiveTopology topo, u32 vertex_stride, u32 push_constant_size,
                   u32 storage_buffer_slots, u32 sampled_texture_slots)
-        : root_(std::move(rs)), pso_(std::move(pso))
+        : root_(cardinal::move(rs)), pso_(cardinal::move(pso))
         , topology_(to_d3d_topology(topo)), vertex_stride_(vertex_stride)
         , push_constant_size_(push_constant_size)
         , storage_buffer_slots_(storage_buffer_slots)
@@ -351,11 +351,11 @@ public:
     u32  begin_frame(float r, float g, float b, float a) override;
     void end_frame() override;
     bool resize(u32 new_w, u32 new_h) override;
-    void set_on_rebuilt(OnRebuilt cb) override { on_rebuilt_ = std::move(cb); }
+    void set_on_rebuilt(OnRebuilt cb) override { on_rebuilt_ = cardinal::move(cb); }
 
     void   set_vsync(bool on) override         { vsync_interval_ = on ? 1u : 0u; }
     bool   vsync() const noexcept override     { return vsync_interval_ > 0u; }
-    void   set_vsync_interval(u32 i) override  { vsync_interval_ = std::min<u32>(i, 4u); }
+    void   set_vsync_interval(u32 i) override  { vsync_interval_ = cardinal::min<u32>(i, 4u); }
     u32    vsync_interval() const noexcept override { return vsync_interval_; }
     Format depth_format() const noexcept override { return Format::D32_Float; }
 
@@ -440,8 +440,8 @@ private:
     ComPtr<IDXGISwapChain3>          swap_;
     ComPtr<ID3D12DescriptorHeap>     rtv_heap_;
     UINT                             rtv_stride_{0};
-    std::array<ComPtr<ID3D12Resource>, kFramesInFlight> back_buffers_;
-    std::array<Frame, kFramesInFlight> frames_;
+    cardinal::array<ComPtr<ID3D12Resource>, kFramesInFlight> back_buffers_;
+    cardinal::array<Frame, kFramesInFlight> frames_;
     UINT                             frame_index_{0};
 
     ComPtr<ID3D12Fence>              fence_;
@@ -453,7 +453,7 @@ private:
     // the next pipeline.render() call writes into. begin_frame stashes the
     // clear color so each set_active_viewport(id) can re-clear that
     // viewport's color + depth before the host's render pass overwrites it.
-    std::vector<ViewportSlot>        viewports_{};
+    cardinal::vector<ViewportSlot>        viewports_{};
     u32                              viewport_count_{0u};
     u32                              viewport_active_id_{0u};
     float                            last_clear_color_[4]{0, 0, 0, 1};
@@ -519,20 +519,20 @@ public:
 
     bool initialize(const DeviceDesc& desc);
 
-    std::unique_ptr<Swapchain> create_swapchain(void* native_window, u32 w, u32 h) override {
-        auto sw = std::make_unique<D3D12Swapchain>(*this);
+    cardinal::unique_ptr<Swapchain> create_swapchain(void* native_window, u32 w, u32 h) override {
+        auto sw = cardinal::make_unique<D3D12Swapchain>(*this);
         if (!sw->initialize(static_cast<HWND>(native_window), w, h)) return nullptr;
         return sw;
     }
 
-    std::unique_ptr<Buffer>   create_buffer(const BufferDesc& desc) override;
-    std::unique_ptr<Pipeline> create_pipeline(const PipelineDesc& desc) override;
-    std::unique_ptr<Texture>  create_texture(const TextureDesc& desc) override;
+    cardinal::unique_ptr<Buffer>   create_buffer(const BufferDesc& desc) override;
+    cardinal::unique_ptr<Pipeline> create_pipeline(const PipelineDesc& desc) override;
+    cardinal::unique_ptr<Texture>  create_texture(const TextureDesc& desc) override;
 
     // RT not yet wired in the D3D12 backend — return nullptr so callers see
     // it as unsupported.
-    std::unique_ptr<AccelerationStructure> create_blas(const BlasDesc&) override { return nullptr; }
-    std::unique_ptr<AccelerationStructure> create_tlas(const TlasDesc&) override { return nullptr; }
+    cardinal::unique_ptr<AccelerationStructure> create_blas(const BlasDesc&) override { return nullptr; }
+    cardinal::unique_ptr<AccelerationStructure> create_tlas(const TlasDesc&) override { return nullptr; }
 
     ShaderBlob compile_shader(ShaderStage stage, const char* hlsl, const char* entry) override;
 
@@ -667,12 +667,12 @@ bool D3D12Device::select_adapter(bool prefer_discrete) {
         if (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue;
         if (SUCCEEDED(D3D12CreateDevice(adp.Get(), D3D_FEATURE_LEVEL_11_0,
                                         __uuidof(ID3D12Device), nullptr))) {
-            adapter_ = std::move(adp);
+            adapter_ = cardinal::move(adp);
             WideCharToMultiByte(CP_UTF8, 0, d.Description, -1,
                                 adapter_name_, sizeof(adapter_name_) - 1,
                                 nullptr, nullptr);
             caps_.vram_bytes = d.DedicatedVideoMemory;
-            std::strncpy(caps_.vendor_name,
+            cardinal::strncpy(caps_.vendor_name,
                 d.VendorId == 0x10DE ? "NVIDIA Corporation" :
                 d.VendorId == 0x1002 ? "Advanced Micro Devices" :
                 d.VendorId == 0x8086 ? "Intel" : "Unknown",
@@ -737,20 +737,20 @@ void D3D12Device::populate_capabilities() {
     caps_.acceleration_structure   = (o5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0);
     caps_.ray_tracing_pipeline     = (o5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0);
     caps_.ray_query                = (o5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1);
-    caps_.nvidia_dlss_capable      = (std::strstr(caps_.vendor_name, "NVIDIA") != nullptr)
+    caps_.nvidia_dlss_capable      = (cardinal::strstr(caps_.vendor_name, "NVIDIA") != nullptr)
                                   && caps_.ray_tracing_pipeline;
     caps_.nvidia_framegen_capable  = caps_.nvidia_dlss_capable;
-    caps_.amd_fsr3_capable         = (std::strstr(caps_.vendor_name, "AMD") != nullptr ||
-                                      std::strstr(caps_.vendor_name, "Advanced Micro") != nullptr);
+    caps_.amd_fsr3_capable         = (cardinal::strstr(caps_.vendor_name, "AMD") != nullptr ||
+                                      cardinal::strstr(caps_.vendor_name, "Advanced Micro") != nullptr);
 
-    std::strncpy(caps_.gpu_arch,
+    cardinal::strncpy(caps_.gpu_arch,
         caps_.mesh_shader && caps_.ray_query ? "RTX 30+ class" :
         caps_.acceleration_structure         ? "RT-capable"   :
                                                "raster-only",
         sizeof(caps_.gpu_arch) - 1);
 }
 
-std::unique_ptr<Buffer> D3D12Device::create_buffer(const BufferDesc& desc) {
+cardinal::unique_ptr<Buffer> D3D12Device::create_buffer(const BufferDesc& desc) {
     if (desc.size == 0) return nullptr;
 
     D3D12_HEAP_PROPERTIES heap{};
@@ -781,11 +781,11 @@ std::unique_ptr<Buffer> D3D12Device::create_buffer(const BufferDesc& desc) {
             hr_str(hr));
         return nullptr;
     }
-    return std::make_unique<D3D12Buffer>(std::move(res), desc.size, desc.cpu_writable);
+    return cardinal::make_unique<D3D12Buffer>(cardinal::move(res), desc.size, desc.cpu_writable);
 }
 
-std::unique_ptr<Texture> D3D12Device::create_texture(const TextureDesc& desc) {
-    auto t = std::make_unique<D3D12Texture>();
+cardinal::unique_ptr<Texture> D3D12Device::create_texture(const TextureDesc& desc) {
+    auto t = cardinal::make_unique<D3D12Texture>();
     if (!t->initialize(device_.Get(), desc)) return nullptr;
     return t;
 }
@@ -806,10 +806,10 @@ ShaderBlob D3D12Device::compile_shader(ShaderStage stage, const char* hlsl, cons
 
     DxcBuffer src{};
     src.Ptr      = hlsl;
-    src.Size     = std::strlen(hlsl);
+    src.Size     = cardinal::strlen(hlsl);
     src.Encoding = DXC_CP_UTF8;
 
-    std::array<LPCWSTR, 8> args = {
+    cardinal::array<LPCWSTR, 8> args = {
         L"-E", entry_w,
         L"-T", target,
         L"-Zi",
@@ -843,7 +843,7 @@ ShaderBlob D3D12Device::compile_shader(ShaderStage stage, const char* hlsl, cons
         return out;
     }
     out.bytes.resize(code->GetBufferSize());
-    std::memcpy(out.bytes.data(), code->GetBufferPointer(), code->GetBufferSize());
+    cardinal::memcpy(out.bytes.data(), code->GetBufferPointer(), code->GetBufferSize());
     return out;
 }
 
@@ -866,7 +866,7 @@ Device::VramSnapshot D3D12Device::query_vram_usage() const noexcept {
     return s;
 }
 
-std::unique_ptr<Pipeline> D3D12Device::create_pipeline(const PipelineDesc& desc) {
+cardinal::unique_ptr<Pipeline> D3D12Device::create_pipeline(const PipelineDesc& desc) {
     if (!desc.vertex_shader.ok() || !desc.fragment_shader.ok()) {
         cardinal::log::errorf("rhi/d3d12", "create_pipeline: shaders not compiled");
         return nullptr;
@@ -887,7 +887,7 @@ std::unique_ptr<Pipeline> D3D12Device::create_pipeline(const PipelineDesc& desc)
     // index 0. Root SRVs (not descriptor tables) need no descriptor
     // heap — they bind straight from a GPU virtual address, mirroring
     // the Vulkan storage-buffer descriptor on the other backend.
-    std::vector<D3D12_ROOT_PARAMETER> root_params;
+    cardinal::vector<D3D12_ROOT_PARAMETER> root_params;
     if (desc.push_constant_size > 0) {
         D3D12_ROOT_PARAMETER rp{};
         rp.ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
@@ -966,14 +966,14 @@ std::unique_ptr<Pipeline> D3D12Device::create_pipeline(const PipelineDesc& desc)
     }
 
     // Input layout from PipelineDesc::vertex_attribs.
-    std::vector<D3D12_INPUT_ELEMENT_DESC> ie;
+    cardinal::vector<D3D12_INPUT_ELEMENT_DESC> ie;
     ie.reserve(desc.vertex_attribs.size());
     static const char* semantic_names[] = { "POSITION", "COLOR", "TEXCOORD", "NORMAL", "TANGENT" };
     for (const auto& a : desc.vertex_attribs) {
         D3D12_INPUT_ELEMENT_DESC el{};
         // Match the HLSL we use: POSITION0 / COLOR0 / TEXCOORD<n> by location.
         const u32 sem_idx = a.location;
-        const char* sem   = sem_idx < std::size(semantic_names)
+        const char* sem   = sem_idx < cardinal::size(semantic_names)
                           ? semantic_names[sem_idx] : "TEXCOORD";
         // Heuristic: location 0 -> POSITION, 1 -> COLOR, 2+ -> TEXCOORD with
         // increasing semantic indices. Matches what our triangle sample uses.
@@ -1035,7 +1035,7 @@ std::unique_ptr<Pipeline> D3D12Device::create_pipeline(const PipelineDesc& desc)
         cardinal::log::errorf("rhi/d3d12", "CreateGraphicsPipelineState failed (%s)", hr_str(hr));
         return nullptr;
     }
-    return std::make_unique<D3D12Pipeline>(std::move(root), std::move(pso),
+    return cardinal::make_unique<D3D12Pipeline>(cardinal::move(root), cardinal::move(pso),
                                            desc.topology, desc.vertex_stride,
                                            desc.push_constant_size,
                                            desc.storage_buffer_slots,
@@ -1728,7 +1728,7 @@ void D3D12Swapchain::end_frame() {
     // Viewport panel) can sample them. Flipped back to RENDER_TARGET
     // below for next frame. We batch all transitions into one
     // ResourceBarrier call to minimise driver overhead.
-    std::vector<D3D12_RESOURCE_BARRIER> to_srv;
+    cardinal::vector<D3D12_RESOURCE_BARRIER> to_srv;
     to_srv.reserve(viewport_count_);
     for (u32 i = 0; i < viewport_count_; ++i) {
         auto& vp = viewports_[i];
@@ -1768,7 +1768,7 @@ void D3D12Swapchain::end_frame() {
 
     // Restore each rendered-this-frame viewport image to RENDER_TARGET so
     // next frame's set_active_viewport can clear + draw into it.
-    std::vector<D3D12_RESOURCE_BARRIER> to_rt;
+    cardinal::vector<D3D12_RESOURCE_BARRIER> to_rt;
     to_rt.reserve(to_srv.size());
     for (const auto& bar : to_srv) {
         D3D12_RESOURCE_BARRIER nb = bar;
@@ -1876,8 +1876,8 @@ void D3D12Swapchain::destroy() {
 // -----------------------------------------------------------------------------
 // Factory entry point
 // -----------------------------------------------------------------------------
-std::unique_ptr<Device> create_d3d12_device(const DeviceDesc& desc) {
-    auto d = std::make_unique<D3D12Device>();
+cardinal::unique_ptr<Device> create_d3d12_device(const DeviceDesc& desc) {
+    auto d = cardinal::make_unique<D3D12Device>();
     if (!d->initialize(desc)) return nullptr;
     return d;
 }

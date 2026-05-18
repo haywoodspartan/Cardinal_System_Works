@@ -18,7 +18,7 @@
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/platform.hpp>
 
-#include <cstring>
+#include <cardinal/core/cstring.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
     #include <Windows.h>
@@ -187,7 +187,7 @@ void reflex_latency_sleep(void* /*vk_device*/, void* /*vk_swapchain*/) noexcept 
 void log_linked_sdks() {
     char line[256] = "linked SDKs:";
     auto append = [&](const char* s) {
-        std::strncat(line, s, sizeof(line) - std::strlen(line) - 1);
+        cardinal::strncat(line, s, sizeof(line) - cardinal::strlen(line) - 1);
     };
 #if CARDINAL_HAS_STREAMLINE
     append(" Streamline");

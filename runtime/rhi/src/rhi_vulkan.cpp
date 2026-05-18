@@ -38,11 +38,10 @@
 // it must come AFTER Windows.h + unknwn.h above.
 #include <dxcapi.h>
 
-#include <algorithm>
-#include <array>
-#include <cstring>
-#include <memory>
-#include <vector>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::rhi {
 
@@ -220,7 +219,7 @@ public:
     void end_frame() override;
     bool resize(u32 new_w, u32 new_h) override;
 
-    void set_on_rebuilt(OnRebuilt cb) override { on_rebuilt_ = std::move(cb); }
+    void set_on_rebuilt(OnRebuilt cb) override { on_rebuilt_ = cardinal::move(cb); }
 
     void bind_pipeline(Pipeline* p) override;
     void bind_vertex_buffer(Buffer* b, usize offset = 0) override;
@@ -318,8 +317,8 @@ private:
     VkPresentModeKHR present_mode_{VK_PRESENT_MODE_FIFO_KHR};
     u32             min_image_count_{0};
 
-    std::vector<VkImage>     images_;
-    std::vector<VkImageView> views_;
+    cardinal::vector<VkImage>     images_;
+    cardinal::vector<VkImageView> views_;
 
     struct FrameSync {
         VkSemaphore     image_available{VK_NULL_HANDLE};
@@ -335,7 +334,7 @@ private:
         // (lazy create — push-constant-only apps pay nothing).
         VkDescriptorPool desc_pool{VK_NULL_HANDLE};
     };
-    std::array<FrameSync, frames_in_flight> frames_{};
+    cardinal::array<FrameSync, frames_in_flight> frames_{};
     u32 frame_index_{0};
     u32 acquired_image_{0};
 
@@ -395,7 +394,7 @@ private:
         VmaAllocation   depth_alloc{VK_NULL_HANDLE};
         VkImageLayout   depth_layout{VK_IMAGE_LAYOUT_UNDEFINED};
     };
-    std::vector<ViewportSlot> viewports_{};
+    cardinal::vector<ViewportSlot> viewports_{};
     u32                       viewport_count_{0u};
     u32                       active_viewport_id_{0u};
     // Whether vkCmdBeginRendering is currently open on a viewport (so
@@ -517,19 +516,19 @@ public:
 
     bool initialize(const DeviceDesc& desc);
 
-    std::unique_ptr<Swapchain> create_swapchain(
+    cardinal::unique_ptr<Swapchain> create_swapchain(
         void* native_window, u32 w, u32 h) override
     {
-        auto sw = std::make_unique<VulkanSwapchain>(*this);
+        auto sw = cardinal::make_unique<VulkanSwapchain>(*this);
         if (!sw->initialize(native_window, w, h)) return nullptr;
         return sw;
     }
 
-    std::unique_ptr<Buffer>   create_buffer(const BufferDesc& desc) override;
-    std::unique_ptr<Pipeline> create_pipeline(const PipelineDesc& desc) override;
-    std::unique_ptr<Texture>  create_texture(const TextureDesc& desc) override;
-    std::unique_ptr<AccelerationStructure> create_blas(const BlasDesc& desc) override;
-    std::unique_ptr<AccelerationStructure> create_tlas(const TlasDesc& desc) override;
+    cardinal::unique_ptr<Buffer>   create_buffer(const BufferDesc& desc) override;
+    cardinal::unique_ptr<Pipeline> create_pipeline(const PipelineDesc& desc) override;
+    cardinal::unique_ptr<Texture>  create_texture(const TextureDesc& desc) override;
+    cardinal::unique_ptr<AccelerationStructure> create_blas(const BlasDesc& desc) override;
+    cardinal::unique_ptr<AccelerationStructure> create_tlas(const TlasDesc& desc) override;
 
     ShaderBlob compile_shader(
         ShaderStage stage,
@@ -622,8 +621,8 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
     app.engineVersion      = VK_MAKE_VERSION(0, 0, 1);
     app.apiVersion         = VK_API_VERSION_1_3;
 
-    std::vector<const char*> layers;
-    std::vector<const char*> exts = {
+    cardinal::vector<const char*> layers;
+    cardinal::vector<const char*> exts = {
         VK_KHR_SURFACE_EXTENSION_NAME,
 #if CARDINAL_PLATFORM_WINDOWS
         VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
@@ -655,7 +654,7 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
         cardinal::log::errorf("rhi/vk", "no Vulkan-capable GPUs");
         return false;
     }
-    std::vector<VkPhysicalDevice> phys(phys_count);
+    cardinal::vector<VkPhysicalDevice> phys(phys_count);
     vkEnumeratePhysicalDevices(instance_, &phys_count, phys.data());
 
     u64 best_score = 0;
@@ -679,7 +678,7 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
         if (score > best_score) {
             best_score = score;
             physical_  = p;
-            std::strncpy(adapter_name_, props.deviceName, sizeof(adapter_name_) - 1);
+            cardinal::strncpy(adapter_name_, props.deviceName, sizeof(adapter_name_) - 1);
         }
     }
     if (physical_ == VK_NULL_HANDLE) return false;
@@ -689,7 +688,7 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
     // verify on swapchain creation and bail if not.)
     u32 qf_count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physical_, &qf_count, nullptr);
-    std::vector<VkQueueFamilyProperties> qfs(qf_count);
+    cardinal::vector<VkQueueFamilyProperties> qfs(qf_count);
     vkGetPhysicalDeviceQueueFamilyProperties(physical_, &qf_count, qfs.data());
     for (u32 i = 0; i < qf_count; ++i) {
         if ((qfs[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
@@ -713,22 +712,22 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
             case 0x8086: vendor = "Intel";              break;
             default:                                    break;
         }
-        std::strncpy(caps_.vendor_name, vendor, sizeof(caps_.vendor_name) - 1);
+        cardinal::strncpy(caps_.vendor_name, vendor, sizeof(caps_.vendor_name) - 1);
         // Best-effort architecture string from device name.
         const char* arch = "Unknown";
         if (props.vendorID == 0x10DE) {
             // RTX 40 = Ada Lovelace, RTX 30 = Ampere, RTX 20 = Turing.
-            if (std::strstr(props.deviceName, "RTX 40") || std::strstr(props.deviceName, "RTX 50"))
+            if (cardinal::strstr(props.deviceName, "RTX 40") || cardinal::strstr(props.deviceName, "RTX 50"))
                 arch = "Ada Lovelace+";
-            else if (std::strstr(props.deviceName, "RTX 30")) arch = "Ampere";
-            else if (std::strstr(props.deviceName, "RTX 20") || std::strstr(props.deviceName, "GTX 16"))
+            else if (cardinal::strstr(props.deviceName, "RTX 30")) arch = "Ampere";
+            else if (cardinal::strstr(props.deviceName, "RTX 20") || cardinal::strstr(props.deviceName, "GTX 16"))
                 arch = "Turing";
         } else if (props.vendorID == 0x1002) {
-            if (std::strstr(props.deviceName, "RX 7"))      arch = "RDNA 3";
-            else if (std::strstr(props.deviceName, "RX 6")) arch = "RDNA 2";
-            else if (std::strstr(props.deviceName, "RX 5")) arch = "RDNA";
+            if (cardinal::strstr(props.deviceName, "RX 7"))      arch = "RDNA 3";
+            else if (cardinal::strstr(props.deviceName, "RX 6")) arch = "RDNA 2";
+            else if (cardinal::strstr(props.deviceName, "RX 5")) arch = "RDNA";
         }
-        std::strncpy(caps_.gpu_arch, arch, sizeof(caps_.gpu_arch) - 1);
+        cardinal::strncpy(caps_.gpu_arch, arch, sizeof(caps_.gpu_arch) - 1);
 
         VkPhysicalDeviceMemoryProperties mem{};
         vkGetPhysicalDeviceMemoryProperties(physical_, &mem);
@@ -770,18 +769,18 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
     // ------------------------------------------------------------------------
     u32 ext_count = 0;
     vkEnumerateDeviceExtensionProperties(physical_, nullptr, &ext_count, nullptr);
-    std::vector<VkExtensionProperties> avail_exts(ext_count);
+    cardinal::vector<VkExtensionProperties> avail_exts(ext_count);
     vkEnumerateDeviceExtensionProperties(physical_, nullptr, &ext_count, avail_exts.data());
 
     auto has_ext = [&](const char* name) {
         for (const auto& e : avail_exts) {
-            if (std::strcmp(e.extensionName, name) == 0) return true;
+            if (cardinal::strcmp(e.extensionName, name) == 0) return true;
         }
         return false;
     };
 
     // Required.
-    std::vector<const char*> dev_exts = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    cardinal::vector<const char*> dev_exts = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 
     const bool ext_dyn_rendering = has_ext(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
     if (ext_dyn_rendering) dev_exts.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
@@ -918,9 +917,9 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
     caps_.ray_query                = ext_rq  && qrq.rayQuery;
 
     // Vendor-specific paths.
-    const bool is_nvidia = std::strcmp(caps_.vendor_name, "NVIDIA Corporation") == 0;
-    const bool is_amd    = std::strcmp(caps_.vendor_name, "AMD") == 0;
-    const bool is_ada    = std::strstr(caps_.gpu_arch, "Ada") != nullptr;
+    const bool is_nvidia = cardinal::strcmp(caps_.vendor_name, "NVIDIA Corporation") == 0;
+    const bool is_amd    = cardinal::strcmp(caps_.vendor_name, "AMD") == 0;
+    const bool is_ada    = cardinal::strstr(caps_.gpu_arch, "Ada") != nullptr;
     caps_.nvidia_dlss_capable     = is_nvidia && caps_.acceleration_structure;
     caps_.nvidia_framegen_capable = caps_.nvidia_dlss_capable && is_ada;
     caps_.amd_fsr3_capable        = is_amd;
@@ -1018,13 +1017,13 @@ ShaderBlob VulkanDevice::compile_shader(
 
     DxcBuffer src{};
     src.Ptr      = hlsl_source;
-    src.Size     = std::strlen(hlsl_source);
+    src.Size     = cardinal::strlen(hlsl_source);
     src.Encoding = DXC_CP_UTF8;
 
     // Args: SM 6.6 baseline so HLSL 2021 + new wave/inline RT ops are valid.
     // 16-bit native types only enabled when both the device supports FP16
     // *and* the runtime setting requests it — that pair is what drives RPM.
-    std::vector<LPCWSTR> args = {
+    cardinal::vector<LPCWSTR> args = {
         L"-T", profile,
         L"-E", entry_w,
         L"-spirv",                       // SPIR-V output (Vulkan)
@@ -1179,11 +1178,11 @@ public:
             return;
         }
         if (mapped_ptr_ != nullptr) {
-            std::memcpy(static_cast<u8*>(mapped_ptr_) + offset, data, size);
+            cardinal::memcpy(static_cast<u8*>(mapped_ptr_) + offset, data, size);
         } else {
             void* p = nullptr;
             vmaMapMemory(dev_.allocator_, alloc_, &p);
-            std::memcpy(static_cast<u8*>(p) + offset, data, size);
+            cardinal::memcpy(static_cast<u8*>(p) + offset, data, size);
             vmaUnmapMemory(dev_.allocator_, alloc_);
         }
     }
@@ -1200,8 +1199,8 @@ private:
     u64            device_address_{0};
 };
 
-std::unique_ptr<Buffer> VulkanDevice::create_buffer(const BufferDesc& desc) {
-    auto b = std::make_unique<VulkanBuffer>(*this);
+cardinal::unique_ptr<Buffer> VulkanDevice::create_buffer(const BufferDesc& desc) {
+    auto b = cardinal::make_unique<VulkanBuffer>(*this);
     if (!b->initialize(desc)) return nullptr;
     return b;
 }
@@ -1295,8 +1294,8 @@ private:
     bool           depth_{true};
 };
 
-std::unique_ptr<Texture> VulkanDevice::create_texture(const TextureDesc& desc) {
-    auto t = std::make_unique<VulkanTexture>(*this);
+cardinal::unique_ptr<Texture> VulkanDevice::create_texture(const TextureDesc& desc) {
+    auto t = cardinal::make_unique<VulkanTexture>(*this);
     if (!t->initialize(desc)) return nullptr;
     return t;
 }
@@ -1371,7 +1370,7 @@ bool VulkanPipeline::initialize(const PipelineDesc& desc) {
     //   bindings [storage_buffer_slots_, +sampled_n)   COMBINED_IMAGE_SAMPLER
     // Only built when the pipeline declares at least one of either, so
     // push-constant-only pipelines keep an empty (set-less) layout.
-    std::vector<VkDescriptorSetLayoutBinding> dsl_bindings;
+    cardinal::vector<VkDescriptorSetLayoutBinding> dsl_bindings;
     if (storage_buffer_slots_ > 0 || sampled_texture_slots_ > 0) {
         for (u32 s = 0; s < storage_buffer_slots_; ++s) {
             VkDescriptorSetLayoutBinding b{};
@@ -1426,7 +1425,7 @@ bool VulkanPipeline::initialize(const PipelineDesc& desc) {
         return false;
     }
 
-    std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
+    cardinal::array<VkPipelineShaderStageCreateInfo, 2> stages{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
     stages[0].module = vs_module_;
@@ -1442,7 +1441,7 @@ bool VulkanPipeline::initialize(const PipelineDesc& desc) {
     binding.stride    = desc.vertex_stride;
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    std::vector<VkVertexInputAttributeDescription> attribs;
+    cardinal::vector<VkVertexInputAttributeDescription> attribs;
     attribs.reserve(desc.vertex_attribs.size());
     for (const auto& a : desc.vertex_attribs) {
         VkVertexInputAttributeDescription ad{};
@@ -1497,7 +1496,7 @@ bool VulkanPipeline::initialize(const PipelineDesc& desc) {
     cb.attachmentCount = depth_only ? 0u : 1u;
     cb.pAttachments    = depth_only ? nullptr : &att;
 
-    std::array<VkDynamicState, 2> dyn_states = {
+    cardinal::array<VkDynamicState, 2> dyn_states = {
         VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR
     };
     VkPipelineDynamicStateCreateInfo dyn{};
@@ -1556,8 +1555,8 @@ bool VulkanPipeline::initialize(const PipelineDesc& desc) {
         "vkCreateGraphicsPipelines");
 }
 
-std::unique_ptr<Pipeline> VulkanDevice::create_pipeline(const PipelineDesc& desc) {
-    auto p = std::make_unique<VulkanPipeline>(*this);
+cardinal::unique_ptr<Pipeline> VulkanDevice::create_pipeline(const PipelineDesc& desc) {
+    auto p = cardinal::make_unique<VulkanPipeline>(*this);
     if (!p->initialize(desc)) return nullptr;
     return p;
 }
@@ -1689,9 +1688,9 @@ bool VulkanAccelerationStructure::initialize_blas(const BlasDesc& desc) {
     }
 
     // 1) Build the geometry / range info arrays.
-    std::vector<VkAccelerationStructureGeometryKHR>      geoms;
-    std::vector<VkAccelerationStructureBuildRangeInfoKHR> ranges;
-    std::vector<u32>                                      max_prim_counts;
+    cardinal::vector<VkAccelerationStructureGeometryKHR>      geoms;
+    cardinal::vector<VkAccelerationStructureBuildRangeInfoKHR> ranges;
+    cardinal::vector<u32>                                      max_prim_counts;
     geoms.reserve(desc.geometries.size());
     ranges.reserve(desc.geometries.size());
     max_prim_counts.reserve(desc.geometries.size());
@@ -1812,7 +1811,7 @@ bool VulkanAccelerationStructure::initialize_blas(const BlasDesc& desc) {
         build_info.dstAccelerationStructure  = as_handle_;
         build_info.scratchData.deviceAddress = scratch.device_address;
 
-        std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> range_ptrs;
+        cardinal::vector<const VkAccelerationStructureBuildRangeInfoKHR*> range_ptrs;
         range_ptrs.reserve(ranges.size());
         for (const auto& r : ranges) range_ptrs.push_back(&r);
 
@@ -1843,19 +1842,19 @@ bool VulkanAccelerationStructure::initialize_blas(const BlasDesc& desc) {
     return true;
 }
 
-std::unique_ptr<AccelerationStructure>
+cardinal::unique_ptr<AccelerationStructure>
 VulkanDevice::create_blas(const BlasDesc& desc) {
     if (!caps_.acceleration_structure) {
         cardinal::log::errorf("rhi/vk/blas",
             "device does not support VK_KHR_acceleration_structure");
         return nullptr;
     }
-    auto blas = std::make_unique<VulkanAccelerationStructure>(*this);
+    auto blas = cardinal::make_unique<VulkanAccelerationStructure>(*this);
     if (!blas->initialize_blas(desc)) return nullptr;
     return blas;
 }
 
-std::unique_ptr<AccelerationStructure>
+cardinal::unique_ptr<AccelerationStructure>
 VulkanDevice::create_tlas(const TlasDesc& /*desc*/) {
     // TODO(phase-5.1): symmetric to BLAS but with VkAccelerationStructureInstanceKHR
     // packed into an instances buffer + VK_GEOMETRY_TYPE_INSTANCES_KHR.
@@ -2058,7 +2057,7 @@ void VulkanSwapchain::set_active_viewport(u32 id) {
     // {UNDEFINED|DEPTH_ATTACHMENT_OPTIMAL} → DEPTH_ATTACHMENT_OPTIMAL —
     // it gets cleared each frame so we don't care about preserving its
     // contents.
-    std::array<VkImageMemoryBarrier2, 2> bb{};
+    cardinal::array<VkImageMemoryBarrier2, 2> bb{};
     bb[0].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
     bb[0].srcStageMask     = (vp.current_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
         ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
@@ -2185,7 +2184,7 @@ bool VulkanSwapchain::create_swapchain_objects(u32 width, u32 height) {
     // Pick format: prefer 32-bit BGRA SRGB, else first available.
     u32 fmt_count = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(dev_.physical_, surface_, &fmt_count, nullptr);
-    std::vector<VkSurfaceFormatKHR> formats(fmt_count);
+    cardinal::vector<VkSurfaceFormatKHR> formats(fmt_count);
     vkGetPhysicalDeviceSurfaceFormatsKHR(dev_.physical_, surface_, &fmt_count, formats.data());
     VkSurfaceFormatKHR chosen = formats[0];
     for (auto& f : formats) {
@@ -2216,7 +2215,7 @@ bool VulkanSwapchain::create_swapchain_objects(u32 width, u32 height) {
     // capped). This was the equivalent of the D3D12 ALLOW_TEARING bug.
     u32 pm_count = 0;
     vkGetPhysicalDeviceSurfacePresentModesKHR(dev_.physical_, surface_, &pm_count, nullptr);
-    std::vector<VkPresentModeKHR> modes(pm_count);
+    cardinal::vector<VkPresentModeKHR> modes(pm_count);
     vkGetPhysicalDeviceSurfacePresentModesKHR(dev_.physical_, surface_, &pm_count, modes.data());
 
     auto has = [&](VkPresentModeKHR m) {
@@ -2252,8 +2251,8 @@ bool VulkanSwapchain::create_swapchain_objects(u32 width, u32 height) {
 
     extent_ = caps.currentExtent;
     if (extent_.width == 0xFFFFFFFFu) {
-        extent_.width  = std::clamp(width,  caps.minImageExtent.width,  caps.maxImageExtent.width);
-        extent_.height = std::clamp(height, caps.minImageExtent.height, caps.maxImageExtent.height);
+        extent_.width  = cardinal::clamp(width,  caps.minImageExtent.width,  caps.maxImageExtent.width);
+        extent_.height = cardinal::clamp(height, caps.minImageExtent.height, caps.maxImageExtent.height);
     }
 
     min_image_count_ = caps.minImageCount;
@@ -2815,7 +2814,7 @@ void VulkanSwapchain::end_frame() {
         // Multi-viewport + overlay: transition every rendered viewport to
         // SHADER_READ_ONLY so ImGui can sample them inside the overlay's
         // render pass. Batch all transitions into one vkCmdPipelineBarrier2.
-        std::vector<VkImageMemoryBarrier2> barriers;
+        cardinal::vector<VkImageMemoryBarrier2> barriers;
         barriers.reserve(viewport_count_ + 1);
         for (auto& vp : viewports_) {
             if (!vp.rendered_this_frame || vp.image == VK_NULL_HANDLE) continue;
@@ -2941,8 +2940,8 @@ void VulkanSwapchain::end_frame() {
 // =============================================================================
 // Factory entry point referenced by rhi.cpp.
 // =============================================================================
-std::unique_ptr<Device> create_vulkan_device(const DeviceDesc& desc) {
-    auto dev = std::make_unique<VulkanDevice>();
+cardinal::unique_ptr<Device> create_vulkan_device(const DeviceDesc& desc) {
+    auto dev = cardinal::make_unique<VulkanDevice>();
     if (!dev->initialize(desc)) return nullptr;
     return dev;
 }

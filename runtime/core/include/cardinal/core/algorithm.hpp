@@ -46,6 +46,13 @@ using std::merge;        using std::set_union;    using std::set_intersection;
 using std::set_difference;
 using std::distance;     using std::advance;      using std::next;  using std::prev;
 using std::begin;        using std::end;
+using std::cbegin;       using std::cend;
+using std::rbegin;       using std::rend;
+// Container-access free functions (live in <iterator>, pulled in by the
+// container/algorithm headers). cardinal::size(arr) is the blessed array-
+// extent / container-size helper; siblings kept together with begin/end.
+using std::size;         using std::ssize;
+using std::data;         using std::empty;
 using std::iter_swap;
 
 // <numeric>
