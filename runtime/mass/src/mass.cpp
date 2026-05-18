@@ -3,9 +3,11 @@
 #include <cardinal/core/async.hpp>
 #include <cardinal/core/log.hpp>
 
-#include <algorithm>
-#include <atomic>
-#include <cstring>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/atomic.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::mass {
 
@@ -16,15 +18,15 @@ constexpr u32 kEntitiesPerChunk = 1024;
 struct Chunk {
     ComponentMask                          archetype_mask{0};
     u32                                    count{0};
-    std::vector<EntityId>                  entity_ids;          // size <= kEntitiesPerChunk
+    cardinal::vector<EntityId>                  entity_ids;          // size <= kEntitiesPerChunk
     // Per-bit storage; only allocated for bits in archetype_mask. Each is
     // a flat array of `count * stride` bytes.
-    std::array<std::vector<u8>, kMaxComponents> data;
+    cardinal::array<cardinal::vector<u8>, kMaxComponents> data;
 };
 
 struct Archetype {
     ComponentMask          mask{0};
-    std::vector<u32>       chunk_indices;          // into world.chunks_
+    cardinal::vector<u32>       chunk_indices;          // into world.chunks_
 };
 
 struct EntitySlot {
@@ -35,15 +37,15 @@ struct EntitySlot {
 };
 
 struct World::Impl {
-    std::vector<ComponentDesc>             components;
-    std::unordered_map<u64, u32>           type_to_bit;     // typeid().hash_code() -> bit
+    cardinal::vector<ComponentDesc>             components;
+    cardinal::unordered_map<u64, u32>           type_to_bit;     // typeid().hash_code() -> bit
 
-    std::vector<Chunk>                     chunks;
-    std::vector<Archetype>                 archetypes;
-    std::unordered_map<ComponentMask, u32> mask_to_archetype;
+    cardinal::vector<Chunk>                     chunks;
+    cardinal::vector<Archetype>                 archetypes;
+    cardinal::unordered_map<ComponentMask, u32> mask_to_archetype;
 
-    std::vector<EntitySlot>                slots;
-    std::vector<EntityId>                  free_entity_ids;
+    cardinal::vector<EntitySlot>                slots;
+    cardinal::vector<EntityId>                  free_entity_ids;
     // Start at 0 so the first push_back makes slots[0] valid. Previously
     // started at 1 which left slots[1] OOR on the very first create_entity.
     EntityId                               next_entity_id{0};
@@ -56,7 +58,7 @@ struct World::Impl {
         if (it != mask_to_archetype.end()) return it->second;
         Archetype a{};
         a.mask = mask;
-        archetypes.push_back(std::move(a));
+        archetypes.push_back(cardinal::move(a));
         const u32 idx = static_cast<u32>(archetypes.size() - 1);
         mask_to_archetype[mask] = idx;
         return idx;
@@ -76,7 +78,7 @@ struct World::Impl {
                 c.data[b].reserve(static_cast<usize>(components[b].size) * kEntitiesPerChunk);
             }
         }
-        chunks.push_back(std::move(c));
+        chunks.push_back(cardinal::move(c));
         const u32 ci = static_cast<u32>(chunks.size() - 1);
         a.chunk_indices.push_back(ci);
         return ci;
@@ -132,7 +134,7 @@ struct World::Impl {
         for (u32 b = 0; b < kMaxComponents; ++b) {
             if ((common & (1u << b)) == 0) continue;
             const u32 stride = components[b].size;
-            std::memcpy(chunks[dst_chunk_idx].data[b].data() +
+            cardinal::memcpy(chunks[dst_chunk_idx].data[b].data() +
                             static_cast<usize>(dst_row) * stride,
                         chunks[src_chunk_idx].data[b].data() +
                             static_cast<usize>(src_row) * stride,
@@ -140,8 +142,8 @@ struct World::Impl {
         }
         if (adding && set_data != nullptr) {
             const u32 stride = components[changed_bit].size;
-            const usize copy_n = std::min(static_cast<usize>(stride), set_size);
-            std::memcpy(chunks[dst_chunk_idx].data[changed_bit].data() +
+            const usize copy_n = cardinal::min(static_cast<usize>(stride), set_size);
+            cardinal::memcpy(chunks[dst_chunk_idx].data[changed_bit].data() +
                             static_cast<usize>(dst_row) * stride,
                         set_data, copy_n);
         }
@@ -152,7 +154,7 @@ struct World::Impl {
             for (u32 b = 0; b < kMaxComponents; ++b) {
                 if ((src_mask & (1u << b)) == 0) continue;
                 const u32 stride = components[b].size;
-                std::memcpy(chunks[src_chunk_idx].data[b].data() +
+                cardinal::memcpy(chunks[src_chunk_idx].data[b].data() +
                                 static_cast<usize>(src_row) * stride,
                             chunks[src_chunk_idx].data[b].data() +
                                 static_cast<usize>(src_last) * stride,
@@ -178,8 +180,8 @@ struct World::Impl {
     }
 };
 
-std::shared_ptr<World> World::create() {
-    auto w = std::shared_ptr<World>(new World());
+cardinal::shared_ptr<World> World::create() {
+    auto w = cardinal::shared_ptr<World>(new World());
     w->impl_ = new Impl{};
     // Reserve archetype 0 = "no components" (the default for fresh entities).
     w->impl_->ensure_archetype(0u);
@@ -189,7 +191,7 @@ std::shared_ptr<World> World::create() {
 
 World::~World() { delete impl_; }
 
-u32 World::register_component_internal_(const std::string& name, u32 size,
+u32 World::register_component_internal_(const cardinal::string& name, u32 size,
                                         u32 align, u64 type_hash)
 {
     if (impl_->components.size() >= kMaxComponents) {
@@ -203,7 +205,7 @@ u32 World::register_component_internal_(const std::string& name, u32 size,
     d.size      = size;
     d.align     = align;
     d.bit_index = static_cast<u32>(impl_->components.size());
-    impl_->components.push_back(std::move(d));
+    impl_->components.push_back(cardinal::move(d));
     impl_->type_to_bit[type_hash] = d.bit_index;
     return d.bit_index;
 }
@@ -256,7 +258,7 @@ bool World::destroy_entity(EntityId e) {
         for (u32 b = 0; b < kMaxComponents; ++b) {
             if ((c.archetype_mask & (1u << b)) == 0) continue;
             const u32 stride = impl_->components[b].size;
-            std::memcpy(c.data[b].data() + static_cast<usize>(s.row) * stride,
+            cardinal::memcpy(c.data[b].data() + static_cast<usize>(s.row) * stride,
                         c.data[b].data() + static_cast<usize>(last) * stride,
                         stride);
         }
@@ -295,7 +297,7 @@ bool World::add_component(EntityId e, u32 bit, const void* data, usize size) {
         // Already present — overwrite in place.
         if (data) {
             void* p = impl_->component_ptr(s.chunk_index, s.row, bit);
-            std::memcpy(p, data, std::min(static_cast<usize>(impl_->components[bit].size), size));
+            cardinal::memcpy(p, data, cardinal::min(static_cast<usize>(impl_->components[bit].size), size));
         }
         return true;
     }
@@ -328,7 +330,7 @@ void* World::get_component_raw_(EntityId e, u32 bit) {
 }
 
 void World::for_each(ComponentMask required,
-                     const std::function<void(EntityId)>& fn) const
+                     const cardinal::function<void(EntityId)>& fn) const
 {
     if (!fn) return;
     for (const auto& c : impl_->chunks) {
@@ -339,11 +341,11 @@ void World::for_each(ComponentMask required,
 
 void World::for_each_chunk_internal_(
     ComponentMask required,
-    const std::function<void(u32, const EntityId*,
-                             const std::vector<u8*>&)>& fn)
+    const cardinal::function<void(u32, const EntityId*,
+                             const cardinal::vector<u8*>&)>& fn)
 {
     if (!fn) return;
-    std::vector<u8*> ptrs(kMaxComponents, nullptr);
+    cardinal::vector<u8*> ptrs(kMaxComponents, nullptr);
     for (auto& c : impl_->chunks) {
         if ((c.archetype_mask & required) != required) continue;
         for (u32 b = 0; b < kMaxComponents; ++b) {
@@ -355,8 +357,8 @@ void World::for_each_chunk_internal_(
 
 void World::for_each_chunk_parallel(
     ComponentMask required,
-    const std::function<void(u32, const EntityId*,
-                             const std::vector<u8*>&)>& fn)
+    const cardinal::function<void(u32, const EntityId*,
+                             const cardinal::vector<u8*>&)>& fn)
 {
     if (!fn) return;
 
@@ -364,7 +366,7 @@ void World::for_each_chunk_parallel(
     // index in O(1). The chunk vector itself isn't mutated during
     // iteration (callers must respect the "no add/remove during
     // iteration" rule), so it's safe to capture by reference.
-    std::vector<Chunk*> matches;
+    cardinal::vector<Chunk*> matches;
     matches.reserve(impl_->chunks.size());
     for (auto& c : impl_->chunks) {
         if ((c.archetype_mask & required) == required) matches.push_back(&c);
@@ -379,7 +381,7 @@ void World::for_each_chunk_parallel(
         [&](u32 i) {
             // Build the ptrs vector LOCALLY per worker — don't share a
             // captured one across threads.
-            std::vector<u8*> ptrs(kMaxComponents, nullptr);
+            cardinal::vector<u8*> ptrs(kMaxComponents, nullptr);
             Chunk& c = *matches[i];
             for (u32 b = 0; b < kMaxComponents; ++b) {
                 ptrs[b] = (required & (1u << b)) ? c.data[b].data() : nullptr;

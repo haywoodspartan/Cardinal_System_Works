@@ -25,14 +25,9 @@
 #include <cardinal/core/types.hpp>
 #include <cardinal/scene/math.hpp>
 
-#include <array>
-#include <cstring>
-#include <functional>
-#include <memory>
-#include <string>
-#include <typeindex>
-#include <unordered_map>
-#include <vector>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::mass {
 
@@ -46,7 +41,7 @@ using ComponentMask  = u32;     // 1 bit per registered component (0..31)
 // World — owns all entities + component storage.
 // ---------------------------------------------------------------------------
 struct ComponentDesc {
-    std::string  name;
+    cardinal::string  name;
     u32          size{0};       // bytes per component
     u32          align{1};
     u32          bit_index{0};  // 0..31
@@ -54,12 +49,12 @@ struct ComponentDesc {
 
 class World {
 public:
-    static std::shared_ptr<World> create();
+    static cardinal::shared_ptr<World> create();
     ~World();
 
     // ----- Component registration -----------------------------------
     template <class T>
-    u32 register_component(const std::string& name) {
+    u32 register_component(const cardinal::string& name) {
         return register_component_internal_(
             name, static_cast<u32>(sizeof(T)), static_cast<u32>(alignof(T)),
             static_cast<u32>(typeid(T).hash_code()));
@@ -101,15 +96,15 @@ public:
     // for_each(mask, fn) — calls fn(EntityId) for every entity whose mask
     // includes ALL bits in `required`.
     void for_each(ComponentMask required,
-                  const std::function<void(EntityId)>& fn) const;
+                  const cardinal::function<void(EntityId)>& fn) const;
 
     // Typed iteration helper. The lambda gets pointers to component arrays
     // for one chunk at a time + the chunk's entity-id slice.
     template <class FnChunk>
     void for_each_chunk(ComponentMask required, FnChunk&& fn) {
         for_each_chunk_internal_(required,
-            [fn = std::move(fn)](u32 entity_count, const EntityId* ids,
-                                  const std::vector<u8*>& comp_ptrs) {
+            [fn = cardinal::move(fn)](u32 entity_count, const EntityId* ids,
+                                  const cardinal::vector<u8*>& comp_ptrs) {
                 fn(entity_count, ids, comp_ptrs);
             });
     }
@@ -130,8 +125,8 @@ public:
     // those mutate archetype storage and are not thread-safe.
     void for_each_chunk_parallel(
         ComponentMask required,
-        const std::function<void(u32, const EntityId*,
-                                 const std::vector<u8*>&)>& fn);
+        const cardinal::function<void(u32, const EntityId*,
+                                 const cardinal::vector<u8*>&)>& fn);
 
     // ----- Stats ----------------------------------------------------
     struct Stats {
@@ -147,15 +142,15 @@ public:
 private:
     World() = default;
 
-    u32 register_component_internal_(const std::string& name, u32 size,
+    u32 register_component_internal_(const cardinal::string& name, u32 size,
                                      u32 align, u64 type_hash);
     u32 bit_for_type_(u64 type_hash) const noexcept;
     void* get_component_raw_(EntityId e, u32 bit);
 
     void for_each_chunk_internal_(
         ComponentMask required,
-        const std::function<void(u32, const EntityId*,
-                                 const std::vector<u8*>&)>& fn);
+        const cardinal::function<void(u32, const EntityId*,
+                                 const cardinal::vector<u8*>&)>& fn);
 
     struct Impl;
     Impl* impl_{nullptr};
