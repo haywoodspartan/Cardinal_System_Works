@@ -20,7 +20,7 @@
 #include <cardinal/scene/scene.hpp>
 #include <cardinal/window/window.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 #include <imgui_internal.h>
 
 #include <cardinal/core/cstring.hpp>

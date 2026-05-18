@@ -5,7 +5,7 @@
 
 #include <cardinal/rhi/rhi.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 namespace cardinal::ui::panels::stats_panel {
 

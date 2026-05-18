@@ -17,7 +17,7 @@
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/types.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 #include <cardinal/core/containers.hpp>
 #include <cardinal/core/thread.hpp>

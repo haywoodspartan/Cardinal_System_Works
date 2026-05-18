@@ -6,7 +6,7 @@
 #include <cardinal/edit/editor_mode.hpp>
 #include <cardinal/core/cstdio.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 namespace cardinal::ui::panels::editor_modes_panel {
 

@@ -5,7 +5,7 @@
 
 #include <cardinal/particles/particles.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 #include <cardinal/core/cstdio.hpp>
 

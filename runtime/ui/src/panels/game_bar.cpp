@@ -5,7 +5,7 @@
 
 #include <cardinal/game/game.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 namespace cardinal::ui::panels::game_bar_panel {
 

@@ -11,7 +11,7 @@
 #include <cardinal/navmesh/navmesh.hpp>
 #include <cardinal/partition/partition.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 #include <cardinal/core/cstdio.hpp>
 

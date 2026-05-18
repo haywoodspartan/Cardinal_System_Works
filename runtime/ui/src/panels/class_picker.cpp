@@ -6,7 +6,7 @@
 #include <cardinal/game/game.hpp>
 #include <cardinal/game/reflection.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 #include <cardinal/core/cstdio.hpp>
 #include <cardinal/core/containers.hpp>

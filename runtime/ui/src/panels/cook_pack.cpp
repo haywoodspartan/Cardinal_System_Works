@@ -8,7 +8,7 @@
 #include <cardinal/project/project.hpp>
 #include <cardinal/shader/shader.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 #include <cardinal/core/cstdio.hpp>
 #include <cardinal/core/fstream.hpp>

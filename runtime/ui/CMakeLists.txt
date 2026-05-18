@@ -1,6 +1,10 @@
 set(CARDINAL_UI_HEADERS
     include/cardinal/ui/studio.hpp
     include/cardinal/ui/studio_engine.hpp
+    # ImGui master reference template — the single sanctioned <imgui.h>
+    # include site for the Studio function surface (panels + facade).
+    # Mirrors the cardinal::core FOUNDATION RULE for the editor's UI dep.
+    include/cardinal/ui/imgui.hpp
     # Free-function diagnostic panel — surfaces simd::active_backend()
     # + per-op binding + a micro-bench. No Studio class dependency, so
     # any host (StudioMin, custom apps) can call it directly.

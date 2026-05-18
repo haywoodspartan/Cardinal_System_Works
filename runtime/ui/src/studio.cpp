@@ -61,7 +61,7 @@
     // Win32 surface KHR types — volk doesn't pull these in under VK_NO_PROTOTYPES.
     #include <vulkan/vulkan_win32.h>
 #endif
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 #include <imgui_internal.h>          // ImGuiWindow / ImGuiContext for layout-sanity pass
 #include <imgui_impl_vulkan.h>
 #if CARDINAL_PLATFORM_WINDOWS

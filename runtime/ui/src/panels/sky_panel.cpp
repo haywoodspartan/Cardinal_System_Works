@@ -5,7 +5,7 @@
 
 #include <cardinal/sky/sky.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 #include <cardinal/core/cstdio.hpp>
 

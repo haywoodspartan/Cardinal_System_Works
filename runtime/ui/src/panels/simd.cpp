@@ -11,7 +11,7 @@
 #include <cardinal/core/hal.hpp>
 #include <cardinal/core/simd_math.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 #include <cardinal/core/chrono.hpp>
 #include <cardinal/core/cmath.hpp>

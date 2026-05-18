@@ -5,7 +5,7 @@
 
 #include <cardinal/edit/tex_ops.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 #include <cardinal/core/algorithm.hpp>
 #include <cardinal/core/cstdio.hpp>

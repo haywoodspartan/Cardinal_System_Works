@@ -6,7 +6,7 @@
 #include <cardinal/cppscript/cppscript.hpp>
 #include <cardinal/sandbox/sandbox.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 #include <cardinal/core/algorithm.hpp>
 #include <cardinal/core/cstdio.hpp>

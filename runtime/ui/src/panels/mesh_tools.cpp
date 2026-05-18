@@ -3,7 +3,7 @@
 // =============================================================================
 #include "mesh_tools.hpp"
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 namespace cardinal::ui::panels::mesh_tools_panel {
 

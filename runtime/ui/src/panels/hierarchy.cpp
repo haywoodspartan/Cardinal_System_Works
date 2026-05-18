@@ -5,7 +5,7 @@
 
 #include <cardinal/scene/scene.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 #include <cardinal/core/cctype.hpp>
 #include <cardinal/core/cstdio.hpp>

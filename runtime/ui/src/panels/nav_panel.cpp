@@ -5,7 +5,7 @@
 
 #include <cardinal/nav/nav.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 #include <cardinal/core/algorithm.hpp>
 #include <cardinal/core/cmath.hpp>

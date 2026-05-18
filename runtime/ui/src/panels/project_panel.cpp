@@ -5,7 +5,7 @@
 
 #include <cardinal/project/project.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 #include <cardinal/core/cstdio.hpp>
 #include <cardinal/core/cstring.hpp>

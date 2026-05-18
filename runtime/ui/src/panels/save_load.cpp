@@ -7,7 +7,7 @@
 #include <cardinal/serial/serial.hpp>
 #include <cardinal/sky/sky.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 #include <cardinal/core/cstring.hpp>
 

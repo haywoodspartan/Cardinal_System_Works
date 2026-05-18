@@ -5,7 +5,7 @@
 
 #include <cardinal/edit/brush.hpp>
 
-#include <imgui.h>
+#include <cardinal/ui/imgui.hpp>
 
 namespace cardinal::ui::panels::brush_panel {
 
