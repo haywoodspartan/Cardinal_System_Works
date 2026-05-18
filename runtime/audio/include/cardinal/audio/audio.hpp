@@ -24,14 +24,9 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/thread.hpp>
 #include <cardinal/scene/math.hpp>
-
-#include <functional>
-#include <memory>
-#include <mutex>
-#include <string>
-#include <unordered_map>
-#include <vector>
 
 namespace cardinal::audio {
 
@@ -50,15 +45,15 @@ const char* channel_name(ChannelId id) noexcept;
 enum class CueKind : u32 { Silence, SineWave, Procedural, Streamed };
 
 struct Cue {
-    std::string id;
+    cardinal::string id;
     CueKind     kind{CueKind::Silence};
     float       duration_s{1.0f};
     float       sine_frequency_hz{440.0f};
     float       gain{1.0f};
-    std::string streamed_path;
+    cardinal::string streamed_path;
     // For Procedural — host returns one sample per call. The engine
     // chooses sample_rate (default 48000).
-    std::function<float(float t)> procedural;
+    cardinal::function<float(float t)> procedural;
 };
 
 // ---------------------------------------------------------------------------
@@ -66,7 +61,7 @@ struct Cue {
 // ---------------------------------------------------------------------------
 struct Channel {
     ChannelId id{0};
-    std::string name;
+    cardinal::string name;
     float     volume{1.0f};        // 0..1
     bool      muted{false};
     bool      solo{false};
@@ -89,7 +84,7 @@ using InstanceId = u64;
 
 struct InstanceState {
     InstanceId id{0};
-    std::string cue_id;
+    cardinal::string cue_id;
     ChannelId channel{kChannelSfx};
     bool      is_3d{true};
     cardinal::scene::Vec3 position{0,0,0};
@@ -125,15 +120,15 @@ struct EngineStats {
 
 class Engine {
 public:
-    static std::shared_ptr<Engine> create(const EngineDesc& desc = {});
+    static cardinal::shared_ptr<Engine> create(const EngineDesc& desc = {});
     ~Engine();
     Engine(const Engine&) = delete;
     Engine& operator=(const Engine&) = delete;
 
     // ---- Cues -------------------------------------------------------
     void register_cue(Cue cue);
-    void unregister_cue(const std::string& id);
-    const Cue* find_cue(const std::string& id) const;
+    void unregister_cue(const cardinal::string& id);
+    const Cue* find_cue(const cardinal::string& id) const;
 
     // ---- Channels ---------------------------------------------------
     Channel*       channel(ChannelId id);
@@ -141,16 +136,16 @@ public:
     void           set_channel_volume(ChannelId id, float v);
     void           set_channel_muted (ChannelId id, bool m);
     float          effective_volume  (ChannelId id) const;     // includes parents
-    std::vector<Channel> channels() const;
+    cardinal::vector<Channel> channels() const;
 
     // ---- Listener ---------------------------------------------------
     void  set_listener(const Listener& l);
     const Listener& listener() const noexcept { return listener_; }
 
     // ---- Playback ---------------------------------------------------
-    InstanceId play_2d(const std::string& cue_id, ChannelId ch = kChannelSfx,
+    InstanceId play_2d(const cardinal::string& cue_id, ChannelId ch = kChannelSfx,
                        float volume = 1.0f, float pitch = 1.0f, bool loop = false);
-    InstanceId play_3d(const std::string& cue_id, const cardinal::scene::Vec3& pos,
+    InstanceId play_3d(const cardinal::string& cue_id, const cardinal::scene::Vec3& pos,
                        ChannelId ch = kChannelSfx, float volume = 1.0f,
                        float pitch = 1.0f, bool loop = false);
 
@@ -182,7 +177,7 @@ public:
 
     // ---- Inspection -------------------------------------------------
     EngineStats stats() const;
-    std::vector<InstanceState> active_instances() const;
+    cardinal::vector<InstanceState> active_instances() const;
 
 private:
     Engine() = default;
@@ -192,10 +187,10 @@ private:
 
     EngineDesc                                  desc_{};
     Listener                                    listener_{};
-    mutable std::mutex                          mtx_;
-    std::unordered_map<std::string, Cue>        cues_;
-    std::unordered_map<ChannelId, Channel>      channels_;
-    std::vector<InstanceState>                  instances_;
+    mutable cardinal::mutex                          mtx_;
+    cardinal::unordered_map<cardinal::string, Cue>        cues_;
+    cardinal::unordered_map<ChannelId, Channel>      channels_;
+    cardinal::vector<InstanceState>                  instances_;
     InstanceId                                  next_instance_id_{1};
     u64                                         total_played_{0};
     u64                                         total_culled_{0};
@@ -219,7 +214,7 @@ public:
     virtual ~OutputBackend() = default;
 };
 
-std::unique_ptr<OutputBackend>
-start_default_output(std::shared_ptr<Engine> engine);
+cardinal::unique_ptr<OutputBackend>
+start_default_output(cardinal::shared_ptr<Engine> engine);
 
 }  // namespace cardinal::audio

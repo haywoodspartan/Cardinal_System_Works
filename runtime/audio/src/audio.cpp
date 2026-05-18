@@ -2,8 +2,10 @@
 
 #include <cardinal/core/log.hpp>
 
-#include <algorithm>
-#include <cmath>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cmath.hpp>
+#include <cardinal/core/thread.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::audio {
 
@@ -18,8 +20,8 @@ const char* channel_name(ChannelId id) noexcept {
     return "Channel";
 }
 
-std::shared_ptr<Engine> Engine::create(const EngineDesc& desc) {
-    auto e = std::shared_ptr<Engine>(new Engine());
+cardinal::shared_ptr<Engine> Engine::create(const EngineDesc& desc) {
+    auto e = cardinal::shared_ptr<Engine>(new Engine());
     if (!e->initialize_(desc)) return nullptr;
     return e;
 }
@@ -41,21 +43,21 @@ bool Engine::initialize_(const EngineDesc& desc) {
 }
 
 void Engine::register_cue(Cue cue) {
-    std::lock_guard<std::mutex> lg(mtx_);
-    cues_[cue.id] = std::move(cue);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
+    cues_[cue.id] = cardinal::move(cue);
 }
-void Engine::unregister_cue(const std::string& id) {
-    std::lock_guard<std::mutex> lg(mtx_);
+void Engine::unregister_cue(const cardinal::string& id) {
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     cues_.erase(id);
 }
-const Cue* Engine::find_cue(const std::string& id) const {
-    std::lock_guard<std::mutex> lg(mtx_);
+const Cue* Engine::find_cue(const cardinal::string& id) const {
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     auto it = cues_.find(id);
     return it == cues_.end() ? nullptr : &it->second;
 }
 
 Channel* Engine::channel(ChannelId id) {
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     auto it = channels_.find(id);
     return it == channels_.end() ? nullptr : &it->second;
 }
@@ -64,13 +66,13 @@ const Channel* Engine::channel(ChannelId id) const {
 }
 void Engine::set_channel_volume(ChannelId id, float v) {
     if (auto* c = channel(id)) {
-        std::lock_guard<std::mutex> lg(mtx_);
-        c->volume = std::clamp(v, 0.0f, 1.0f);
+        cardinal::lock_guard<cardinal::mutex> lg(mtx_);
+        c->volume = cardinal::clamp(v, 0.0f, 1.0f);
     }
 }
 void Engine::set_channel_muted(ChannelId id, bool m) {
     if (auto* c = channel(id)) {
-        std::lock_guard<std::mutex> lg(mtx_);
+        cardinal::lock_guard<cardinal::mutex> lg(mtx_);
         c->muted = m;
     }
 }
@@ -81,7 +83,7 @@ bool Engine::any_solo_active_() const noexcept {
 }
 
 float Engine::effective_volume(ChannelId id) const {
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     const bool soloing = any_solo_active_();
     float v = 1.0f;
     ChannelId cur = id;
@@ -98,12 +100,12 @@ float Engine::effective_volume(ChannelId id) const {
     return v;
 }
 
-std::vector<Channel> Engine::channels() const {
-    std::vector<Channel> r;
-    std::lock_guard<std::mutex> lg(mtx_);
+cardinal::vector<Channel> Engine::channels() const {
+    cardinal::vector<Channel> r;
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     r.reserve(channels_.size());
     for (const auto& [_, c] : channels_) r.push_back(c);
-    std::sort(r.begin(), r.end(),
+    cardinal::sort(r.begin(), r.end(),
               [](const Channel& a, const Channel& b){ return a.id < b.id; });
     return r;
 }
@@ -114,20 +116,20 @@ float Engine::compute_3d_attenuation_(const cardinal::scene::Vec3& pos) const no
     const float dx = pos.x - listener_.position.x;
     const float dy = pos.y - listener_.position.y;
     const float dz = pos.z - listener_.position.z;
-    const float d  = std::sqrt(dx*dx + dy*dy + dz*dz);
+    const float d  = cardinal::sqrt(dx*dx + dy*dy + dz*dz);
     if (d <= desc_.distance_min) return 1.0f;
     if (d >= desc_.distance_max) return 0.0f;
     const float t = (d - desc_.distance_min) / (desc_.distance_max - desc_.distance_min);
-    return std::pow(1.0f - t, std::max(0.1f, desc_.rolloff));
+    return cardinal::pow(1.0f - t, cardinal::max(0.1f, desc_.rolloff));
 }
 
-InstanceId Engine::play_2d(const std::string& cue_id, ChannelId ch,
+InstanceId Engine::play_2d(const cardinal::string& cue_id, ChannelId ch,
                            float volume, float pitch, bool loop)
 {
     return play_3d(cue_id, {0,0,0}, ch, volume, pitch, loop) | (1ull << 63);   // mark 2D
 }
 
-InstanceId Engine::play_3d(const std::string& cue_id, const cardinal::scene::Vec3& pos,
+InstanceId Engine::play_3d(const cardinal::string& cue_id, const cardinal::scene::Vec3& pos,
                            ChannelId ch, float volume, float pitch, bool loop)
 {
     const Cue* c = find_cue(cue_id);
@@ -135,10 +137,10 @@ InstanceId Engine::play_3d(const std::string& cue_id, const cardinal::scene::Vec
         cardinal::log::warnf("audio/engine", "play: unknown cue '%s'", cue_id.c_str());
         return 0;
     }
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     if (instances_.size() >= desc_.max_instances) {
         // Cull the oldest non-looping instance.
-        auto it = std::find_if(instances_.begin(), instances_.end(),
+        auto it = cardinal::find_if(instances_.begin(), instances_.end(),
                                [](const InstanceState& s){ return !s.loop; });
         if (it != instances_.end()) instances_.erase(it);
         else if (!instances_.empty()) instances_.erase(instances_.begin());
@@ -150,8 +152,8 @@ InstanceId Engine::play_3d(const std::string& cue_id, const cardinal::scene::Vec
     s.channel     = ch;
     s.is_3d       = true;
     s.position    = pos;
-    s.volume      = std::clamp(volume, 0.0f, 4.0f);
-    s.pitch       = std::clamp(pitch, 0.05f, 8.0f);
+    s.volume      = cardinal::clamp(volume, 0.0f, 4.0f);
+    s.pitch       = cardinal::clamp(pitch, 0.05f, 8.0f);
     s.loop        = loop;
     s.duration_s  = c->duration_s;
     instances_.push_back(s);
@@ -160,31 +162,31 @@ InstanceId Engine::play_3d(const std::string& cue_id, const cardinal::scene::Vec
 }
 
 void Engine::fade_in(InstanceId id, float seconds) {
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     for (auto& s : instances_) if (s.id == id) {
-        s.fade_in_s = std::max(0.0f, seconds);
+        s.fade_in_s = cardinal::max(0.0f, seconds);
         s.play_head_s = 0.0f;
     }
 }
 void Engine::fade_out(InstanceId id, float seconds) {
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     for (auto& s : instances_) if (s.id == id) {
-        s.fade_out_s = std::max(0.0f, seconds);
+        s.fade_out_s = cardinal::max(0.0f, seconds);
         s.stopping = true;
     }
 }
 void Engine::stop(InstanceId id) {
-    std::lock_guard<std::mutex> lg(mtx_);
-    instances_.erase(std::remove_if(instances_.begin(), instances_.end(),
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
+    instances_.erase(cardinal::remove_if(instances_.begin(), instances_.end(),
         [id](const InstanceState& s){ return s.id == id; }), instances_.end());
 }
 void Engine::set_emitter_position(InstanceId id, const cardinal::scene::Vec3& pos) {
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     for (auto& s : instances_) if (s.id == id) { s.position = pos; s.is_3d = true; }
 }
 
 void Engine::tick(float dt) {
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     for (auto& s : instances_) {
         s.play_head_s += dt * s.pitch;
         // Channel volume.
@@ -209,14 +211,14 @@ void Engine::tick(float dt) {
             v *= s.play_head_s / s.fade_in_s;
         }
         if (s.stopping && s.fade_out_s > 0.0f) {
-            const float t = std::max(0.0f, s.fade_out_s - dt);
+            const float t = cardinal::max(0.0f, s.fade_out_s - dt);
             s.fade_out_s = t;
-            v *= t / std::max(1e-3f, s.fade_out_s + dt);
+            v *= t / cardinal::max(1e-3f, s.fade_out_s + dt);
         }
-        s.final_attenuated_volume = std::clamp(v, 0.0f, 1.0f);
+        s.final_attenuated_volume = cardinal::clamp(v, 0.0f, 1.0f);
     }
     // Remove completed / stopped.
-    instances_.erase(std::remove_if(instances_.begin(), instances_.end(),
+    instances_.erase(cardinal::remove_if(instances_.begin(), instances_.end(),
         [](const InstanceState& s){
             const bool past_end = !s.loop && s.duration_s > 0.0f &&
                                   s.play_head_s >= s.duration_s;
@@ -227,9 +229,9 @@ void Engine::tick(float dt) {
 
 void Engine::render(float* out, u32 frame_count, u32 channels) noexcept {
     if (out == nullptr || frame_count == 0 || channels == 0) return;
-    std::fill(out, out + static_cast<usize>(frame_count) * channels, 0.0f);
+    cardinal::fill(out, out + static_cast<usize>(frame_count) * channels, 0.0f);
 
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     const float sr     = (desc_.sample_rate > 0)
                        ? static_cast<float>(desc_.sample_rate) : 48000.0f;
     const float inv_sr = 1.0f / sr;
@@ -251,7 +253,7 @@ void Engine::render(float* out, u32 frame_count, u32 channels) noexcept {
             if (!s.loop && s.duration_s > 0.0f && t >= s.duration_s) break;
             float v = 0.0f;
             if (c.kind == CueKind::SineWave) {
-                v = std::sin(kTwoPi * c.sine_frequency_hz * t) * c.gain;
+                v = cardinal::sin(kTwoPi * c.sine_frequency_hz * t) * c.gain;
             } else if (c.kind == CueKind::Procedural && c.procedural) {
                 v = c.procedural(t);
             }
@@ -271,7 +273,7 @@ void Engine::render(float* out, u32 frame_count, u32 channels) noexcept {
 
 EngineStats Engine::stats() const {
     EngineStats s{};
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     s.active_instances = static_cast<u32>(instances_.size());
     s.cues_registered  = static_cast<u32>(cues_.size());
     s.channels         = static_cast<u32>(channels_.size());
@@ -280,8 +282,8 @@ EngineStats Engine::stats() const {
     return s;
 }
 
-std::vector<InstanceState> Engine::active_instances() const {
-    std::lock_guard<std::mutex> lg(mtx_);
+cardinal::vector<InstanceState> Engine::active_instances() const {
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     return instances_;
 }
 

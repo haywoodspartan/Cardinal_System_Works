@@ -16,8 +16,9 @@
 
 #if CARDINAL_PLATFORM_WINDOWS
 
-#include <atomic>
-#include <thread>
+#include <cardinal/core/atomic.hpp>
+#include <cardinal/core/thread.hpp>
+#include <cardinal/core/utility.hpp>
 
 #ifndef WIN32_LEAN_AND_MEAN          // already defined project-wide
 #define WIN32_LEAN_AND_MEAN
@@ -39,11 +40,11 @@ template <class T> void safe_release(T*& p) {
 
 class WasapiOutput final : public OutputBackend {
 public:
-    explicit WasapiOutput(std::shared_ptr<Engine> engine)
-        : engine_(std::move(engine)) {}
+    explicit WasapiOutput(cardinal::shared_ptr<Engine> engine)
+        : engine_(cardinal::move(engine)) {}
 
     ~WasapiOutput() override {
-        stop_.store(true, std::memory_order_release);
+        stop_.store(true, cardinal::memory_order_release);
         if (event_) SetEvent(event_);          // wake the render wait
         if (thread_.joinable()) thread_.join();
         // Device objects are created + destroyed on the audio thread;
@@ -52,7 +53,7 @@ public:
     }
 
     bool start() {
-        thread_ = std::thread([this]{ run_(); });
+        thread_ = cardinal::thread([this]{ run_(); });
         return true;   // failures are logged on the thread; degrade to silence
     }
 
@@ -161,11 +162,11 @@ private:
 
         // Render loop — wake on the WASAPI event, fill the unpadded
         // remainder of the shared buffer from the engine.
-        while (!stop_.load(std::memory_order_acquire)) {
+        while (!stop_.load(cardinal::memory_order_acquire)) {
             if (WaitForSingleObject(event_, 200) != WAIT_OBJECT_0) {
                 continue;   // timeout: re-check stop_, keep the device alive
             }
-            if (stop_.load(std::memory_order_acquire)) break;
+            if (stop_.load(cardinal::memory_order_acquire)) break;
             UINT32 padding = 0;
             if (FAILED(client->GetCurrentPadding(&padding))) continue;
             const UINT32 avail = buffer_frames - padding;
@@ -181,18 +182,18 @@ private:
         cleanup();
     }
 
-    std::shared_ptr<Engine> engine_;
-    std::thread             thread_;
-    std::atomic<bool>       stop_{false};
+    cardinal::shared_ptr<Engine> engine_;
+    cardinal::thread             thread_;
+    cardinal::atomic<bool>       stop_{false};
     HANDLE                  event_{nullptr};
 };
 
 }  // namespace
 
-std::unique_ptr<OutputBackend>
-start_default_output(std::shared_ptr<Engine> engine) {
+cardinal::unique_ptr<OutputBackend>
+start_default_output(cardinal::shared_ptr<Engine> engine) {
     if (!engine) return nullptr;
-    auto out = std::make_unique<WasapiOutput>(std::move(engine));
+    auto out = cardinal::make_unique<WasapiOutput>(cardinal::move(engine));
     if (!out->start()) return nullptr;
     return out;
 }
@@ -203,8 +204,8 @@ start_default_output(std::shared_ptr<Engine> engine) {
 
 namespace cardinal::audio {
 
-std::unique_ptr<OutputBackend>
-start_default_output(std::shared_ptr<Engine> /*engine*/) {
+cardinal::unique_ptr<OutputBackend>
+start_default_output(cardinal::shared_ptr<Engine> /*engine*/) {
     cardinal::log::infof("audio",
         "no output backend on this platform yet — audio silent");
     return nullptr;
