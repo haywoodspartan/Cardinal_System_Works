@@ -12,14 +12,12 @@
 
 #include <cardinal/core/types.hpp>
 
-#include <functional>
-#include <string>
-#include <vector>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::ui::panels {
 
 struct ConsolePanelState {
-    std::vector<std::string> log;
+    cardinal::vector<cardinal::string> log;
     char                     input[1024]{};
     bool                     scroll_to_bottom{false};
     // Set true by suggestion-strip clicks so the next frame re-focuses
@@ -33,7 +31,7 @@ struct ConsolePanelState {
 // One callable per submitted line. Returns the formatted result that gets
 // appended to the panel's scrollback (empty string = no extra line). The
 // host typically chains: cardinal::console::Registry::execute → script.
-using ConsoleEvalFn = std::function<std::string(const char* /* line */)>;
+using ConsoleEvalFn = cardinal::function<cardinal::string(const char* /* line */)>;
 
 void draw(const ConsoleEvalFn& eval,
           const char*          title,

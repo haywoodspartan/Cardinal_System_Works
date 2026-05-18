@@ -10,7 +10,7 @@ using cardinal::u32;
 // ----- Store (cardinal::log::Sink) -----------------------------------------
 
 void Store::on_message(cardinal::log::Level lvl, const char* cat, const char* msg) {
-    std::lock_guard lk(mutex_);
+    cardinal::lock_guard lk(mutex_);
     Entry& slot = entries_[head_];
     slot.lvl     = lvl;
     slot.category.assign(cat ? cat : "");
@@ -19,8 +19,8 @@ void Store::on_message(cardinal::log::Level lvl, const char* cat, const char* ms
     if (size_ < kCapacity) ++size_;
 }
 
-void Store::snapshot(std::vector<Entry>& out) const {
-    std::lock_guard lk(mutex_);
+void Store::snapshot(cardinal::vector<Entry>& out) const {
+    cardinal::lock_guard lk(mutex_);
     out.clear();
     out.reserve(size_);
     const size_t start = (head_ + kCapacity - size_) % kCapacity;
@@ -30,7 +30,7 @@ void Store::snapshot(std::vector<Entry>& out) const {
 }
 
 void Store::clear() {
-    std::lock_guard lk(mutex_);
+    cardinal::lock_guard lk(mutex_);
     head_ = 0; size_ = 0;
 }
 

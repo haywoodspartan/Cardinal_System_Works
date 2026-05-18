@@ -7,9 +7,10 @@
 
 #include <imgui.h>
 
-#include <algorithm>
-#include <cstdio>
-#include <variant>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/traits.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::ui::panels::sequencer_panel {
 
@@ -30,7 +31,7 @@ void draw_track_row(cardinal::cine::Sequence& s, usize ti,
                     float t_min, float t_max,
                     const ImVec2& origin, float width)
 {
-    const float x_per_s = width / std::max(1e-3f, t_max - t_min);
+    const float x_per_s = width / cardinal::max(1e-3f, t_max - t_min);
     auto x_of = [&](float t){ return origin.x + (t - t_min) * x_per_s; };
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -38,17 +39,17 @@ void draw_track_row(cardinal::cine::Sequence& s, usize ti,
                 IM_COL32(60, 60, 60, 255));
 
     auto& track = s.tracks[ti];
-    std::visit([&](auto& tr) {
-        using TT = std::decay_t<decltype(tr)>;
+    cardinal::visit([&](auto& tr) {
+        using TT = cardinal::decay_t<decltype(tr)>;
         const ImU32 col = track_color(ti);
-        if constexpr (std::is_same_v<TT, cardinal::cine::AnimationTrack>) {
+        if constexpr (cardinal::is_same_v<TT, cardinal::cine::AnimationTrack>) {
             const float x0 = x_of(tr.start_time_s);
             const float x1 = x_of(tr.start_time_s + tr.length_s);
             dl->AddRectFilled({x0, track_y + 4.0f}, {x1, track_y + row_h - 4.0f},
                               col, 4.0f);
-            char lbl[64]; std::snprintf(lbl, sizeof(lbl), "%s", tr.name.c_str());
+            char lbl[64]; cardinal::snprintf(lbl, sizeof(lbl), "%s", tr.name.c_str());
             dl->AddText({x0 + 4.0f, track_y + 6.0f}, IM_COL32(20, 20, 20, 255), lbl);
-        } else if constexpr (std::is_same_v<TT, cardinal::cine::CameraTrack>) {
+        } else if constexpr (cardinal::is_same_v<TT, cardinal::cine::CameraTrack>) {
             for (const auto& sh : tr.shots) {
                 const float fx = x_of(sh.time_s);
                 dl->AddTriangleFilled(
@@ -57,12 +58,12 @@ void draw_track_row(cardinal::cine::Sequence& s, usize ti,
                     {fx,       track_y + row_h - 4.0f},
                     col);
             }
-        } else if constexpr (std::is_same_v<TT, cardinal::cine::AudioTrack>) {
+        } else if constexpr (cardinal::is_same_v<TT, cardinal::cine::AudioTrack>) {
             for (const auto& ev : tr.events) {
                 const float fx = x_of(ev.time_s);
                 dl->AddCircleFilled({fx, track_y + row_h * 0.5f}, 5.0f, col);
             }
-        } else if constexpr (std::is_same_v<TT, cardinal::cine::EventTrack>) {
+        } else if constexpr (cardinal::is_same_v<TT, cardinal::cine::EventTrack>) {
             for (const auto& ev : tr.events) {
                 const float fx = x_of(ev.time_s);
                 dl->AddRectFilled({fx - 4.0f, track_y + 4.0f},
@@ -112,11 +113,11 @@ void draw(cardinal::cine::Player* player, const char* title, bool* p_open) {
 
     // Timeline area.
     const float t_min = 0.0f;
-    const float t_max = std::max(0.1f, s.duration_s);
+    const float t_max = cardinal::max(0.1f, s.duration_s);
     const float row_h = 28.0f;
     const float labels_w = 110.0f;
     const ImVec2 origin = ImGui::GetCursorScreenPos();
-    const float full_w  = std::max(200.0f, ImGui::GetContentRegionAvail().x);
+    const float full_w  = cardinal::max(200.0f, ImGui::GetContentRegionAvail().x);
     const float track_w = full_w - labels_w;
     const ImVec2 timeline_origin{ origin.x + labels_w, origin.y + 22.0f };
 
@@ -130,7 +131,7 @@ void draw(cardinal::cine::Player* player, const char* title, bool* p_open) {
             const float fx = timeline_origin.x + (t - t_min) * x_per_s;
             dl->AddLine({fx, origin.y + 4.0f}, {fx, origin.y + 18.0f},
                         IM_COL32(160, 160, 160, 255));
-            char lbl[16]; std::snprintf(lbl, sizeof(lbl), "%.1fs", t);
+            char lbl[16]; cardinal::snprintf(lbl, sizeof(lbl), "%.1fs", t);
             dl->AddText({fx + 2.0f, origin.y + 4.0f}, IM_COL32(160, 160, 160, 255), lbl);
         }
     }
@@ -139,8 +140,8 @@ void draw(cardinal::cine::Player* player, const char* title, bool* p_open) {
     for (usize i = 0; i < s.tracks.size(); ++i) {
         const float track_y = timeline_origin.y + i * (row_h + 4.0f);
         // Label column.
-        std::visit([&](const auto& tr) {
-            char lbl[64]; std::snprintf(lbl, sizeof(lbl), "%s", tr.name.c_str());
+        cardinal::visit([&](const auto& tr) {
+            char lbl[64]; cardinal::snprintf(lbl, sizeof(lbl), "%s", tr.name.c_str());
             dl->AddText({origin.x + 4.0f, track_y + 6.0f},
                         IM_COL32(220, 220, 220, 255), lbl);
         }, s.tracks[i]);
@@ -161,14 +162,14 @@ void draw(cardinal::cine::Player* player, const char* title, bool* p_open) {
     // Playhead.
     {
         const float fx = timeline_origin.x + (s.play_head_s / t_max) * track_w;
-        const float total_h = std::max(20.0f, s.tracks.size() * (row_h + 4.0f) + 6.0f);
+        const float total_h = cardinal::max(20.0f, s.tracks.size() * (row_h + 4.0f) + 6.0f);
         dl->AddLine({fx, timeline_origin.y - 6.0f},
                     {fx, timeline_origin.y + total_h},
                     IM_COL32(255, 60, 60, 255), 2.0f);
     }
 
     // Reserve the space we drew into so subsequent ImGui items lay out below.
-    const float reserve_h = std::max(60.0f,
+    const float reserve_h = cardinal::max(60.0f,
         s.tracks.size() * (row_h + 4.0f) + 30.0f);
     ImGui::Dummy(ImVec2(full_w, reserve_h));
 
@@ -177,29 +178,29 @@ void draw(cardinal::cine::Player* player, const char* title, bool* p_open) {
         const float mx = ImGui::GetIO().MousePos.x;
         if (mx > timeline_origin.x) {
             const float t = (mx - timeline_origin.x) / track_w * t_max;
-            player->seek(std::clamp(t, 0.0f, s.duration_s));
+            player->seek(cardinal::clamp(t, 0.0f, s.duration_s));
         }
     }
 
     if (ImGui::CollapsingHeader("Add tracks", 0)) {
         if (ImGui::Button("+ Animation")) {
             cardinal::cine::AnimationTrack at; at.name = "Animation";
-            at.length_s = s.duration_s; s.tracks.emplace_back(std::move(at));
+            at.length_s = s.duration_s; s.tracks.emplace_back(cardinal::move(at));
         }
         ImGui::SameLine();
         if (ImGui::Button("+ Camera")) {
             cardinal::cine::CameraTrack ct; ct.name = "Camera";
-            s.tracks.emplace_back(std::move(ct));
+            s.tracks.emplace_back(cardinal::move(ct));
         }
         ImGui::SameLine();
         if (ImGui::Button("+ Audio")) {
             cardinal::cine::AudioTrack at; at.name = "Audio";
-            s.tracks.emplace_back(std::move(at));
+            s.tracks.emplace_back(cardinal::move(at));
         }
         ImGui::SameLine();
         if (ImGui::Button("+ Event")) {
             cardinal::cine::EventTrack et; et.name = "Event";
-            s.tracks.emplace_back(std::move(et));
+            s.tracks.emplace_back(cardinal::move(et));
         }
     }
     if (ImGui::CollapsingHeader("Markers", 0)) {
@@ -208,12 +209,12 @@ void draw(cardinal::cine::Player* player, const char* title, bool* p_open) {
         ImGui::SameLine();
         if (ImGui::Button("Add at playhead")) {
             cardinal::cine::Marker m{}; m.label = mb;
-            m.time_s = s.play_head_s; s.markers.push_back(std::move(m));
+            m.time_s = s.play_head_s; s.markers.push_back(cardinal::move(m));
         }
         for (auto it = s.markers.begin(); it != s.markers.end(); ) {
             ImGui::PushID(&*it);
             char lbl[64];
-            std::snprintf(lbl, sizeof(lbl), "%.2fs  %s", it->time_s, it->label.c_str());
+            cardinal::snprintf(lbl, sizeof(lbl), "%.2fs  %s", it->time_s, it->label.c_str());
             ImGui::TextUnformatted(lbl);
             ImGui::SameLine();
             if (ImGui::SmallButton("x")) { it = s.markers.erase(it); ImGui::PopID(); continue; }

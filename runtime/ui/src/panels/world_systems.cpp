@@ -13,7 +13,7 @@
 
 #include <imgui.h>
 
-#include <cstdio>
+#include <cardinal/core/cstdio.hpp>
 
 namespace cardinal::ui::panels::world_systems_panel {
 
@@ -126,7 +126,7 @@ void tab_level(cardinal::level::LevelManager* lm,
         ImGui::Text("Placements: %zu", lm->placement_count());
         for (const auto* p : lm->placements()) {
             char hdr[80];
-            std::snprintf(hdr, sizeof(hdr), "[%u] %s (%zu actors)",
+            cardinal::snprintf(hdr, sizeof(hdr), "[%u] %s (%zu actors)",
                 p->id,
                 p->instance ? p->instance->desc().name.c_str() : "?",
                 p->spawned_actor_ids.size());

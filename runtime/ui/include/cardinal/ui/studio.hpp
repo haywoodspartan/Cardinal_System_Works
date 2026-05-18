@@ -16,10 +16,7 @@
 #include <cardinal/core/types.hpp>
 #include <cardinal/scene/math.hpp>
 
-#include <functional>
-#include <memory>
-#include <string>
-#include <vector>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::rhi       { class Device;    class Swapchain; }
 namespace cardinal::window    { class Window; }
@@ -54,7 +51,7 @@ namespace cardinal::ui {
 
 class Studio {
 public:
-    static std::unique_ptr<Studio> create(
+    static cardinal::unique_ptr<Studio> create(
         cardinal::rhi::Device&    device,
         cardinal::rhi::Swapchain& swapchain,
         cardinal::window::Window& window);
@@ -201,14 +198,14 @@ public:
 
     // ----- Project / Cook & Pack / Shader compiler ---------------------
     struct ProjectAction {
-        std::shared_ptr<cardinal::project::Project> opened;   // non-null when Open/Create fired
+        cardinal::shared_ptr<cardinal::project::Project> opened;   // non-null when Open/Create fired
         bool save_clicked{false};
         bool cook_clicked{false};
         bool pack_clicked{false};
         bool cook_and_pack_clicked{false};
     };
     virtual ProjectAction draw_project_panel(
-        std::shared_ptr<cardinal::project::Project>* current_project,
+        cardinal::shared_ptr<cardinal::project::Project>* current_project,
         cardinal::project::RecentProjects* recents,
         const char* title = "Project", bool* p_open = nullptr) = 0;
 
@@ -293,7 +290,7 @@ public:
 
     struct TextureToolsRequest {
         bool        export_now{false};
-        std::string export_path;     // populated when export_now is true
+        cardinal::string export_path;     // populated when export_now is true
     };
     virtual TextureToolsRequest draw_texture_tools_panel(
         const char* title = "Texture Tools",
@@ -305,7 +302,7 @@ public:
     // load + unload + reload + watch a .cpp at runtime, see compile
     // diagnostics, see per-script sandbox status if the host has bound a
     // sandbox to the loaded plugin. Pass nullptr to suppress.
-    using SandboxStatusLookup = std::function<bool(const std::string&,
+    using SandboxStatusLookup = cardinal::function<bool(const cardinal::string&,
                                                    void* /* sandbox::Status* */)>;
     virtual void draw_cppscript_panel(cardinal::cppscript::Engine* engine,
                                       const char* title = "Code Sandbox",
@@ -451,9 +448,9 @@ public:
     // pivot (centroid) and the apply-to-all fan-out stay host-side so
     // Studio remains scene-agnostic — it only reports intent.
     virtual void set_selection(const u32* ids, cardinal::usize count) = 0;
-    virtual const std::vector<u32>& selection() const noexcept = 0;
+    virtual const cardinal::vector<u32>& selection() const noexcept = 0;
     virtual void draw_scene_hierarchy(scene::Scene& scene,
-                                      std::vector<u32>* selection_inout,
+                                      cardinal::vector<u32>* selection_inout,
                                       const char* title = "Hierarchy",
                                       bool* p_open = nullptr) = 0;
 
@@ -533,8 +530,8 @@ public:
     // place-mode and remembers the id so the next viewport click instantiates.
     // The optional `on_spawn_at_camera` callback is wired to the
     // right-click context menu (Spawn at camera / Spawn at origin).
-    using AssetPickFn  = std::function<void(const char* asset_id)>;
-    using AssetSpawnAt = std::function<void(const char* asset_id, int where /* 0=camera, 1=origin */)>;
+    using AssetPickFn  = cardinal::function<void(const char* asset_id)>;
+    using AssetSpawnAt = cardinal::function<void(const char* asset_id, int where /* 0=camera, 1=origin */)>;
     virtual void draw_asset_palette(const AssetPickFn& on_pick,
                                     const char* current_asset_id = nullptr,
                                     const char* title = "Asset Palette",
@@ -670,7 +667,7 @@ public:
     // hits Generate; false otherwise.
     struct TerrainSpawnRequest {
         bool        requested{false};
-        std::string profile_name;          // name of profile in library to use
+        cardinal::string profile_name;          // name of profile in library to use
         u32         resolution{64};
         float       chunk_size{32.0f};
         int         chunks_x{4};
@@ -679,7 +676,7 @@ public:
     virtual void draw_terrain_modal(bool open_now,
                                     TerrainSpawnRequest* request_out) = 0;
 
-    using ConsoleEval = std::function<std::string(const char* line)>;
+    using ConsoleEval = cardinal::function<cardinal::string(const char* line)>;
     virtual void draw_console_panel(const ConsoleEval& eval,
                                     const char* title = "Console",
                                     bool* p_open = nullptr) = 0;
@@ -703,9 +700,9 @@ public:
         Center,          // dock into the central area with Viewports
         Floating         // don't dock — appear as its own free window
     };
-    using ToolDrawFn = std::function<void(bool* show)>;
+    using ToolDrawFn = cardinal::function<void(bool* show)>;
     struct ToolWindow {
-        std::string  title;
+        cardinal::string  title;
         bool*        show{nullptr};
         ToolDrawFn   draw;
         ToolDockHint dock_hint{ToolDockHint::Right};
@@ -722,7 +719,7 @@ public:
     // Read-only enumeration — used by the host's dock-layout builder so
     // it knows where to place each registered tool the first time the
     // layout is constructed.
-    virtual std::vector<ToolWindow> registered_tool_windows() const = 0;
+    virtual cardinal::vector<ToolWindow> registered_tool_windows() const = 0;
 
     // ----- Diagnostics: stack / function trace / script debugger -------
     //

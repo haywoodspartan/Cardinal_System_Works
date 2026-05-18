@@ -7,7 +7,7 @@
 
 #include <imgui.h>
 
-#include <cstdio>
+#include <cardinal/core/cstdio.hpp>
 
 namespace cardinal::ui::panels::input_panel {
 
@@ -61,7 +61,7 @@ void draw(cardinal::input::Manager* mgr, const char* title, bool* p_open) {
                     mgr->mouse_down(cardinal::input::MouseButton::Middle) ? "down" : ".");
 
         // Inline strip of currently-down keys.
-        std::string down_list;
+        cardinal::string down_list;
         for (cardinal::u32 i = 1; i < static_cast<cardinal::u32>(cardinal::input::KeyCode::Count); ++i) {
             const auto k = static_cast<cardinal::input::KeyCode>(i);
             if (mgr->key_down(k)) {
@@ -100,7 +100,7 @@ void draw(cardinal::input::Manager* mgr, const char* title, bool* p_open) {
                                         : ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
                                    "%s", down ? "DOWN" : "up");
                 ImGui::TableSetColumnIndex(2);
-                std::string blist;
+                cardinal::string blist;
                 for (const auto& b : mgr->action_bindings(n)) {
                     if (!blist.empty()) blist += ", ";
                     blist += bind_kind_name(b.kind);
@@ -126,7 +126,7 @@ void draw(cardinal::input::Manager* mgr, const char* title, bool* p_open) {
             ImGui::Text("%s", n.c_str());
             ImGui::SameLine(160.0f);
             char ov[16];
-            std::snprintf(ov, sizeof(ov), "%+.2f", v);
+            cardinal::snprintf(ov, sizeof(ov), "%+.2f", v);
             ImGui::ProgressBar((v + 1.0f) * 0.5f, ImVec2(-FLT_MIN, 0), ov);
             ImGui::PopID();
         }

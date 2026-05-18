@@ -4,6 +4,7 @@
 #include "editor_modes.hpp"
 
 #include <cardinal/edit/editor_mode.hpp>
+#include <cardinal/core/cstdio.hpp>
 
 #include <imgui.h>
 
@@ -41,7 +42,7 @@ void draw(cardinal::edit::EditorState* state, const char* title, bool* p_open) {
                                   ImVec4(0.25f, 0.50f, 0.80f, 1.0f));
         }
         char label[48];
-        std::snprintf(label, sizeof(label), "%s %s##mode%u",
+        cardinal::snprintf(label, sizeof(label), "%s %s##mode%u",
                       cardinal::edit::editor_mode_glyph(m),
                       cardinal::edit::editor_mode_name(m),
                       static_cast<unsigned>(m));

@@ -7,8 +7,9 @@
 
 #include <imgui.h>
 
-#include <algorithm>
-#include <cstring>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::ui::panels {
 
@@ -24,14 +25,14 @@ void draw(const ConsoleEvalFn& eval,
     // empty input ⇒ no suggestions, so the strip costs no vertical
     // pixels until the user starts typing. Click a suggestion to fill
     // the input; Tab also accepts the first match.
-    std::vector<std::string> suggestions;
+    cardinal::vector<cardinal::string> suggestions;
     if (state.input[0] != '\0') {
         suggestions = cardinal::console::Registry::instance().complete(
             state.input, 8);
     }
     const float suggest_h = suggestions.empty()
         ? 0.0f
-        : ImGui::GetFrameHeightWithSpacing() * std::min<float>(
+        : ImGui::GetFrameHeightWithSpacing() * cardinal::min<float>(
               static_cast<float>(suggestions.size()), 4.0f);
 
     const float input_h   = ImGui::GetFrameHeightWithSpacing();
@@ -64,7 +65,7 @@ void draw(const ConsoleEvalFn& eval,
                                       ImGuiSelectableFlags_AllowDoubleClick)) {
                     // Single click — autocomplete; the user still presses
                     // Enter to execute. Double click = execute immediately.
-                    std::strncpy(state.input, s.c_str(), sizeof(state.input) - 1);
+                    cardinal::strncpy(state.input, s.c_str(), sizeof(state.input) - 1);
                     state.input[sizeof(state.input) - 1] = '\0';
                     if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                         state.pending_submit = true;
@@ -99,19 +100,19 @@ void draw(const ConsoleEvalFn& eval,
     // Tab → accept first suggestion (only when input is focused & has text).
     if (ImGui::IsItemFocused() && !suggestions.empty() &&
         ImGui::IsKeyPressed(ImGuiKey_Tab)) {
-        std::strncpy(state.input, suggestions.front().c_str(),
+        cardinal::strncpy(state.input, suggestions.front().c_str(),
                      sizeof(state.input) - 1);
         state.input[sizeof(state.input) - 1] = '\0';
         state.request_focus = true;
     }
     if (entered || state.pending_submit) {
         state.pending_submit = false;
-        std::string in = state.input;
+        cardinal::string in = state.input;
         if (!in.empty()) {
             state.log.push_back("> " + in);
             if (eval) {
-                std::string out = eval(in.c_str());
-                if (!out.empty()) state.log.push_back(std::move(out));
+                cardinal::string out = eval(in.c_str());
+                if (!out.empty()) state.log.push_back(cardinal::move(out));
             }
             state.input[0] = '\0';
             state.scroll_to_bottom = true;

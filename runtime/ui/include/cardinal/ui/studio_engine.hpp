@@ -32,7 +32,7 @@
 
 #include <cardinal/engine/engine.hpp>
 
-#include <memory>
+#include <cardinal/core/types.hpp>
 
 namespace cardinal::ui {
 
@@ -60,7 +60,7 @@ public:
     static int run(int argc, char** argv, StudioApplication& app);
 
     // Lower-level: hand-rolled boot. Returns nullptr on failure.
-    static std::unique_ptr<StudioEngine> create(
+    static cardinal::unique_ptr<StudioEngine> create(
         const cardinal::engine::EngineDesc& desc);
 
     virtual ~StudioEngine() = default;

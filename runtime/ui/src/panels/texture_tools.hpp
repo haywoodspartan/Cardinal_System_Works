@@ -16,8 +16,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-
-#include <vector>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::ui::panels::texture_tools_panel {
 
@@ -51,7 +50,7 @@ struct State {
     bool        post_levels{false};
 
     // Live preview cache: regenerated whenever the user changes a knob.
-    std::vector<cardinal::u8> rgba_cache;
+    cardinal::vector<cardinal::u8> rgba_cache;
     bool                       dirty{true};
     bool                       export_clicked{false};
     char                       export_path[512]{"texture.ppm"};

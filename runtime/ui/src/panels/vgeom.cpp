@@ -15,8 +15,8 @@
 
 #include <imgui.h>
 
-#include <cstdio>
-#include <unordered_set>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::ui {
 
@@ -58,8 +58,8 @@ void draw_vgeom_panel(cardinal::scene::Scene* scene, bool* p_open) {
         u32                          ref_count{0};
     };
 
-    std::vector<Row> rows;
-    std::unordered_set<cardinal::scene::Mesh*> seen;
+    cardinal::vector<Row> rows;
+    cardinal::unordered_set<cardinal::scene::Mesh*> seen;
     rows.reserve(scene->entities().size());
     for (const auto& e : scene->entities()) {
         if (!e.mesh) continue;
@@ -125,7 +125,7 @@ void draw_vgeom_panel(cardinal::scene::Scene* scene, bool* p_open) {
             ImGui::TableNextRow();
             // Mesh name.
             ImGui::TableSetColumnIndex(0);
-            const std::string& mname = r.mesh->name();
+            const cardinal::string& mname = r.mesh->name();
             ImGui::Text("%s", mname.empty() ? "(unnamed)" : mname.c_str());
             // Ref count.
             ImGui::TableSetColumnIndex(1);

@@ -7,9 +7,9 @@
 
 #include <imgui.h>
 
-#include <algorithm>
-#include <cmath>
-#include <cstdio>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cmath.hpp>
+#include <cardinal/core/cstdio.hpp>
 
 namespace cardinal::ui::panels::nav_panel {
 
@@ -36,7 +36,7 @@ void draw(cardinal::nav::Grid* grid, State& s,
     // Run A* live every frame so painting / start / goal updates redraw
     // the path as you move them. Cheap on the Studio's grid sizes.
     static cardinal::nav::PathQuery q;
-    static std::vector<cardinal::nav::CellCoord> path;
+    static cardinal::vector<cardinal::nav::CellCoord> path;
     const auto stats = q.find_path(*grid,
         {s.start_x, s.start_y}, {s.goal_x, s.goal_y},
         path, s.allow_diagonal);
@@ -64,10 +64,10 @@ void draw(cardinal::nav::Grid* grid, State& s,
             const float c = grid->cost(static_cast<cardinal::i32>(x),
                                         static_cast<cardinal::i32>(y));
             ImU32 col = IM_COL32_BLACK_TRANS;
-            if (!std::isfinite(c)) {
+            if (!cardinal::isfinite(c)) {
                 col = IM_COL32(60, 30, 30, 240);
             } else if (c > 1.5f) {
-                const int r = std::clamp<int>(80 + static_cast<int>(c * 20.0f), 80, 200);
+                const int r = cardinal::clamp<int>(80 + static_cast<int>(c * 20.0f), 80, 200);
                 col = IM_COL32(r, r / 2, 30, 220);
             }
             if (col != IM_COL32_BLACK_TRANS) {

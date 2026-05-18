@@ -19,9 +19,8 @@
 
 #include <imgui.h>
 
-#include <mutex>
-#include <string>
-#include <vector>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/thread.hpp>
 
 namespace cardinal::ui::panels::log_panel {
 
@@ -32,21 +31,21 @@ class Store final : public cardinal::log::Sink {
 public:
     struct Entry {
         cardinal::log::Level lvl{cardinal::log::Level::Info};
-        std::string          category;
-        std::string          message;
+        cardinal::string          category;
+        cardinal::string          message;
     };
 
     Store() : entries_(kCapacity) {}
 
     void on_message(cardinal::log::Level lvl, const char* cat, const char* msg) override;
-    void snapshot(std::vector<Entry>& out) const;
+    void snapshot(cardinal::vector<Entry>& out) const;
     void clear();
 
 private:
     static constexpr size_t kCapacity = 4096;
 
-    mutable std::mutex mutex_;
-    std::vector<Entry> entries_;
+    mutable cardinal::mutex mutex_;
+    cardinal::vector<Entry> entries_;
     size_t             head_{0};
     size_t             size_{0};
 };
@@ -58,8 +57,8 @@ struct State {
     bool                 auto_scroll{true};
     // Scratch buffers reused across frames so steady-state draws don't
     // hit the allocator.
-    std::vector<Store::Entry> scratch_entries;
-    std::vector<size_t>       scratch_filtered;
+    cardinal::vector<Store::Entry> scratch_entries;
+    cardinal::vector<size_t>       scratch_filtered;
 };
 
 void draw(const char* title, bool* p_open, State& state);

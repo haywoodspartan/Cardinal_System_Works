@@ -7,7 +7,8 @@
 
 #include <imgui.h>
 
-#include <cstdio>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cstdio.hpp>
 
 namespace cardinal::ui::panels::actor_outliner_panel {
 
@@ -30,7 +31,7 @@ void inspect_transform(cardinal::actor::TransformComponent& t) {
 
 void inspect_mesh(cardinal::actor::MeshComponent& m) {
     char buf[128];
-    std::snprintf(buf, sizeof(buf), "%s", m.asset_id.c_str());
+    cardinal::snprintf(buf, sizeof(buf), "%s", m.asset_id.c_str());
     if (ImGui::InputText("Asset", buf, sizeof(buf))) m.asset_id = buf;
     ImGui::ColorEdit3("Tint", &m.tint.x);
     ImGui::Checkbox("Visible", &m.visible);
@@ -65,7 +66,7 @@ void inspect_light(cardinal::actor::LightComponent& l) {
 
 void inspect_audio(cardinal::actor::AudioEmitterComponent& a) {
     char buf[128];
-    std::snprintf(buf, sizeof(buf), "%s", a.cue_id.c_str());
+    cardinal::snprintf(buf, sizeof(buf), "%s", a.cue_id.c_str());
     if (ImGui::InputText("Cue", buf, sizeof(buf))) a.cue_id = buf;
     ImGui::SliderFloat("Volume", &a.volume, 0.0f, 4.0f, "%.2f");
     ImGui::SliderFloat("Pitch",  &a.pitch,  0.05f, 8.0f, "%.2f");
@@ -157,14 +158,14 @@ void draw(cardinal::actor::World* world,
     ImGui::Text("Actors: %zu", world->actor_count());
     ImGui::Separator();
 
-    const float h = std::max(120.0f, ImGui::GetContentRegionAvail().y * 0.45f);
+    const float h = cardinal::max(120.0f, ImGui::GetContentRegionAvail().y * 0.45f);
     if (ImGui::BeginChild("##actor_list", ImVec2(0, h), ImGuiChildFlags_FrameStyle))
     {
         for (const auto& a : world->actors()) {
             if (!a->alive()) continue;
             ImGui::PushID(static_cast<int>(a->id()));
             char label[128];
-            std::snprintf(label, sizeof(label), "[%u] %s",
+            cardinal::snprintf(label, sizeof(label), "[%u] %s",
                 a->id(), a->name().c_str());
             if (ImGui::Selectable(label, sel == a->id())) sel = a->id();
             if (ImGui::BeginPopupContextItem()) {
@@ -186,7 +187,7 @@ void draw(cardinal::actor::World* world,
         ImGui::TextDisabled("(no actor selected)");
     } else {
         char nm[128];
-        std::snprintf(nm, sizeof(nm), "%s", a->name().c_str());
+        cardinal::snprintf(nm, sizeof(nm), "%s", a->name().c_str());
         if (ImGui::InputText("Name", nm, sizeof(nm))) a->set_name(nm);
         ImGui::Text("ID:     %u", a->id());
         ImGui::Text("Parent: %u", a->parent());

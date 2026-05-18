@@ -7,7 +7,7 @@
 
 #include <imgui.h>
 
-#include <cstdio>
+#include <cardinal/core/cstdio.hpp>
 
 namespace cardinal::ui::panels::sky_panel {
 
@@ -17,7 +17,7 @@ const char* hour_label(float h) {
     static char buf[16];
     const int hh = static_cast<int>(h);
     const int mm = static_cast<int>((h - hh) * 60.0f);
-    std::snprintf(buf, sizeof(buf), "%02d:%02d", hh, mm);
+    cardinal::snprintf(buf, sizeof(buf), "%02d:%02d", hh, mm);
     return buf;
 }
 

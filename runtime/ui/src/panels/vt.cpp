@@ -7,8 +7,8 @@
 
 #include <imgui.h>
 
-#include <algorithm>
-#include <cstdio>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cstdio.hpp>
 
 namespace cardinal::ui::panels::vt_panel {
 
@@ -32,7 +32,7 @@ void draw_heatmap(const cardinal::vt::PageTable& pt, cardinal::u32 mip, float si
         ImGui::TextDisabled("(empty)");
         return;
     }
-    const float cell = side_px / static_cast<float>(std::max(w, h));
+    const float cell = side_px / static_cast<float>(cardinal::max(w, h));
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     for (cardinal::u32 y = 0; y < h; ++y) {
@@ -82,7 +82,7 @@ void draw(cardinal::vt::System* sys, const char* title, bool* p_open) {
             ? static_cast<float>(cache.resident) / static_cast<float>(cache.capacity)
             : 0.0f;
         char ov[64];
-        std::snprintf(ov, sizeof(ov), "%u / %u (%.1f%%)",
+        cardinal::snprintf(ov, sizeof(ov), "%u / %u (%.1f%%)",
             cache.resident, cache.capacity, frac * 100.0f);
         ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0), ov);
     }
@@ -116,7 +116,7 @@ void draw(cardinal::vt::System* sys, const char* title, bool* p_open) {
             const auto& pt = vt->page_table();
             ImGui::PushID(static_cast<int>(id));
             char hdr[80];
-            std::snprintf(hdr, sizeof(hdr),
+            cardinal::snprintf(hdr, sizeof(hdr),
                 "vt %u — %u x %u tiles, %u mips, resident %u, pending %u",
                 id, vt->desc().width_tiles, vt->desc().height_tiles,
                 pt.mip_count(), pt.resident_count(), pt.pending_count());
@@ -145,7 +145,7 @@ void draw(cardinal::vt::System* sys, const char* title, bool* p_open) {
                     ImGui::EndTable();
                 }
                 ImGui::TextDisabled("Mip-0 residency map:");
-                draw_heatmap(pt, 0, std::min(256.0f,
+                draw_heatmap(pt, 0, cardinal::min(256.0f,
                     ImGui::GetContentRegionAvail().x));
                 ImGui::TreePop();
             }

@@ -7,8 +7,8 @@
 
 #include <imgui.h>
 
-#include <algorithm>
-#include <cstdio>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cstdio.hpp>
 
 namespace cardinal::ui::panels::curve_editor_panel {
 
@@ -36,18 +36,18 @@ void draw(cardinal::anim::Curve<float>* curve, const char* title, bool* p_open) 
     }
 
     // ---- Compute display range ----
-    float t_min = 0.0f, t_max = std::max(1.0f, curve->duration() + 1.0f);
+    float t_min = 0.0f, t_max = cardinal::max(1.0f, curve->duration() + 1.0f);
     float v_min = -1.0f, v_max = 1.0f;
     for (const auto& k : curve->keys) {
-        v_min = std::min(v_min, k.value);
-        v_max = std::max(v_max, k.value);
+        v_min = cardinal::min(v_min, k.value);
+        v_max = cardinal::max(v_max, k.value);
     }
     if (v_max - v_min < 0.5f) { v_min -= 0.5f; v_max += 0.5f; }
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const ImVec2 graph_min = ImGui::GetCursorScreenPos();
-    const float  width  = std::max(120.0f, avail.x);
-    const float  height = std::max(120.0f, avail.y - 40.0f);
+    const float  width  = cardinal::max(120.0f, avail.x);
+    const float  height = cardinal::max(120.0f, avail.y - 40.0f);
     const ImVec2 graph_max(graph_min.x + width, graph_min.y + height);
 
     auto x_of = [&](float t) {
@@ -80,7 +80,7 @@ void draw(cardinal::anim::Curve<float>* curve, const char* title, bool* p_open) 
     // Curve sampled at every pixel.
     if (!curve->empty()) {
         ImVec2 prev{ x_of(t_min), y_of(curve->sample(t_min)) };
-        const int steps = std::max(64, static_cast<int>(width));
+        const int steps = cardinal::max(64, static_cast<int>(width));
         for (int i = 1; i <= steps; ++i) {
             const float t = t_min + (t_max - t_min) * i / steps;
             const ImVec2 cur{ x_of(t), y_of(curve->sample(t)) };
@@ -118,13 +118,13 @@ void draw(cardinal::anim::Curve<float>* curve, const char* title, bool* p_open) 
         }
         if (drag_active && drag_key >= 0 && drag_key < static_cast<int>(curve->keys.size())) {
             auto& k = curve->keys[drag_key];
-            k.time  = std::max(0.0f, t_of_x(io.MousePos.x));
+            k.time  = cardinal::max(0.0f, t_of_x(io.MousePos.x));
             k.value = v_of_y(io.MousePos.y);
         }
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
             // Re-sort by time after a drag.
             if (drag_active) {
-                std::sort(curve->keys.begin(), curve->keys.end(),
+                cardinal::sort(curve->keys.begin(), curve->keys.end(),
                     [](const auto& a, const auto& b){ return a.time < b.time; });
             }
             drag_key = -1; drag_active = false;

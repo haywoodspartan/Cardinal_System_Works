@@ -8,8 +8,9 @@
 
 #include <imgui.h>
 
-#include <algorithm>
-#include <cstring>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/cstring.hpp>
 
 namespace cardinal::ui::panels::cppscript_panel {
 
@@ -58,7 +59,7 @@ void draw(cardinal::cppscript::Engine* engine,
     }
 
     // ---- Compiler banner --------------------------------------------------
-    const std::string compiler = engine->compiler_path();
+    const cardinal::string compiler = engine->compiler_path();
     if (compiler.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220, 80, 80, 255));
         ImGui::TextWrapped("No C++ compiler discovered. Install Visual Studio 2022 / "
@@ -83,9 +84,9 @@ void draw(cardinal::cppscript::Engine* engine,
     if (ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* payload =
                 ImGui::AcceptDragDropPayload("CARDINAL_FILE_PATH")) {
-            const usize n = std::min<usize>(static_cast<usize>(payload->DataSize),
+            const usize n = cardinal::min<usize>(static_cast<usize>(payload->DataSize),
                                             sizeof(state.input_path) - 1);
-            std::memcpy(state.input_path, payload->Data, n);
+            cardinal::memcpy(state.input_path, payload->Data, n);
             state.input_path[n] = '\0';
         }
         ImGui::EndDragDropTarget();
@@ -114,11 +115,11 @@ void draw(cardinal::cppscript::Engine* engine,
     // ---- Job table --------------------------------------------------------
     auto jobs = engine->jobs();
     // Newest first — read the top of the panel as "what just happened?".
-    std::sort(jobs.begin(), jobs.end(),
+    cardinal::sort(jobs.begin(), jobs.end(),
         [](const auto& a, const auto& b) { return a.handle.id > b.handle.id; });
 
     const float bottom_h = 180.0f;   // diagnostics pane below
-    const float table_h  = std::max(80.0f, ImGui::GetContentRegionAvail().y - bottom_h);
+    const float table_h  = cardinal::max(80.0f, ImGui::GetContentRegionAvail().y - bottom_h);
     if (ImGui::BeginTable("##cs_jobs", 6,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                           ImGuiTableFlags_ScrollY  | ImGuiTableFlags_SizingStretchProp,
@@ -139,7 +140,7 @@ void draw(cardinal::cppscript::Engine* engine,
 
             ImGui::TableSetColumnIndex(0);
             const bool selected = (state.selected_job_id == j.handle.id);
-            char idbuf[16]; std::snprintf(idbuf, sizeof(idbuf), "%llu",
+            char idbuf[16]; cardinal::snprintf(idbuf, sizeof(idbuf), "%llu",
                 static_cast<unsigned long long>(j.handle.id));
             if (ImGui::Selectable(idbuf, selected,
                 ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))

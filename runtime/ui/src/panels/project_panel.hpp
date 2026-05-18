@@ -8,8 +8,6 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <memory>
-#include <string>
 
 namespace cardinal::project {
     class Project;
@@ -20,14 +18,14 @@ namespace cardinal::ui::panels::project_panel {
 
 // Returned per draw — host reads these to know what the user clicked.
 struct Action {
-    std::shared_ptr<cardinal::project::Project> opened_project;   // non-null when OPEN/CREATE happened
+    cardinal::shared_ptr<cardinal::project::Project> opened_project;   // non-null when OPEN/CREATE happened
     bool        save_clicked{false};
     bool        cook_clicked{false};
     bool        pack_clicked{false};
     bool        cook_and_pack_clicked{false};
 };
 
-Action draw(std::shared_ptr<cardinal::project::Project>* current_project,
+Action draw(cardinal::shared_ptr<cardinal::project::Project>* current_project,
             cardinal::project::RecentProjects* recents,
             const char* title = "Project",
             bool* p_open = nullptr);

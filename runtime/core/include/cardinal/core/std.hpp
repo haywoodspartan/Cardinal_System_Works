@@ -28,6 +28,7 @@
 #include <cardinal/core/cstdlib.hpp>
 #include <cardinal/core/ctime.hpp>
 #include <cardinal/core/cassert.hpp>
+#include <cardinal/core/climits.hpp>
 #include <cardinal/core/new.hpp>
 #include <cardinal/core/atomic.hpp>
 #include <cardinal/core/thread.hpp>

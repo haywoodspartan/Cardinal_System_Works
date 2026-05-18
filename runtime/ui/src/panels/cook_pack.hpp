@@ -10,9 +10,7 @@
 
 #include <cardinal/core/types.hpp>
 #include <cardinal/cook/cook.hpp>      // CookResult is held by value in State
-#include <memory>
-#include <string>
-#include <vector>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::project { class Project; }
 namespace cardinal::pack    { class Archive; }
@@ -23,9 +21,9 @@ namespace cardinal::ui::panels::cook_pack_panel {
 struct State {
     bool                  force_cook{false};
     bool                  open_pack_after_build{true};
-    std::string           last_pack_path;
-    std::vector<cardinal::cook::CookResult> last_results;
-    std::shared_ptr<cardinal::pack::Archive> opened_archive;
+    cardinal::string           last_pack_path;
+    cardinal::vector<cardinal::cook::CookResult> last_results;
+    cardinal::shared_ptr<cardinal::pack::Archive> opened_archive;
 };
 
 void draw(cardinal::project::Project* project,

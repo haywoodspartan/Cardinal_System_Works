@@ -7,12 +7,9 @@
 
 #include <imgui.h>
 
-#include <cctype>
-#include <cstdio>
-#include <functional>
-#include <string>
-#include <unordered_map>
-#include <vector>
+#include <cardinal/core/cctype.hpp>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::ui::panels {
 
@@ -42,10 +39,10 @@ void draw(cardinal::scene::Scene& scene,
     // Pre-compute parent → children adjacency and a name-filter mask
     // once per frame so the recursive draw is O(N) instead of O(N²).
     // Adjacency is keyed by parent_id; root entities live under key 0.
-    std::unordered_map<u32, std::vector<u32>> kids;
+    cardinal::unordered_map<u32, cardinal::vector<u32>> kids;
     const auto& ents = scene.entities();
     kids.reserve(ents.size() + 1);
-    std::unordered_map<u32, const cardinal::scene::Entity*> by_id;
+    cardinal::unordered_map<u32, const cardinal::scene::Entity*> by_id;
     by_id.reserve(ents.size());
     for (const auto& e : ents) {
         kids[e.parent_id].push_back(e.id);
@@ -64,15 +61,15 @@ void draw(cardinal::scene::Scene& scene,
     // descendant does (so collapsed branches with hidden hits don't
     // disappear). filter_buf empty → everything passes.
     const bool has_filter = (state.filter[0] != '\0');
-    std::unordered_map<u32, bool> visible_in_filter;
+    cardinal::unordered_map<u32, bool> visible_in_filter;
     if (has_filter) {
         // First pass: literal match (case-insensitive substring).
-        std::string needle = state.filter;
-        for (auto& c : needle) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        cardinal::string needle = state.filter;
+        for (auto& c : needle) c = static_cast<char>(cardinal::tolower(static_cast<unsigned char>(c)));
         for (const auto& e : ents) {
-            std::string hay = e.name;
-            for (auto& c : hay) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            visible_in_filter[e.id] = (hay.find(needle) != std::string::npos);
+            cardinal::string hay = e.name;
+            for (auto& c : hay) c = static_cast<char>(cardinal::tolower(static_cast<unsigned char>(c)));
+            visible_in_filter[e.id] = (hay.find(needle) != cardinal::string::npos);
         }
         // Propagate "true" up the chain so ancestors of matches stay
         // visible (the user wants to see the path to the hit).
@@ -104,7 +101,7 @@ void draw(cardinal::scene::Scene& scene,
 
     // Recursive lambda — renders one entity row + its children. Captures
     // are by reference; recursion is bounded by real scene depth.
-    std::function<void(u32, int)> draw_node = [&](u32 entity_id, int depth) {
+    cardinal::function<void(u32, int)> draw_node = [&](u32 entity_id, int depth) {
         auto it = by_id.find(entity_id);
         if (it == by_id.end()) return;
         const cardinal::scene::Entity& e = *it->second;
@@ -128,7 +125,7 @@ void draw(cardinal::scene::Scene& scene,
         }
 
         char label[192];
-        std::snprintf(label, sizeof(label), "%s %s",
+        cardinal::snprintf(label, sizeof(label), "%s %s",
                       e.visible ? "" : "(hidden)", e.name.c_str());
         const bool open = ImGui::TreeNodeEx("##node", flags, "%s", label);
 

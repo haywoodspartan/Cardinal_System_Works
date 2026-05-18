@@ -22,9 +22,6 @@
 
 #include <cardinal/core/types.hpp>
 
-#include <functional>
-#include <string>
-
 namespace cardinal::cppscript { class Engine; struct JobInfo; }
 namespace cardinal::sandbox    { class Sandbox; struct Status; }
 
@@ -46,7 +43,7 @@ struct State {
 // hosted inside a Sandbox, and if so what its Status looks like. nullptr
 // means the host doesn't track sandboxes; the panel hides those columns.
 using SandboxLookup =
-    std::function<bool(const std::string& source_path,
+    cardinal::function<bool(const cardinal::string& source_path,
                        cardinal::sandbox::Status* out_status)>;
 
 void draw(cardinal::cppscript::Engine* engine,

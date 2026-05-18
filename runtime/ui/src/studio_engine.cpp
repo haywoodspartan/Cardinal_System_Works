@@ -23,8 +23,8 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
-#include <cstring>
-#include <utility>
+#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::ui {
 
@@ -259,18 +259,18 @@ private:
         engine_->fly_camera().tick(engine_->scene().camera(), in, dt);
     }
 
-    std::unique_ptr<cardinal::engine::Engine> engine_;
-    std::unique_ptr<Studio>                   studio_;
+    cardinal::unique_ptr<cardinal::engine::Engine> engine_;
+    cardinal::unique_ptr<Studio>                   studio_;
     bool                                      first_layout_{true};
     ImVec2                                    last_mouse_{0, 0};
     f32                                       vp_fps_[kViewports]{0.0f, 0.0f, 0.0f};
 };
 
 // ----- Public factory + run() ----------------------------------------------
-std::unique_ptr<StudioEngine> StudioEngine::create(
+cardinal::unique_ptr<StudioEngine> StudioEngine::create(
     const cardinal::engine::EngineDesc& desc)
 {
-    auto e = std::make_unique<StudioEngineImpl>();
+    auto e = cardinal::make_unique<StudioEngineImpl>();
     if (!e->initialize(desc)) return nullptr;
     return e;
 }
@@ -281,13 +281,13 @@ int StudioEngine::run(int argc, char** argv, StudioApplication& app) {
     // semantics here. Inline rather than duplicate the parser.
     for (int i = 1; i < argc; ++i) {
         const char* a = argv[i];
-        if (std::strncmp(a, "--backend=", 10) != 0) continue;
+        if (cardinal::strncmp(a, "--backend=", 10) != 0) continue;
         const char* val = a + 10;
-        if (std::strcmp(val, "vulkan") == 0)
+        if (cardinal::strcmp(val, "vulkan") == 0)
             desc.backend = cardinal::engine::EngineDesc::Backend::Vulkan;
-        else if (std::strcmp(val, "d3d12") == 0)
+        else if (cardinal::strcmp(val, "d3d12") == 0)
             desc.backend = cardinal::engine::EngineDesc::Backend::D3D12;
-        else if (std::strcmp(val, "auto") == 0)
+        else if (cardinal::strcmp(val, "auto") == 0)
             desc.backend = cardinal::engine::EngineDesc::Backend::Auto;
     }
     auto se = create(desc);

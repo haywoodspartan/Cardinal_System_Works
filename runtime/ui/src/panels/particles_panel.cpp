@@ -7,7 +7,7 @@
 
 #include <imgui.h>
 
-#include <cstdio>
+#include <cardinal/core/cstdio.hpp>
 
 namespace cardinal::ui::panels::particles_panel {
 
@@ -92,7 +92,7 @@ void draw(cardinal::particles::System* sys, const char* title, bool* p_open) {
     for (const auto& e : sys->emitters()) {
         ImGui::PushID(e.get());
         char hdr[80];
-        std::snprintf(hdr, sizeof(hdr), "[%d] %s (%zu live)",
+        cardinal::snprintf(hdr, sizeof(hdr), "[%d] %s (%zu live)",
             idx, e->desc().name.empty() ? "Emitter" : e->desc().name.c_str(),
             e->live_count());
         if (ImGui::CollapsingHeader(hdr, ImGuiTreeNodeFlags_DefaultOpen)) {

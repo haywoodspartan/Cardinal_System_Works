@@ -7,8 +7,8 @@
 
 #include <imgui.h>
 
-#include <algorithm>
-#include <cstdio>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cstdio.hpp>
 
 namespace cardinal::ui::panels::texture_tools_panel {
 
@@ -16,7 +16,7 @@ namespace {
 
 cardinal::edit::tex_ops::Color rgba_color(const float c[4]) {
     auto u = [](float f) {
-        return static_cast<cardinal::u8>(std::clamp(f, 0.0f, 1.0f) * 255.0f);
+        return static_cast<cardinal::u8>(cardinal::clamp(f, 0.0f, 1.0f) * 255.0f);
     };
     return { u(c[0]), u(c[1]), u(c[2]), u(c[3]) };
 }
@@ -65,7 +65,7 @@ void preview(const State& s) {
     // ~256x256; over that the cell-overdraw cost shows up. The preview
     // box is fixed at min(panel width, 256).
     const ImVec2 avail = ImGui::GetContentRegionAvail();
-    float side = std::min(256.0f, avail.x);
+    float side = cardinal::min(256.0f, avail.x);
     if (side < 64.0f) side = 64.0f;
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -87,16 +87,16 @@ void preview(const State& s) {
 }
 
 void export_ppm(const State& s) {
-    FILE* f = std::fopen(s.export_path, "wb");
+    FILE* f = cardinal::fopen(s.export_path, "wb");
     if (f == nullptr) return;
-    std::fprintf(f, "P6\n%u %u\n255\n", s.size, s.size);
+    cardinal::fprintf(f, "P6\n%u %u\n255\n", s.size, s.size);
     for (cardinal::u32 y = 0; y < s.size; ++y) {
         for (cardinal::u32 x = 0; x < s.size; ++x) {
             const cardinal::usize i = (static_cast<cardinal::usize>(y) * s.size + x) * 4;
-            std::fwrite(&s.rgba_cache[i], 1, 3, f);  // RGB only (drop A)
+            cardinal::fwrite(&s.rgba_cache[i], 1, 3, f);  // RGB only (drop A)
         }
     }
-    std::fclose(f);
+    cardinal::fclose(f);
 }
 
 }  // namespace

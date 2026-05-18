@@ -7,7 +7,7 @@
 
 #include <imgui.h>
 
-#include <cstring>
+#include <cardinal/core/cstring.hpp>
 
 namespace cardinal::ui::panels::inspector_panel {
 
@@ -31,7 +31,7 @@ void draw(cardinal::scene::Scene& scene,
     }
 
     char namebuf[128];
-    std::strncpy(namebuf, e->name.c_str(), sizeof(namebuf) - 1);
+    cardinal::strncpy(namebuf, e->name.c_str(), sizeof(namebuf) - 1);
     namebuf[sizeof(namebuf) - 1] = '\0';
     if (ImGui::InputText("Name", namebuf, sizeof(namebuf))) {
         e->name = namebuf;

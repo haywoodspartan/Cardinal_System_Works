@@ -9,7 +9,7 @@
 
 #include <imgui.h>
 
-#include <cstring>
+#include <cardinal/core/cstring.hpp>
 
 namespace cardinal::ui::panels::save_load_panel {
 
@@ -28,7 +28,7 @@ void draw(cardinal::game::Game* game, cardinal::sky::Sky* sky,
     static bool replace_on_load = true;
     static cardinal::serial::SaveStats last_save;
     static cardinal::serial::LoadStats last_load;
-    static std::string last_error;
+    static cardinal::string last_error;
 
     if (ImGui::CollapsingHeader("World", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::InputText("Path##world", world_path, sizeof(world_path));
@@ -63,13 +63,13 @@ void draw(cardinal::game::Game* game, cardinal::sky::Sky* sky,
     if (sky && ImGui::CollapsingHeader("Sky", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::InputText("Path##sky", sky_path, sizeof(sky_path));
         if (ImGui::Button("Save sky")) {
-            std::string err;
+            cardinal::string err;
             cardinal::serial::save_sky(*sky, sky_path, &err);
             if (!err.empty()) last_error = err;
         }
         ImGui::SameLine();
         if (ImGui::Button("Load sky")) {
-            std::string err;
+            cardinal::string err;
             cardinal::serial::load_sky(*sky, sky_path, &err);
             if (!err.empty()) last_error = err;
         }

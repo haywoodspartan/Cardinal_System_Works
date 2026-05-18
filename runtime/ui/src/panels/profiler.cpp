@@ -7,7 +7,8 @@
 
 #include <imgui.h>
 
-#include <algorithm>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cstdio.hpp>
 
 namespace cardinal::ui::panels::profiler_panel {
 
@@ -27,10 +28,10 @@ void draw(State& s, cardinal::f32 frame_ms_now,
         // Compute a max for the y-axis from the visible history.
         float ymax = 1.0f;
         for (cardinal::u32 i = 0; i < s.history_count; ++i) {
-            ymax = std::max(ymax, s.frame_history[i]);
+            ymax = cardinal::max(ymax, s.frame_history[i]);
         }
         char overlay[64];
-        std::snprintf(overlay, sizeof(overlay),
+        cardinal::snprintf(overlay, sizeof(overlay),
             "%.2f ms (%.0f FPS)",
             s.last_frame_ms,
             s.last_frame_ms > 0.001f ? 1000.0f / s.last_frame_ms : 0.0f);
@@ -105,7 +106,7 @@ void draw(State& s, cardinal::f32 frame_ms_now,
                 ImGui::TextColored(col, "%s", label);
                 ImGui::TableSetColumnIndex(4);
                 char ov[32];
-                std::snprintf(ov, sizeof(ov), "%.1f%%", w.busy_fraction * 100.0);
+                cardinal::snprintf(ov, sizeof(ov), "%.1f%%", w.busy_fraction * 100.0);
                 ImGui::ProgressBar(static_cast<float>(w.busy_fraction),
                                    ImVec2(-FLT_MIN, 0), ov);
                 ImGui::TableSetColumnIndex(5);

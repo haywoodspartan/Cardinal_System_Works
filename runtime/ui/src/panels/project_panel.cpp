@@ -7,12 +7,12 @@
 
 #include <imgui.h>
 
-#include <cstdio>
-#include <cstring>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/cstring.hpp>
 
 namespace cardinal::ui::panels::project_panel {
 
-Action draw(std::shared_ptr<cardinal::project::Project>* current_project,
+Action draw(cardinal::shared_ptr<cardinal::project::Project>* current_project,
             cardinal::project::RecentProjects* recents,
             const char* title, bool* p_open)
 {
@@ -24,7 +24,7 @@ Action draw(std::shared_ptr<cardinal::project::Project>* current_project,
     static char         new_author[256]  = "";
     static int          template_idx     = 0;
     static char         open_root[1024]  = "G:/CardinalProjects/MyGame";
-    static std::string  last_error;
+    static cardinal::string  last_error;
 
     if (ImGui::CollapsingHeader("New project", ImGuiTreeNodeFlags_DefaultOpen)) {
         const char* templates[] = {
@@ -43,7 +43,7 @@ Action draw(std::shared_ptr<cardinal::project::Project>* current_project,
             opts.info.name           = new_name;
             opts.info.author         = new_author;
             opts.info.engine_version = "0.1.0";
-            std::string err;
+            cardinal::string err;
             auto p = cardinal::project::instantiate_template(opts, &err);
             if (p) {
                 if (current_project) *current_project = p;
@@ -59,7 +59,7 @@ Action draw(std::shared_ptr<cardinal::project::Project>* current_project,
     if (ImGui::CollapsingHeader("Open existing", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::InputText("Path##open", open_root, sizeof(open_root));
         if (ImGui::Button("Open", ImVec2(160.0f, 0.0f))) {
-            std::string err;
+            cardinal::string err;
             auto p = cardinal::project::Project::open(open_root, &err);
             if (p) {
                 if (current_project) *current_project = p;
@@ -78,7 +78,7 @@ Action draw(std::shared_ptr<cardinal::project::Project>* current_project,
         } else for (const auto& r : recents->entries()) {
             ImGui::PushID(r.c_str());
             if (ImGui::SmallButton("Open")) {
-                std::string err;
+                cardinal::string err;
                 auto p = cardinal::project::Project::open(r, &err);
                 if (p) {
                     if (current_project) *current_project = p;
@@ -100,13 +100,13 @@ Action draw(std::shared_ptr<cardinal::project::Project>* current_project,
         const auto& dirs = (*current_project)->dirs();
         ImGui::Text("Root:    %s", dirs.root.c_str());
         char buf[256];
-        std::snprintf(buf, sizeof(buf), "%s", info.name.c_str());
+        cardinal::snprintf(buf, sizeof(buf), "%s", info.name.c_str());
         if (ImGui::InputText("Name##c", buf, sizeof(buf))) info.name = buf;
-        std::snprintf(buf, sizeof(buf), "%s", info.author.c_str());
+        cardinal::snprintf(buf, sizeof(buf), "%s", info.author.c_str());
         if (ImGui::InputText("Author##c", buf, sizeof(buf))) info.author = buf;
-        std::snprintf(buf, sizeof(buf), "%s", info.description.c_str());
+        cardinal::snprintf(buf, sizeof(buf), "%s", info.description.c_str());
         if (ImGui::InputText("Desc##c", buf, sizeof(buf))) info.description = buf;
-        std::snprintf(buf, sizeof(buf), "%s", info.default_pack_name.c_str());
+        cardinal::snprintf(buf, sizeof(buf), "%s", info.default_pack_name.c_str());
         if (ImGui::InputText("Pack name##c", buf, sizeof(buf))) info.default_pack_name = buf;
         ImGui::Checkbox("Cook on save", &info.cook_on_save);
         ImGui::SameLine();

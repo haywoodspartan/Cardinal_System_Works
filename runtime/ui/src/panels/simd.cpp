@@ -13,11 +13,11 @@
 
 #include <imgui.h>
 
-#include <chrono>
-#include <cmath>
-#include <cstdio>
-#include <limits>
-#include <vector>
+#include <cardinal/core/chrono.hpp>
+#include <cardinal/core/cmath.hpp>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/limits.hpp>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::ui {
 
@@ -70,24 +70,24 @@ struct BenchState {
     static constexpr int kAabbN   = 64  * 1024;     // 64K AABBs = 1.5MiB SoA in
     static constexpr int kRepeats = 32;             // averaged
 
-    std::vector<float> a, b, y;
-    std::vector<float> pts_in, pts_out;
-    std::vector<float> mat_a, mat_b, mat_out;
+    cardinal::vector<float> a, b, y;
+    cardinal::vector<float> pts_in, pts_out;
+    cardinal::vector<float> mat_a, mat_b, mat_out;
     // Cull bench buffers — SoA: parallel cx/cy/cz/r arrays + output bits.
-    std::vector<float> sph_cx, sph_cy, sph_cz, sph_r;
-    std::vector<unsigned char> sph_bits;
+    cardinal::vector<float> sph_cx, sph_cy, sph_cz, sph_r;
+    cardinal::vector<unsigned char> sph_bits;
     float              cull_planes[24]{};            // 6 outward planes
     // AABB bench buffers — 6 SoA arrays in + 6 out, plus bitmask for cull.
-    std::vector<float> abb_in_min_x,  abb_in_min_y,  abb_in_min_z;
-    std::vector<float> abb_in_max_x,  abb_in_max_y,  abb_in_max_z;
-    std::vector<float> abb_out_min_x, abb_out_min_y, abb_out_min_z;
-    std::vector<float> abb_out_max_x, abb_out_max_y, abb_out_max_z;
-    std::vector<unsigned char> abb_bits;
-    std::vector<float> ray_t;        // ray-vs-AABB output buffer
+    cardinal::vector<float> abb_in_min_x,  abb_in_min_y,  abb_in_min_z;
+    cardinal::vector<float> abb_in_max_x,  abb_in_max_y,  abb_in_max_z;
+    cardinal::vector<float> abb_out_min_x, abb_out_min_y, abb_out_min_z;
+    cardinal::vector<float> abb_out_max_x, abb_out_max_y, abb_out_max_z;
+    cardinal::vector<unsigned char> abb_bits;
+    cardinal::vector<float> ray_t;        // ray-vs-AABB output buffer
     // Morton bench buffers — 64K cells of (x,y,z) u32 → u64 codes.
     static constexpr int       kMortonN = 64 * 1024;
-    std::vector<unsigned int>  mort_x, mort_y, mort_z;
-    std::vector<unsigned long long> mort_out;
+    cardinal::vector<unsigned int>  mort_x, mort_y, mort_z;
+    cardinal::vector<unsigned long long> mort_out;
     BenchResult        results[static_cast<size_t>(cardinal::core::simd::OpId::Count)];
     bool               buffers_ready{false};
 };
@@ -119,9 +119,9 @@ void prep_bench_buffers(BenchState& s) {
         // accept-or-reject (which would let the predictor fold
         // everything into a constant).
         const float t = static_cast<float>(i) * 0.0001f;
-        s.sph_cx[i] = std::sin(t) * 5.0f;
+        s.sph_cx[i] = cardinal::sin(t) * 5.0f;
         s.sph_cy[i] = static_cast<float>(i & 7) * 0.5f - 2.0f;
-        s.sph_cz[i] = std::cos(t) * 5.0f;
+        s.sph_cz[i] = cardinal::cos(t) * 5.0f;
     }
     s.sph_bits.assign((s.kSphereN + 7) / 8, 0);
     // 6 outward-facing axis-aligned planes for a unit-cube frustum
@@ -154,9 +154,9 @@ void prep_bench_buffers(BenchState& s) {
     s.abb_out_max_z.assign(s.kAabbN, 0.0f);
     for (int i = 0; i < s.kAabbN; ++i) {
         const float t = static_cast<float>(i) * 0.0001f;
-        const float cx = std::sin(t) * 5.0f;
+        const float cx = cardinal::sin(t) * 5.0f;
         const float cy = static_cast<float>(i & 7) * 0.5f - 2.0f;
-        const float cz = std::cos(t) * 5.0f;
+        const float cz = cardinal::cos(t) * 5.0f;
         s.abb_in_min_x[i] = cx - 0.4f; s.abb_in_max_x[i] = cx + 0.4f;
         s.abb_in_min_y[i] = cy - 0.4f; s.abb_in_max_y[i] = cy + 0.4f;
         s.abb_in_min_z[i] = cz - 0.4f; s.abb_in_max_z[i] = cz + 0.4f;
@@ -181,11 +181,11 @@ void prep_bench_buffers(BenchState& s) {
 // One-shot timer wrapper. Returns per-call microseconds.
 template <class Fn>
 double time_op(int repeats, Fn&& fn) {
-    using clk = std::chrono::high_resolution_clock;
+    using clk = cardinal::chrono::high_resolution_clock;
     const auto t0 = clk::now();
     for (int r = 0; r < repeats; ++r) fn();
     const auto t1 = clk::now();
-    return std::chrono::duration<double, std::micro>(t1 - t0).count() / repeats;
+    return cardinal::chrono::duration<double, cardinal::micro>(t1 - t0).count() / repeats;
 }
 
 void run_bench(BenchState& s) {
@@ -302,8 +302,8 @@ void run_bench(BenchState& s) {
         // the kernel inputs realistic (callers typically share the
         // same ray across many AABBs).
         const float ox = 0.0f, oy = 0.0f, oz = -10.0f;
-        const float inv_dx = std::numeric_limits<float>::infinity();   // dx = 0
-        const float inv_dy = std::numeric_limits<float>::infinity();   // dy = 0
+        const float inv_dx = cardinal::numeric_limits<float>::infinity();   // dx = 0
+        const float inv_dy = cardinal::numeric_limits<float>::infinity();   // dy = 0
         const float inv_dz = 1.0f;                                     // dz = 1
         ray_aabb_intersect_array(s.ray_t.data(),
             ox, oy, oz, inv_dx, inv_dy, inv_dz,

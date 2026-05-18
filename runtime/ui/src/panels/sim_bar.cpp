@@ -7,7 +7,7 @@
 
 #include <imgui.h>
 
-#include <cstdio>
+#include <cardinal/core/cstdio.hpp>
 
 namespace cardinal::ui::panels::sim_bar_panel {
 

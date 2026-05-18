@@ -7,7 +7,7 @@
 
 #include <imgui.h>
 
-#include <cstdio>
+#include <cardinal/core/cstdio.hpp>
 
 namespace cardinal::ui::panels::shader_compiler_panel {
 
@@ -57,7 +57,7 @@ void draw(cardinal::shader::Compiler* compiler, const char* title, bool* p_open)
         r.entry_point = entry;
         r.stage       = static_cast<cardinal::shader::Stage>(stage_idx);
         // Tokenise defines on whitespace.
-        std::string tok;
+        cardinal::string tok;
         for (const char* p = defines; *p != 0; ++p) {
             if (*p == ' ' || *p == '\t' || *p == ',') {
                 if (!tok.empty()) { r.defines.push_back(tok); tok.clear(); }

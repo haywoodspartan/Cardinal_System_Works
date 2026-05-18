@@ -8,8 +8,8 @@
 
 #include <imgui.h>
 
-#include <algorithm>
-#include <cstdio>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cstdio.hpp>
 
 namespace cardinal::ui::panels::memory_panel {
 
@@ -38,7 +38,7 @@ void mb_text(const char* label, cardinal::u64 bytes) {
 }
 
 void mb_progress(double frac, const char* overlay) {
-    frac = std::clamp(frac, 0.0, 1.0);
+    frac = cardinal::clamp(frac, 0.0, 1.0);
     ImVec4 col(0.40f, 0.85f, 0.40f, 1.0f);
     if (frac >= 0.92) col = ImVec4(0.90f, 0.30f, 0.30f, 1.0f);
     else if (frac >= 0.80) col = ImVec4(0.95f, 0.60f, 0.25f, 1.0f);
@@ -74,7 +74,7 @@ void draw(cardinal::budget::Broker* broker, const char* title, bool* p_open) {
                 ? (snap.system.total_bytes - snap.system.available_bytes)
                 : 0;
         char overlay[64];
-        std::snprintf(overlay, sizeof(overlay),
+        cardinal::snprintf(overlay, sizeof(overlay),
             "%.1f / %.1f GiB (%.1f%%)",
             static_cast<double>(used)                  / (1024.0 * 1024.0 * 1024.0),
             static_cast<double>(snap.system.total_bytes)/ (1024.0 * 1024.0 * 1024.0),
@@ -102,7 +102,7 @@ void draw(cardinal::budget::Broker* broker, const char* title, bool* p_open) {
             const double frac = static_cast<double>(snap.gpu_current_usage_bytes) /
                                 static_cast<double>(snap.gpu_budget_bytes);
             char overlay[64];
-            std::snprintf(overlay, sizeof(overlay),
+            cardinal::snprintf(overlay, sizeof(overlay),
                 "%.1f / %.1f GiB (%.1f%%)",
                 static_cast<double>(snap.gpu_current_usage_bytes)
                     / (1024.0 * 1024.0 * 1024.0),
@@ -142,11 +142,11 @@ void draw(cardinal::budget::Broker* broker, const char* title, bool* p_open) {
                         static_cast<double>(r.used_bytes) / (1024.0 * 1024.0));
                     ImGui::TableSetColumnIndex(4);
                     if (r.advisory_max_bytes > 0) {
-                        const double frac = std::clamp(
+                        const double frac = cardinal::clamp(
                             static_cast<double>(r.used_bytes) /
                             static_cast<double>(r.advisory_max_bytes), 0.0, 1.0);
                         char ov[64];
-                        std::snprintf(ov, sizeof(ov), "%.1f / %.1f MB",
+                        cardinal::snprintf(ov, sizeof(ov), "%.1f / %.1f MB",
                             static_cast<double>(r.used_bytes) / (1024.0 * 1024.0),
                             static_cast<double>(r.advisory_max_bytes) / (1024.0 * 1024.0));
                         mb_progress(frac, ov);

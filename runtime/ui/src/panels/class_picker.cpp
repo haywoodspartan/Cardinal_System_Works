@@ -8,8 +8,8 @@
 
 #include <imgui.h>
 
-#include <cstdio>
-#include <map>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::ui::panels::class_picker_panel {
 
@@ -45,9 +45,9 @@ void edit_property(cardinal::game::PropertyDef& p) {
             break;
         }
         case K::String: {
-            std::string* s = static_cast<std::string*>(p.ptr);
+            cardinal::string* s = static_cast<cardinal::string*>(p.ptr);
             char buf[256];
-            std::snprintf(buf, sizeof(buf), "%s", s->c_str());
+            cardinal::snprintf(buf, sizeof(buf), "%s", s->c_str());
             if (ImGui::InputText(p.name.c_str(), buf, sizeof(buf))) {
                 *s = buf;
             }
@@ -81,14 +81,14 @@ void draw(cardinal::game::Game* game, cardinal::u32* selected_actor_id_inout,
     if (ImGui::CollapsingHeader("Registered classes", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Text("%zu class(es) registered", names.size());
         // Group by leading category prefix (split on first "/").
-        std::map<std::string, std::vector<const cardinal::game::ClassDef*>> by_cat;
+        cardinal::map<cardinal::string, cardinal::vector<const cardinal::game::ClassDef*>> by_cat;
         for (const auto& n : names) {
             const auto* d = reg.find(n);
             if (d == nullptr) continue;
-            std::string cat = d->category;
+            cardinal::string cat = d->category;
             if (cat.empty()) cat = "(uncategorised)";
             const auto slash = cat.find('/');
-            if (slash != std::string::npos) cat = cat.substr(0, slash);
+            if (slash != cardinal::string::npos) cat = cat.substr(0, slash);
             by_cat[cat].push_back(d);
         }
         for (const auto& [cat, defs] : by_cat) {

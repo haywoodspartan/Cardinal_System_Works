@@ -7,7 +7,9 @@
 
 #include <imgui.h>
 
-#include <unordered_map>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::ui::panels::mixer_panel {
 
@@ -21,7 +23,7 @@ void draw(cardinal::audio::Engine* engine, const char* title, bool* p_open) {
 
     // Sum per-channel attenuated volume across active instances for a
     // VU-style meter. Cheap (we already hold the snapshot).
-    std::unordered_map<cardinal::audio::ChannelId, float> meter;
+    cardinal::unordered_map<cardinal::audio::ChannelId, float> meter;
     {
         for (const auto& s : engine->active_instances()) {
             meter[s.channel] += s.final_attenuated_volume;
@@ -51,7 +53,7 @@ void draw(cardinal::audio::Engine* engine, const char* title, bool* p_open) {
 
             // Meter bar to the right of the fader.
             ImGui::SameLine();
-            const float lvl = std::min(1.0f, meter[c.id]);
+            const float lvl = cardinal::min(1.0f, meter[c.id]);
             ImGui::PushStyleColor(ImGuiCol_PlotHistogram,
                 lvl > 0.85f ? ImVec4(0.95f, 0.30f, 0.30f, 1.0f)
               : lvl > 0.55f ? ImVec4(0.95f, 0.85f, 0.30f, 1.0f)
@@ -92,7 +94,7 @@ void draw(cardinal::audio::Engine* engine, const char* title, bool* p_open) {
             c.duration_s = 0.4f;
             c.sine_frequency_hz = 440.0f;
             c.gain = 0.6f;
-            engine->register_cue(std::move(c));
+            engine->register_cue(cardinal::move(c));
         }
         engine->play_2d("__studio_preview_tone__",
                         cardinal::audio::kChannelUi, 1.0f, 1.0f, false);

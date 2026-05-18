@@ -46,7 +46,7 @@
 #include <cardinal/trace/timeline.hpp>
 #include <cardinal/window/window.hpp>
 
-#include <filesystem>
+#include <cardinal/core/filesystem.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
     #include <Windows.h>
@@ -69,19 +69,17 @@
     #include <imgui_impl_dx12.h>
 #endif
 
-#include <array>
-#include <cctype>
-#include <chrono>
-#include <climits>
-#include <cstdio>
-#include <cstring>
-#include <ctime>
-#include <functional>
-#include <memory>
-#include <mutex>
-#include <string>
-#include <unordered_map>
-#include <vector>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cctype.hpp>
+#include <cardinal/core/chrono.hpp>
+#include <cardinal/core/climits.hpp>
+#include <cardinal/core/cmath.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/ctime.hpp>
+#include <cardinal/core/thread.hpp>
+#include <cardinal/core/utility.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(
@@ -141,14 +139,14 @@ void check_vk(VkResult r) {
     if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR || r == VK_ERROR_OUT_OF_DATE_KHR) {
         return;
     }
-    static std::mutex             s_mu;
+    static cardinal::mutex             s_mu;
     static u64                    s_total{0};
-    static std::array<u64, 64>    s_per_code_count{};   // small fixed array indexed by hash
+    static cardinal::array<u64, 64>    s_per_code_count{};   // small fixed array indexed by hash
     auto code_slot = [](VkResult v) noexcept -> usize {
         return static_cast<usize>(static_cast<i64>(v) & 63);
     };
 
-    std::lock_guard<std::mutex> g(s_mu);
+    cardinal::lock_guard<cardinal::mutex> g(s_mu);
     ++s_total;
     const usize slot = code_slot(r);
     const u64   prev = s_per_code_count[slot]++;
@@ -167,7 +165,7 @@ void check_vk(VkResult r) {
                 static_cast<int>(r));
         }
         const auto frames = cardinal::trace::capture(/*skip=*/1, /*max=*/24);
-        const std::string s = cardinal::trace::format_full(frames, "    ");
+        const cardinal::string s = cardinal::trace::format_full(frames, "    ");
         cardinal::log::errorf("ui/studio", "%s", s.c_str());
     } else if ((prev & 0x3FFu) == 0) {
         // ~Every 1024 hits, emit a one-liner with the running count so we
@@ -470,8 +468,8 @@ public:
         // existing `studio->draw_fps_overlay()` call site stays valid;
         // it's purely a sampler now — updates the EMA that
         // draw_viewport_panel reads each frame.
-        const auto now = std::chrono::steady_clock::now();
-        const float dt = std::chrono::duration<float>(now - last_sample_).count();
+        const auto now = cardinal::chrono::steady_clock::now();
+        const float dt = cardinal::chrono::duration<float>(now - last_sample_).count();
         if (dt >= 0.25f) {
             const auto frames = frame_count_ - last_sample_frame_;
             ema_fps_ = static_cast<float>(frames) / dt;
@@ -531,7 +529,7 @@ public:
         // Falls back to the main viewport's WorkRect if the platform
         // backend didn't enumerate monitors (rare; should always be set).
         struct Rect { float l, t, r, b; };
-        std::vector<Rect> monitors;
+        cardinal::vector<Rect> monitors;
         if (pio.Monitors.Size > 0) {
             monitors.reserve(static_cast<usize>(pio.Monitors.Size));
             for (int i = 0; i < pio.Monitors.Size; ++i) {
@@ -550,8 +548,8 @@ public:
         auto pos_visible = [&](float x, float y, float w, float h) {
             const float pad = 64.0f;
             for (const auto& m : monitors) {
-                const float ox = std::min(x + w, m.r) - std::max(x, m.l);
-                const float oy = std::min(y + h, m.b) - std::max(y, m.t);
+                const float ox = cardinal::min(x + w, m.r) - cardinal::max(x, m.l);
+                const float oy = cardinal::min(y + h, m.b) - cardinal::max(y, m.t);
                 if (ox >= pad && oy >= pad) return true;
             }
             return false;
@@ -677,7 +675,7 @@ public:
         if (ids != nullptr)
             for (cardinal::usize i = 0; i < count; ++i) selection_.push_back(ids[i]);
     }
-    const std::vector<u32>& selection() const noexcept override {
+    const cardinal::vector<u32>& selection() const noexcept override {
         return selection_;
     }
 
@@ -706,7 +704,7 @@ public:
         // own header does, so the cast lives here.
         panels::cppscript_panel::SandboxLookup typed_lookup;
         if (lookup) {
-            typed_lookup = [lookup](const std::string& src,
+            typed_lookup = [lookup](const cardinal::string& src,
                                     cardinal::sandbox::Status* out) -> bool {
                 return lookup(src, static_cast<void*>(out));
             };
@@ -791,7 +789,7 @@ public:
         panels::particles_panel::draw(sys, title, p_open);
     }
     ProjectAction draw_project_panel(
-        std::shared_ptr<cardinal::project::Project>* current_project,
+        cardinal::shared_ptr<cardinal::project::Project>* current_project,
         cardinal::project::RecentProjects* recents,
         const char* title, bool* p_open) override
     {
@@ -983,7 +981,7 @@ public:
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 3));
         const float toolbar_h = ImGui::GetFrameHeight() + 6.0f;  // 1 row + 6px breathing
         char tb_label[32];
-        std::snprintf(tb_label, sizeof(tb_label), "##vp_toolbar_%u", viewport_id);
+        cardinal::snprintf(tb_label, sizeof(tb_label), "##vp_toolbar_%u", viewport_id);
         ImGui::BeginChild(tb_label, ImVec2(0.0f, toolbar_h),
                           ImGuiChildFlags_None,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
@@ -992,9 +990,9 @@ public:
         const char* labels[] = { "Solid", "Wireframe", "Polygons",
                                  "Heightmap", "Normals", "RTX Preview" };
         int sel = mode_inout ? static_cast<int>(*mode_inout) : 0;
-        const float vm_w = std::clamp(toolbar_avail * 0.30f, 90.0f, 200.0f);
+        const float vm_w = cardinal::clamp(toolbar_avail * 0.30f, 90.0f, 200.0f);
         char vm_label[32];
-        std::snprintf(vm_label, sizeof(vm_label), "##viewmode_%u", viewport_id);
+        cardinal::snprintf(vm_label, sizeof(vm_label), "##viewmode_%u", viewport_id);
         ImGui::SetNextItemWidth(vm_w);
         if (ImGui::Combo(vm_label, &sel, labels, IM_ARRAYSIZE(labels)) && mode_inout) {
             *mode_inout = static_cast<scene::ViewMode>(sel);
@@ -1009,11 +1007,11 @@ public:
             const char* names[]   = { "Unlimited", "240", "144", "120", "60", "30", "15" };
             int idx = 0;
             for (int i = 0; i < IM_ARRAYSIZE(vals); ++i) {
-                if (std::abs(vals[i] - *fps_limit_inout) < 0.5f) { idx = i; break; }
+                if (cardinal::abs(vals[i] - *fps_limit_inout) < 0.5f) { idx = i; break; }
             }
-            const float fps_w = std::clamp(toolbar_avail * 0.16f, 70.0f, 130.0f);
+            const float fps_w = cardinal::clamp(toolbar_avail * 0.16f, 70.0f, 130.0f);
             char fps_label[32];
-            std::snprintf(fps_label, sizeof(fps_label), "##fps_cap_%u", viewport_id);
+            cardinal::snprintf(fps_label, sizeof(fps_label), "##fps_cap_%u", viewport_id);
             ImGui::SetNextItemWidth(fps_w);
             if (ImGui::Combo(fps_label, &idx, names, IM_ARRAYSIZE(names))) {
                 *fps_limit_inout = vals[idx];
@@ -1075,8 +1073,8 @@ public:
         // Vulkan), so every panel debounces + commits its own resize
         // independently. No backend-special-case here anymore.
         const ImVec2 avail = ImGui::GetContentRegionAvail();
-        const u32    desired_w = static_cast<u32>(std::max(1.0f, avail.x));
-        const u32    desired_h = static_cast<u32>(std::max(1.0f, avail.y));
+        const u32    desired_w = static_cast<u32>(cardinal::max(1.0f, avail.x));
+        const u32    desired_h = static_cast<u32>(cardinal::max(1.0f, avail.y));
         auto& panel = vp_panels_[viewport_id];
         if (swapchain_ != nullptr) {
             const u32 cur_w = swapchain_->viewport_width(viewport_id);
@@ -1179,10 +1177,10 @@ public:
                     ndc(a0.x, a0.y, ax, ay);
                     ndc(cur.x, cur.y, bx, by);
                     vp_pick_.marquee          = true;
-                    vp_pick_.marquee_min_x    = std::min(ax, bx);
-                    vp_pick_.marquee_max_x    = std::max(ax, bx);
-                    vp_pick_.marquee_min_y    = std::min(ay, by);
-                    vp_pick_.marquee_max_y    = std::max(ay, by);
+                    vp_pick_.marquee_min_x    = cardinal::min(ax, bx);
+                    vp_pick_.marquee_max_x    = cardinal::max(ax, bx);
+                    vp_pick_.marquee_min_y    = cardinal::min(ay, by);
+                    vp_pick_.marquee_max_y    = cardinal::max(ay, by);
                     vp_pick_.marquee_additive = ctrl_or_shift;
                     marquee_dragging_         = false;
                 }
@@ -1235,7 +1233,7 @@ public:
         // The grid sits on the y plane of the camera's current chunk
         // (so it visibly tracks the camera's vertical level).
         const f32 cs       = world_overlay_.chunk_size;
-        const i32 r        = std::max<i32>(2, world_overlay_.render_distance_xz + 2);
+        const i32 r        = cardinal::max<i32>(2, world_overlay_.render_distance_xz + 2);
         const i32 cx       = world_overlay_.camera_chunk_x;
         const i32 cy       = world_overlay_.camera_chunk_y;
         const i32 cz       = world_overlay_.camera_chunk_z;
@@ -1339,8 +1337,8 @@ public:
                 ndc_x, ndc_y, gizmo_view_, gizmo_proj_);
             cardinal::scene::Vec3 hit{};
             if (cardinal::scene::ray_plane_y_intersect(ray, grid_y, &hit)) {
-                const i32 hcx = static_cast<i32>(std::floor(hit.x / cs));
-                const i32 hcz = static_cast<i32>(std::floor(hit.z / cs));
+                const i32 hcx = static_cast<i32>(cardinal::floor(hit.x / cs));
+                const i32 hcz = static_cast<i32>(cardinal::floor(hit.z / cs));
                 // Outline the hovered chunk.
                 const f32 ax = static_cast<f32>(hcx)     * cs;
                 const f32 az = static_cast<f32>(hcz)     * cs;
@@ -1366,7 +1364,7 @@ public:
 
                     // Coordinate badge near the cursor — "(cx, cy, cz)".
                     char lbl[64];
-                    std::snprintf(lbl, sizeof(lbl), "(%d, %d, %d)",
+                    cardinal::snprintf(lbl, sizeof(lbl), "(%d, %d, %d)",
                                   hcx, cy, hcz);
                     const ImVec2 ts = ImGui::CalcTextSize(lbl);
                     const ImVec2 tp{ mp.x + 14.0f, mp.y + 14.0f };
@@ -1422,7 +1420,7 @@ public:
         // Pick a world-space axis length that yields ~80 pixels at the
         // current depth. perspective: pixels = world * (avail.y / w).
         const float target_pixels = 80.0f;
-        const float world_len = std::max(0.001f,
+        const float world_len = cardinal::max(0.001f,
                                          target_pixels * origin_w / avail.y);
 
         const cardinal::scene::Vec3 ax_world[3] = {
@@ -1447,13 +1445,13 @@ public:
             const float len2 = ax_ * ax_ + ay_ * ay_;
             if (len2 < 1e-6f) {
                 const float dx_ = p.x - a.x, dy_ = p.y - a.y;
-                return std::sqrt(dx_ * dx_ + dy_ * dy_);
+                return cardinal::sqrt(dx_ * dx_ + dy_ * dy_);
             }
             float t = (pax * ax_ + pay * ay_) / len2;
-            t = std::clamp(t, 0.0f, 1.0f);
+            t = cardinal::clamp(t, 0.0f, 1.0f);
             const float qx = a.x + t * ax_, qy = a.y + t * ay_;
             const float dx_ = p.x - qx, dy_ = p.y - qy;
-            return std::sqrt(dx_ * dx_ + dy_ * dy_);
+            return cardinal::sqrt(dx_ * dx_ + dy_ * dy_);
         };
 
         // Determine hover axis (only meaningful while the panel is hovered
@@ -1483,7 +1481,7 @@ public:
         // axis. Result: pure axis dragging that is invariant to camera
         // angle, distance, and the entity's own movement during the drag.
         auto closest_t_on_axis_from_mouse = [&](ImVec2 mouse_local_to_image)
-            -> std::pair<bool, float>
+            -> cardinal::pair<bool, float>
         {
             const float ndc_x =        (mouse_local_to_image.x / avail.x) * 2.0f - 1.0f;
             const float ndc_y = 1.0f - (mouse_local_to_image.y / avail.y) * 2.0f;
@@ -1492,7 +1490,7 @@ public:
             const cardinal::scene::Vec4 fclip{ ndc_x, ndc_y, 1.0f, 1.0f };
             const cardinal::scene::Vec4 nw_  = inv_vp * nclip;
             const cardinal::scene::Vec4 fw_  = inv_vp * fclip;
-            if (std::fabs(nw_.w) < 1e-6f || std::fabs(fw_.w) < 1e-6f)
+            if (cardinal::fabs(nw_.w) < 1e-6f || cardinal::fabs(fw_.w) < 1e-6f)
                 return { false, 0.0f };
             const cardinal::scene::Vec3 r_origin{ nw_.x/nw_.w, nw_.y/nw_.w, nw_.z/nw_.w };
             const cardinal::scene::Vec3 r_far   { fw_.x/fw_.w, fw_.y/fw_.w, fw_.z/fw_.w };
@@ -1513,7 +1511,7 @@ public:
             const float dd = cardinal::scene::dot(da, diff);
             const float ee = cardinal::scene::dot(r_dir, diff);
             const float denom = aa * cc - bb * bb;
-            if (std::fabs(denom) < 1e-6f) return { false, 0.0f };  // parallel
+            if (cardinal::fabs(denom) < 1e-6f) return { false, 0.0f };  // parallel
             const float t_axis = (bb * ee - cc * dd) / denom;
             return { true, t_axis };
         };
@@ -1553,8 +1551,8 @@ public:
                     // Reject NaN / inf — should not happen with the new
                     // closest-point math, but defend against degenerate
                     // camera setups (entity behind camera, etc).
-                    if (std::isfinite(new_pos.x) && std::isfinite(new_pos.y)
-                        && std::isfinite(new_pos.z))
+                    if (cardinal::isfinite(new_pos.x) && cardinal::isfinite(new_pos.y)
+                        && cardinal::isfinite(new_pos.z))
                     {
                         gizmo_drag_.delta = {
                             new_pos.x - gizmo_target_.x,
@@ -1601,7 +1599,7 @@ public:
             // Arrowhead — small triangle perpendicular to the line.
             const ImVec2 d{ ax_pix[i].x - origin_pix.x,
                             ax_pix[i].y - origin_pix.y };
-            const float  ln = std::sqrt(d.x * d.x + d.y * d.y);
+            const float  ln = cardinal::sqrt(d.x * d.x + d.y * d.y);
             if (ln > 1e-3f) {
                 const ImVec2 dn{ d.x / ln, d.y / ln };
                 const ImVec2 pn{ -dn.y, dn.x };
@@ -1654,7 +1652,7 @@ public:
         const cardinal::scene::Vec4 fc{ nx, ny, 1.0f, 1.0f };
         const cardinal::scene::Vec4 nw = inv_vp * nc;
         const cardinal::scene::Vec4 fw = inv_vp * fc;
-        if (std::fabs(nw.w) < 1e-6f || std::fabs(fw.w) < 1e-6f) return false;
+        if (cardinal::fabs(nw.w) < 1e-6f || cardinal::fabs(fw.w) < 1e-6f) return false;
         ro = { nw.x/nw.w, nw.y/nw.w, nw.z/nw.w };
         const cardinal::scene::Vec3 fp{ fw.x/fw.w, fw.y/fw.w, fw.z/fw.w };
         rd = cardinal::scene::normalize(
@@ -1667,10 +1665,10 @@ public:
                            const cardinal::scene::Vec3& n,
                            cardinal::scene::Vec3& hit) {
         const float dn = cardinal::scene::dot(rd, n);
-        if (std::fabs(dn) < 1e-6f) return false;
+        if (cardinal::fabs(dn) < 1e-6f) return false;
         const cardinal::scene::Vec3 w{ p0.x-ro.x, p0.y-ro.y, p0.z-ro.z };
         const float t = cardinal::scene::dot(w, n) / dn;
-        if (!std::isfinite(t)) return false;
+        if (!cardinal::isfinite(t)) return false;
         hit = { ro.x+rd.x*t, ro.y+rd.y*t, ro.z+rd.z*t };
         return true;
     }
@@ -1681,7 +1679,7 @@ public:
     }
     float snapf_(float v, float step) const {
         if (!gizmo_snap_on_ || step <= 0.0f) return v;
-        return std::round(v / step) * step;
+        return cardinal::round(v / step) * step;
     }
 
     // ----- Translate: 3 plane handles (YZ/XZ/XY) + screen-space square --
@@ -1696,7 +1694,7 @@ public:
         { const cardinal::scene::Vec4 c = vp * cardinal::scene::Vec4{
               gizmo_target_.x, gizmo_target_.y, gizmo_target_.z, 1.0f };
           ow = c.w; }
-        const float wlen = std::max(0.001f, 80.0f * ow / av.y);
+        const float wlen = cardinal::max(0.001f, 80.0f * ow / av.y);
         const float quad = wlen * 0.32f;     // plane patch half-size
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1746,7 +1744,7 @@ public:
         const float sq = 9.0f;
         const bool over_screen =
             hov && gizmo_handle_active_ < 0 && gizmo_axis_active_ < 0 &&
-            std::fabs(mp.x - o_pix.x) < sq && std::fabs(mp.y - o_pix.y) < sq;
+            cardinal::fabs(mp.x - o_pix.x) < sq && cardinal::fabs(mp.y - o_pix.y) < sq;
         if (over_screen && hover_h < 0) hover_h = 6;
 
         auto plane_normal = [&](int h) -> cardinal::scene::Vec3 {
@@ -1788,8 +1786,8 @@ public:
                             gizmo_drag_origin_world_.x + (hit.x - gizmo_drag_plane_hit0_.x),
                             gizmo_drag_origin_world_.y + (hit.y - gizmo_drag_plane_hit0_.y),
                             gizmo_drag_origin_world_.z + (hit.z - gizmo_drag_plane_hit0_.z) };
-                        if (std::isfinite(np.x) && std::isfinite(np.y) &&
-                            std::isfinite(np.z)) {
+                        if (cardinal::isfinite(np.x) && cardinal::isfinite(np.y) &&
+                            cardinal::isfinite(np.z)) {
                             np.x = snapf_(np.x, gizmo_snap_step_);
                             np.y = snapf_(np.y, gizmo_snap_step_);
                             np.z = snapf_(np.z, gizmo_snap_step_);
@@ -1835,7 +1833,7 @@ public:
         { const cardinal::scene::Vec4 c = vp * cardinal::scene::Vec4{
               gizmo_target_.x, gizmo_target_.y, gizmo_target_.z, 1.0f };
           ow = c.w; }
-        const float radius = std::max(0.001f, 92.0f * ow / av.y);
+        const float radius = cardinal::max(0.001f, 92.0f * ow / av.y);
 
         struct Rg { cardinal::scene::Vec3 n, u, v; ImU32 col; };
         const Rg rings[3] = {
@@ -1851,8 +1849,8 @@ public:
             for (int s = 0; s < SEG; ++s) {
                 const float th =
                     static_cast<float>(s) / static_cast<float>(SEG) * 6.2831853f;
-                const float cu = std::cos(th) * radius;
-                const float cv = std::sin(th) * radius;
+                const float cu = cardinal::cos(th) * radius;
+                const float cv = cardinal::sin(th) * radius;
                 const cardinal::scene::Vec3 wp{
                     gizmo_target_.x + rings[a].u.x*cu + rings[a].v.x*cv,
                     gizmo_target_.y + rings[a].u.y*cu + rings[a].v.y*cv,
@@ -1870,9 +1868,9 @@ public:
             const float ex = b.x-a.x, ey = b.y-a.y;
             const float l2 = ex*ex + ey*ey;
             float t = (l2 < 1e-6f) ? 0.0f
-                : std::clamp(((p.x-a.x)*ex + (p.y-a.y)*ey) / l2, 0.0f, 1.0f);
+                : cardinal::clamp(((p.x-a.x)*ex + (p.y-a.y)*ey) / l2, 0.0f, 1.0f);
             const float qx = a.x+t*ex, qy = a.y+t*ey;
-            return std::sqrt((p.x-qx)*(p.x-qx) + (p.y-qy)*(p.y-qy));
+            return cardinal::sqrt((p.x-qx)*(p.x-qx) + (p.y-qy)*(p.y-qy));
         };
         int hover_a = -1;
         if (hov && gizmo_handle_active_ < 0) {
@@ -1893,7 +1891,7 @@ public:
                 return false;
             const cardinal::scene::Vec3 w{ hit.x-gizmo_target_.x,
                 hit.y-gizmo_target_.y, hit.z-gizmo_target_.z };
-            ang = std::atan2(cardinal::scene::dot(w, rings[a].v),
+            ang = cardinal::atan2(cardinal::scene::dot(w, rings[a].v),
                              cardinal::scene::dot(w, rings[a].u));
             return true;
         };
@@ -1917,15 +1915,15 @@ public:
                 float a1;
                 if (angle_on(gizmo_handle_active_, a1)) {
                     float d = a1 - gizmo_drag_angle0_;
-                    d = std::atan2(std::sin(d), std::cos(d));   // shortest
+                    d = cardinal::atan2(cardinal::sin(d), cardinal::cos(d));   // shortest
                     if (gizmo_snap_on_ && gizmo_snap_step_ > 0.0f) {
                         const float st = gizmo_snap_step_ *
                                          0.01745329252f;        // deg→rad
-                        d = std::round(d / st) * st;
+                        d = cardinal::round(d / st) * st;
                     }
                     const cardinal::scene::Vec3& ax =
                         rings[gizmo_handle_active_].n;
-                    const float hs = std::sin(d*0.5f), hc = std::cos(d*0.5f);
+                    const float hs = cardinal::sin(d*0.5f), hc = cardinal::cos(d*0.5f);
                     // world-axis incremental rotation ⊗ origin orientation
                     const cardinal::core::Quat qa{
                         ax.x*hs, ax.y*hs, ax.z*hs, hc };
@@ -1933,8 +1931,8 @@ public:
                         cardinal::core::quat_from_euler_xyz(gizmo_drag_origin_rot_);
                     const cardinal::scene::Vec3 e =
                         cardinal::core::quat_to_euler_xyz(qa * oq);
-                    if (std::isfinite(e.x) && std::isfinite(e.y) &&
-                        std::isfinite(e.z)) {
+                    if (cardinal::isfinite(e.x) && cardinal::isfinite(e.y) &&
+                        cardinal::isfinite(e.z)) {
                         gizmo_target_rot_ = e;
                         gizmo_drag_.active = true;
                         gizmo_drag_.mode = GizmoMode::Rotate;
@@ -1966,7 +1964,7 @@ public:
         { const cardinal::scene::Vec4 c = vp * cardinal::scene::Vec4{
               gizmo_target_.x, gizmo_target_.y, gizmo_target_.z, 1.0f };
           ow = c.w; }
-        const float wlen = std::max(0.001f, 78.0f * ow / av.y);
+        const float wlen = cardinal::max(0.001f, 78.0f * ow / av.y);
         const cardinal::scene::Vec3 axd[3] = {
             {1,0,0},{0,1,0},{0,0,1} };
         const ImU32 axc[3] = { IM_COL32(220,70,70,255),
@@ -1988,10 +1986,10 @@ public:
         int hover_h = -1;
         if (hov && gizmo_handle_active_ < 0) {
             for (int a = 0; a < 3; ++a)
-                if (tok[a] && std::fabs(mp.x-tip[a].x) < 8.0f &&
-                    std::fabs(mp.y-tip[a].y) < 8.0f) hover_h = a;
-            if (hover_h < 0 && std::fabs(mp.x-o_pix.x) < 9.0f &&
-                std::fabs(mp.y-o_pix.y) < 9.0f) hover_h = 6;   // uniform
+                if (tok[a] && cardinal::fabs(mp.x-tip[a].x) < 8.0f &&
+                    cardinal::fabs(mp.y-tip[a].y) < 8.0f) hover_h = a;
+            if (hover_h < 0 && cardinal::fabs(mp.x-o_pix.x) < 9.0f &&
+                cardinal::fabs(mp.y-o_pix.y) < 9.0f) hover_h = 6;   // uniform
         }
         auto axis_t = [&](int a, float& t) -> bool {
             cardinal::scene::Vec3 ro, rd;
@@ -2003,9 +2001,9 @@ public:
             const float dd = cardinal::scene::dot(da, df);
             const float ee = cardinal::scene::dot(rd, df);
             const float den = 1.0f - bb*bb;
-            if (std::fabs(den) < 1e-6f) return false;
+            if (cardinal::fabs(den) < 1e-6f) return false;
             t = (bb*ee - dd) / den;
-            return std::isfinite(t);
+            return cardinal::isfinite(t);
         };
 
         if (gizmo_handle_active_ < 0) {
@@ -2029,34 +2027,34 @@ public:
                 cardinal::scene::Vec3 ns = gizmo_drag_origin_scl_;
                 bool ok = false;
                 if (gizmo_handle_active_ == 6) {
-                    const float f = std::pow(2.0f,
+                    const float f = cardinal::pow(2.0f,
                         (gizmo_drag_uniform0_ - mp.y) / 120.0f);
                     ns = { gizmo_drag_origin_scl_.x*f,
                            gizmo_drag_origin_scl_.y*f,
                            gizmo_drag_origin_scl_.z*f };
-                    ok = std::isfinite(f);
+                    ok = cardinal::isfinite(f);
                 } else {
                     float t1 = 0.0f;
                     if (axis_t(gizmo_handle_active_, t1)) {
-                        const float f = std::clamp(
+                        const float f = cardinal::clamp(
                             1.0f + (t1 - gizmo_drag_t_origin_) /
-                                   std::max(0.001f, wlen),
+                                   cardinal::max(0.001f, wlen),
                             0.01f, 100.0f);
                         if (gizmo_handle_active_ == 0) ns.x = gizmo_drag_origin_scl_.x*f;
                         if (gizmo_handle_active_ == 1) ns.y = gizmo_drag_origin_scl_.y*f;
                         if (gizmo_handle_active_ == 2) ns.z = gizmo_drag_origin_scl_.z*f;
-                        ok = std::isfinite(f);
+                        ok = cardinal::isfinite(f);
                     }
                 }
                 if (ok) {
                     if (gizmo_snap_on_ && gizmo_snap_step_ > 0.0f) {
                         auto sn = [&](float v){
-                            return std::max(0.01f,
-                                std::round(v/gizmo_snap_step_)*gizmo_snap_step_); };
+                            return cardinal::max(0.01f,
+                                cardinal::round(v/gizmo_snap_step_)*gizmo_snap_step_); };
                         ns = { sn(ns.x), sn(ns.y), sn(ns.z) };
                     }
-                    if (std::isfinite(ns.x) && std::isfinite(ns.y) &&
-                        std::isfinite(ns.z)) {
+                    if (cardinal::isfinite(ns.x) && cardinal::isfinite(ns.y) &&
+                        cardinal::isfinite(ns.z)) {
                         gizmo_target_scl_ = ns;
                         gizmo_drag_.active = true;
                         gizmo_drag_.mode = GizmoMode::Scale;
@@ -2147,9 +2145,9 @@ public:
     // own vector (or nullptr to drive Studio's shared set) and reads it
     // back after end_frame; the gizmo pivot/fan-out stay host-side.
     void draw_scene_hierarchy(scene::Scene& scene,
-                              std::vector<u32>* selection_inout,
+                              cardinal::vector<u32>* selection_inout,
                               const char* title, bool* p_open) override {
-        std::vector<u32>& sel =
+        cardinal::vector<u32>& sel =
             (selection_inout != nullptr) ? *selection_inout : selection_;
         if (!ImGui::Begin(title ? title : "Hierarchy", p_open)) {
             ImGui::End();
@@ -2168,12 +2166,12 @@ public:
         ImGui::Separator();
         for (auto& e : ents) {
             char label[176];
-            std::snprintf(label, sizeof(label), "%s##he_%u",
+            cardinal::snprintf(label, sizeof(label), "%s##he_%u",
                           e.name.empty() ? "(entity)" : e.name.c_str(),
                           e.id);
             if (ImGui::Selectable(label, in_sel(e.id))) {
                 if (io.KeyCtrl) {
-                    std::vector<u32> next;
+                    cardinal::vector<u32> next;
                     next.reserve(sel.size() + 1);
                     bool found = false;
                     for (u32 s : sel) {
@@ -2224,7 +2222,7 @@ public:
 
     // -------------------------------------------------------------------
     // Asset browser — directory tree on the left, file grid on the right.
-    // Uses std::filesystem; recognises common extensions for icon labels.
+    // Uses cardinal::fs; recognises common extensions for icon labels.
     // -------------------------------------------------------------------
     void draw_asset_browser(const char* root_path, const char* title, bool* p_open) override {
         if (!ImGui::Begin(title ? title : "Assets", p_open)) { ImGui::End(); return; }
@@ -2320,15 +2318,15 @@ public:
                                  palette_filter_, sizeof(palette_filter_));
         ImGui::Separator();
 
-        const std::string filter = palette_filter_;
+        const cardinal::string filter = palette_filter_;
         for (const auto& cat_name : cat.categories()) {
             // Count visible entries in this category given the filter.
             int visible = 0;
             for (const auto& a : cat.all()) {
                 if (a.category != cat_name) continue;
                 if (!filter.empty() &&
-                    a.label.find(filter)   == std::string::npos &&
-                    a.id.find   (filter)   == std::string::npos) continue;
+                    a.label.find(filter)   == cardinal::string::npos &&
+                    a.id.find   (filter)   == cardinal::string::npos) continue;
                 ++visible;
             }
             if (visible == 0) continue;
@@ -2341,8 +2339,8 @@ public:
             for (const auto& a : cat.all()) {
                 if (a.category != cat_name) continue;
                 if (!filter.empty() &&
-                    a.label.find(filter) == std::string::npos &&
-                    a.id.find   (filter) == std::string::npos) continue;
+                    a.label.find(filter) == cardinal::string::npos &&
+                    a.id.find   (filter) == cardinal::string::npos) continue;
 
                 const bool active = (current_asset_id != nullptr &&
                                      a.id == current_asset_id);
@@ -2754,10 +2752,10 @@ public:
             // Name + description live in input fields. Renaming a profile
             // re-keys it in the library (we save under the new name and
             // remove the old).
-            char name_buf[96]; std::strncpy(name_buf, edited.name.c_str(), sizeof(name_buf) - 1);
+            char name_buf[96]; cardinal::strncpy(name_buf, edited.name.c_str(), sizeof(name_buf) - 1);
             name_buf[sizeof(name_buf) - 1] = '\0';
             if (ImGui::InputText("Name", name_buf, sizeof(name_buf))) {
-                std::string old_name = edited.name;
+                cardinal::string old_name = edited.name;
                 edited.name = name_buf;
                 if (!edited.name.empty() && edited.name != old_name) {
                     lib.remove(old_name.c_str());
@@ -2766,7 +2764,7 @@ public:
                     dirty = false;          // already committed
                 }
             }
-            char desc_buf[256]; std::strncpy(desc_buf, edited.description.c_str(), sizeof(desc_buf) - 1);
+            char desc_buf[256]; cardinal::strncpy(desc_buf, edited.description.c_str(), sizeof(desc_buf) - 1);
             desc_buf[sizeof(desc_buf) - 1] = '\0';
             if (ImGui::InputText("Description", desc_buf, sizeof(desc_buf))) {
                 edited.description = desc_buf;
@@ -2793,7 +2791,7 @@ public:
             ImGui::SameLine();
             if (ImGui::Button("+ Add layer")) {
                 cardinal::scene::NoiseLayer L{};
-                L.id = "layer_" + std::to_string(edited.layers.size() + 1);
+                L.id = "layer_" + cardinal::to_string(edited.layers.size() + 1);
                 edited.layers.push_back(L);
                 dirty = true;
             }
@@ -2805,7 +2803,7 @@ public:
                 cardinal::scene::NoiseLayer& L = edited.layers[i];
                 ImGui::PushID(static_cast<int>(i));
                 char header[96];
-                std::snprintf(header, sizeof(header), "[%zu] %s — %s · %s · w=%.2f",
+                cardinal::snprintf(header, sizeof(header), "[%zu] %s — %s · %s · w=%.2f",
                               i, L.id.c_str(),
                               op_names[static_cast<int>(L.op) & 3],
                               shape_names[static_cast<int>(L.shape) % 3],
@@ -2814,11 +2812,11 @@ public:
                     if (ImGui::Checkbox("Enabled", &L.enabled)) dirty = true;
                     ImGui::SameLine();
                     if (ImGui::Button("Up") && i > 0) {
-                        std::swap(edited.layers[i], edited.layers[i - 1]); dirty = true;
+                        cardinal::swap(edited.layers[i], edited.layers[i - 1]); dirty = true;
                     }
                     ImGui::SameLine();
                     if (ImGui::Button("Down") && i + 1 < edited.layers.size()) {
-                        std::swap(edited.layers[i], edited.layers[i + 1]); dirty = true;
+                        cardinal::swap(edited.layers[i], edited.layers[i + 1]); dirty = true;
                     }
                     ImGui::SameLine();
                     if (ImGui::Button("Remove")) {
@@ -2829,7 +2827,7 @@ public:
                     }
 
                     char id_buf[96];
-                    std::strncpy(id_buf, L.id.c_str(), sizeof(id_buf) - 1);
+                    cardinal::strncpy(id_buf, L.id.c_str(), sizeof(id_buf) - 1);
                     id_buf[sizeof(id_buf) - 1] = '\0';
                     if (ImGui::InputText("Id", id_buf, sizeof(id_buf))) {
                         L.id = id_buf; dirty = true;
@@ -2897,9 +2895,9 @@ public:
     // -------------------------------------------------------------------
     void register_tool_window(ToolWindow tw) override {
         for (auto& w : tool_windows_) {
-            if (w.title == tw.title) { w = std::move(tw); return; }
+            if (w.title == tw.title) { w = cardinal::move(tw); return; }
         }
-        tool_windows_.push_back(std::move(tw));
+        tool_windows_.push_back(cardinal::move(tw));
     }
     void unregister_tool_window(const char* title) override {
         if (title == nullptr) return;
@@ -2919,7 +2917,7 @@ public:
             else                   ImGui::TextDisabled("%s", w.title.c_str());
         }
     }
-    std::vector<ToolWindow> registered_tool_windows() const override {
+    cardinal::vector<ToolWindow> registered_tool_windows() const override {
         return tool_windows_;
     }
 
@@ -3005,10 +3003,10 @@ public:
         // Pair CALL with matching RET to compute durations. Build a list of
         // {start_ns, end_ns, name, depth, thread, category}.
         struct Span { u64 t0, t1; u32 depth, tid; const char* name; const char* cat; };
-        std::vector<Span> spans;
+        cardinal::vector<Span> spans;
         spans.reserve(trace_view_.size() / 2);
 
-        std::vector<size_t> call_stack;
+        cardinal::vector<size_t> call_stack;
         for (size_t i = 0; i < trace_view_.size(); ++i) {
             const auto& e = trace_view_[i];
             if (e.kind == cardinal::trace::EventKind::Call) {
@@ -3047,7 +3045,7 @@ public:
             const float x1 = origin.x + (s.t1 - t_min) * scale;
             const float y0 = origin.y + s.depth * row_h;
             const float y1 = y0 + row_h - 2.0f;
-            ImU32 col = (std::strcmp(s.cat, "lua") == 0)
+            ImU32 col = (cardinal::strcmp(s.cat, "lua") == 0)
                 ? IM_COL32(110, 180, 230, 200)
                 : IM_COL32(170, 220, 130, 200);
             dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), col, 2.0f);
@@ -3190,7 +3188,7 @@ public:
         // Knobs grouped by Knob::group.
         if (auto* p = reg.active()) {
             auto& knobs = p->knobs();
-            std::string current_group;
+            cardinal::string current_group;
             for (auto& k : knobs) {
                 if (k.group != current_group) {
                     ImGui::SeparatorText(k.group.c_str());
@@ -3205,7 +3203,7 @@ public:
         ImGui::TextDisabled("Knobs above are auto-greyed when their feature isn't supported.");
         if (device_) {
             render::FeatureGate gate(device_->capabilities());
-            std::string cur_group;
+            cardinal::string cur_group;
             for (u32 i = 0; i < static_cast<u32>(render::Feature::Count_); ++i) {
                 const auto f   = static_cast<render::Feature>(i);
                 const auto st  = gate.query(f);
@@ -3272,10 +3270,10 @@ public:
     }
 
     // Used by the Stack Tracer's "captured at" line.
-    static std::string current_timestamp() {
-        const auto t = std::time(nullptr);
+    static cardinal::string current_timestamp() {
+        const auto t = cardinal::time(nullptr);
         char buf[32];
-        std::strftime(buf, sizeof(buf), "%H:%M:%S", std::localtime(&t));
+        cardinal::strftime(buf, sizeof(buf), "%H:%M:%S", cardinal::localtime(&t));
         return buf;
     }
 
@@ -3283,12 +3281,12 @@ private:
     // ---- Asset browser helpers --------------------------------------
     enum class AssetKind { Folder, Mesh, Texture, Shader, Script, Audio, Other };
 
-    struct AssetFile { std::string name; std::string path; AssetKind kind; };
+    struct AssetFile { cardinal::string name; cardinal::string path; AssetKind kind; };
 
-    static AssetKind classify(const std::filesystem::path& p) {
-        if (std::filesystem::is_directory(p)) return AssetKind::Folder;
+    static AssetKind classify(const cardinal::fs::path& p) {
+        if (cardinal::fs::is_directory(p)) return AssetKind::Folder;
         const auto e = p.extension().string();
-        std::string ext; ext.reserve(e.size());
+        cardinal::string ext; ext.reserve(e.size());
         for (char c : e) ext.push_back(static_cast<char>(::tolower(c)));
         if (ext == ".gltf" || ext == ".glb" || ext == ".obj" || ext == ".fbx") return AssetKind::Mesh;
         if (ext == ".png"  || ext == ".jpg" || ext == ".jpeg"|| ext == ".tga" ||
@@ -3324,28 +3322,28 @@ private:
     }
     void scan_asset_dir() {
         asset_files_.clear();
-        std::error_code ec;
-        if (!std::filesystem::exists(asset_cwd_, ec)) return;
-        for (auto& entry : std::filesystem::directory_iterator(asset_cwd_, ec)) {
+        cardinal::error_code ec;
+        if (!cardinal::fs::exists(asset_cwd_, ec)) return;
+        for (auto& entry : cardinal::fs::directory_iterator(asset_cwd_, ec)) {
             AssetFile f;
             f.path = entry.path().string();
             f.name = entry.path().filename().string();
             f.kind = classify(entry.path());
-            asset_files_.push_back(std::move(f));
+            asset_files_.push_back(cardinal::move(f));
         }
-        std::sort(asset_files_.begin(), asset_files_.end(),
+        cardinal::sort(asset_files_.begin(), asset_files_.end(),
                   [](const AssetFile& a, const AssetFile& b){
                       if (a.kind != b.kind) return a.kind < b.kind;
                       return a.name < b.name;
                   });
     }
-    void draw_asset_tree(const std::string& dir) {
-        std::error_code ec;
-        if (!std::filesystem::exists(dir, ec) || !std::filesystem::is_directory(dir, ec)) return;
-        for (auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+    void draw_asset_tree(const cardinal::string& dir) {
+        cardinal::error_code ec;
+        if (!cardinal::fs::exists(dir, ec) || !cardinal::fs::is_directory(dir, ec)) return;
+        for (auto& entry : cardinal::fs::directory_iterator(dir, ec)) {
             if (!entry.is_directory(ec)) continue;
-            const std::string p = entry.path().string();
-            const std::string n = entry.path().filename().string();
+            const cardinal::string p = entry.path().string();
+            const cardinal::string n = entry.path().filename().string();
             ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
             if (asset_cwd_ == p) flags |= ImGuiTreeNodeFlags_Selected;
             const bool open = ImGui::TreeNodeEx(p.c_str(), flags, "[D] %s", n.c_str());
@@ -3361,7 +3359,7 @@ private:
     bool create_descriptor_pool(VkDevice device) {
         // ImGui's font + each AddTexture() call wants COMBINED_IMAGE_SAMPLER.
         // Generous pool covers ImGui + headroom for app textures.
-        const std::array<VkDescriptorPoolSize, 1> pool_sizes = {{
+        const cardinal::array<VkDescriptorPoolSize, 1> pool_sizes = {{
             { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024 },
         }};
         VkDescriptorPoolCreateInfo pci{};
@@ -3811,7 +3809,7 @@ private:
         for (DWORD i = n; i > 0; --i) {
             if (exe_path[i - 1] == '\\' || exe_path[i - 1] == '/') {
                 exe_path[i] = '\0';
-                int written = std::snprintf(out_buf, cap, "%scardinal_studio.ini", exe_path);
+                int written = cardinal::snprintf(out_buf, cap, "%scardinal_studio.ini", exe_path);
                 return written > 0 && static_cast<size_t>(written) < cap;
             }
         }
@@ -3846,7 +3844,7 @@ private:
     // sample count, attachment count) so ImGui's single set of pipelines
     // works against both passes.
     VkRenderPass            render_pass_secondary_{VK_NULL_HANDLE};
-    std::vector<VkFramebuffer> framebuffers_;
+    cardinal::vector<VkFramebuffer> framebuffers_;
     VkExtent2D              framebuffer_extent_{0, 0};
     VkFormat                color_format_{VK_FORMAT_UNDEFINED};
     u32                     image_count_{0};
@@ -3854,7 +3852,7 @@ private:
     VkSampler               viewport_sampler_{VK_NULL_HANDLE};
     // (Per-viewport descriptor sets live in vp_panels_[id].vk_descriptor.)
 
-    std::chrono::steady_clock::time_point last_sample_{std::chrono::steady_clock::now()};
+    cardinal::chrono::steady_clock::time_point last_sample_{cardinal::chrono::steady_clock::now()};
     u64                                   last_sample_frame_{0};
     u64                                   frame_count_{0};
     float                                 ema_fps_{0.0f};
@@ -3899,7 +3897,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dx12_srv_heap_;
     UINT                                         dx12_srv_stride_{0};
     UINT                                         dx12_srv_capacity_{1024};
-    std::vector<UINT>                            dx12_srv_free_;
+    cardinal::vector<UINT>                            dx12_srv_free_;
 
     // (Per-viewport SRV bindings live in vp_panels_[id].dx12_srv_slot /
     // .dx12_imtex now — moved out of single-viewport scalars so each
@@ -3934,9 +3932,9 @@ private:
 #endif
 
     // Asset browser state.
-    std::string                    asset_root_;
-    std::string                    asset_cwd_;
-    std::vector<AssetFile>         asset_files_;
+    cardinal::string                    asset_root_;
+    cardinal::string                    asset_cwd_;
+    cardinal::vector<AssetFile>         asset_files_;
     ImGuiTextFilter                asset_filter_;
 
     // Console / REPL state — actual panel rendering lives in
@@ -3945,11 +3943,11 @@ private:
     panels::ConsolePanelState      console_state_{};
 
     // Stack Tracer panel state.
-    std::vector<cardinal::trace::StackFrame> captured_stack_;
-    std::string                              captured_stack_label_;
+    cardinal::vector<cardinal::trace::StackFrame> captured_stack_;
+    cardinal::string                              captured_stack_label_;
 
     // Function Tracer panel state.
-    std::vector<cardinal::trace::Event>      trace_view_;
+    cardinal::vector<cardinal::trace::Event>      trace_view_;
 
     // Script Debugger panel state.
     char                                     dbg_bp_source_[256]{};
@@ -3985,7 +3983,7 @@ private:
 #endif
         VkDescriptorSet vk_descriptor{VK_NULL_HANDLE};
     };
-    std::vector<ViewportPanelState>          vp_panels_{};
+    cardinal::vector<ViewportPanelState>          vp_panels_{};
 
     // Track which viewport id was hovered last so the legacy single-pick
     // ViewportPick still makes sense in a multi-viewport world. The host
@@ -4039,7 +4037,7 @@ private:
     float                                    gizmo_drag_uniform0_{0.0f};
 
     // ----- Multi-selection set (Studio-owned; host reads back) ----------
-    std::vector<u32>                         selection_{};
+    cardinal::vector<u32>                         selection_{};
     bool                                     marquee_dragging_{false};
 
     // Asset-palette UI state — preserves filter text + collapsed groups
@@ -4072,15 +4070,15 @@ private:
     // registered_tool_windows() exposes the list to the host's dockspace
     // builder so it can place each tool at its dock_hint the first time
     // the layout is constructed.
-    std::vector<ToolWindow>                  tool_windows_{};
+    cardinal::vector<ToolWindow>                  tool_windows_{};
 };
 
 }  // namespace
 
-std::unique_ptr<Studio> Studio::create(
+cardinal::unique_ptr<Studio> Studio::create(
     rhi::Device& device, rhi::Swapchain& swapchain, window::Window& window)
 {
-    auto s = std::make_unique<StudioImpl>();
+    auto s = cardinal::make_unique<StudioImpl>();
     if (!s->initialize(device, swapchain, window)) return nullptr;
     return s;
 }

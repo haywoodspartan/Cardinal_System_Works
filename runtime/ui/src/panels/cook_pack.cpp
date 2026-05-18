@@ -10,8 +10,8 @@
 
 #include <imgui.h>
 
-#include <cstdio>
-#include <fstream>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/fstream.hpp>
 
 namespace cardinal::ui::panels::cook_pack_panel {
 
@@ -38,24 +38,24 @@ const char* status_name(cardinal::cook::CookResult::Status s) {
 }
 
 bool do_pack(cardinal::project::Project& proj,
-             const std::vector<cardinal::cook::CookResult>& results,
-             std::string& out_path)
+             const cardinal::vector<cardinal::cook::CookResult>& results,
+             cardinal::string& out_path)
 {
-    const std::string pack_path = proj.dirs().pack + "/" + proj.info().default_pack_name + ".cpk";
+    const cardinal::string pack_path = proj.dirs().pack + "/" + proj.info().default_pack_name + ".cpk";
     cardinal::pack::Builder b(pack_path);
     // Walk the project's cooked tree (source-of-truth) and add each.
     for (const auto& r : results) {
         if (r.cooked_relpath.empty()) continue;
-        const std::string abs = proj.dirs().cooked + "/" + r.cooked_relpath;
-        std::ifstream f(abs, std::ios::binary);
+        const cardinal::string abs = proj.dirs().cooked + "/" + r.cooked_relpath;
+        cardinal::ifstream f(abs, cardinal::ios::binary);
         if (!f) continue;
-        f.seekg(0, std::ios::end);
+        f.seekg(0, cardinal::ios::end);
         const auto n = f.tellg();
-        f.seekg(0, std::ios::beg);
-        std::vector<cardinal::u8> bytes(static_cast<cardinal::usize>(n));
+        f.seekg(0, cardinal::ios::beg);
+        cardinal::vector<cardinal::u8> bytes(static_cast<cardinal::usize>(n));
         f.read(reinterpret_cast<char*>(bytes.data()), n);
         // Strip ".cooked" off for the logical key.
-        std::string key = r.source_relpath;
+        cardinal::string key = r.source_relpath;
         b.add(key, r.type, bytes);
     }
     // Also add any cooked files not in the results (e.g. from a previous run).
@@ -63,23 +63,23 @@ bool do_pack(cardinal::project::Project& proj,
         bool already = false;
         for (const auto& r : results) if (r.cooked_relpath == cf) { already = true; break; }
         if (already) continue;
-        const std::string abs = proj.dirs().cooked + "/" + cf;
-        std::ifstream f(abs, std::ios::binary);
+        const cardinal::string abs = proj.dirs().cooked + "/" + cf;
+        cardinal::ifstream f(abs, cardinal::ios::binary);
         if (!f) continue;
-        f.seekg(0, std::ios::end);
+        f.seekg(0, cardinal::ios::end);
         const auto n = f.tellg();
-        f.seekg(0, std::ios::beg);
-        std::vector<cardinal::u8> bytes(static_cast<cardinal::usize>(n));
+        f.seekg(0, cardinal::ios::beg);
+        cardinal::vector<cardinal::u8> bytes(static_cast<cardinal::usize>(n));
         f.read(reinterpret_cast<char*>(bytes.data()), n);
         cardinal::cook::CookedAsset cooked;
         if (!cardinal::cook::CookedAsset::deserialize(bytes, cooked)) continue;
-        std::string key = cf;
+        cardinal::string key = cf;
         if (key.size() > 7 && key.substr(key.size() - 7) == ".cooked") {
             key = key.substr(0, key.size() - 7);
         }
         b.add(key, cooked.type, bytes);
     }
-    std::string err;
+    cardinal::string err;
     if (!b.finalize(&err)) return false;
     out_path = pack_path;
     return true;
@@ -115,7 +115,7 @@ void draw(cardinal::project::Project* project,
         || !project->list_cooked_assets().empty();
     ImGui::BeginDisabled(!can_pack);
     if (ImGui::Button("Pack", ImVec2(120.0f, 0.0f))) {
-        std::string p;
+        cardinal::string p;
         if (do_pack(*project, state->last_results, p)) {
             state->last_pack_path = p;
             if (state->open_pack_after_build) {
@@ -129,7 +129,7 @@ void draw(cardinal::project::Project* project,
         ctx.shader_compiler = shader_compiler;
         cardinal::cook::cook_all(*project, *registry,
             state->last_results, state->force_cook, ctx);
-        std::string p;
+        cardinal::string p;
         if (do_pack(*project, state->last_results, p)) {
             state->last_pack_path = p;
             if (state->open_pack_after_build) {
