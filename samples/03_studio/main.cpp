@@ -189,6 +189,57 @@ CARDINAL_REGISTER_GAME_CLASS(FloaterActor, "Demo/Floater",
     PROP_FLOAT(period_s,  0.1f, 30.0f, "Period of one bob in seconds")
     PROP_BOOL (attenuate_when_paused, "Cosmetic — informational"))
 
+// PlayerActor — the controllable pawn the Play button possesses. It owns a
+// reusable cardinal::actor::PlayerControllerComponent on its host actor and
+// just forwards the editor-reflected tunables into it on begin_play. The
+// per-frame input is fed host-side (main loop) exactly like the editor
+// fly-camera — see the "Possessed player vs editor fly-cam" block below —
+// because input + the scene camera live on the host, not in the sim.
+class PlayerActor final : public cardinal::game::GameActor {
+public:
+    float move_speed       {6.0f};
+    float sprint_multiplier{2.0f};
+    float mouse_sensitivity{0.0035f};
+    float eye_height       {1.7f};
+    bool  fly_mode         {false};
+
+    cardinal::actor::PlayerControllerComponent* controller() const noexcept {
+        return owner() ? owner()->get_component<
+            cardinal::actor::PlayerControllerComponent>() : nullptr;
+    }
+
+    void begin_play() override {
+        if (owner() == nullptr) return;
+        auto* pc = owner()->get_component<
+            cardinal::actor::PlayerControllerComponent>();
+        if (pc == nullptr)
+            pc = owner()->add_component<
+                cardinal::actor::PlayerControllerComponent>();
+        pc->move_speed        = move_speed;
+        pc->sprint_multiplier = sprint_multiplier;
+        pc->look_sensitivity  = mouse_sensitivity;
+        pc->eye_height        = eye_height;
+        pc->fly_mode          = fly_mode;
+        clog::infof("game/player", "[%s] possessed (speed=%.1f, fly=%d)",
+            owner()->name().c_str(), move_speed, fly_mode ? 1 : 0);
+    }
+    void on_tick(float /*dt*/) override {
+        // Intentionally empty: the host drives controller()->tick() with
+        // real input + applies the first-person pose to scene::Camera.
+    }
+    void end_play() override {
+        clog::infof("game/player", "[%s] released",
+            owner() ? owner()->name().c_str() : "?");
+    }
+};
+
+CARDINAL_REGISTER_GAME_CLASS(PlayerActor, "Demo/Player",
+    PROP_FLOAT(move_speed,        0.5f, 50.0f, "Walk speed (units/sec)")
+    PROP_FLOAT(sprint_multiplier, 1.0f, 6.0f,  "Shift sprint multiplier")
+    PROP_FLOAT(mouse_sensitivity, 0.0005f, 0.02f, "Look radians per pixel")
+    PROP_FLOAT(eye_height,        0.1f, 3.0f,  "Camera height above feet")
+    PROP_BOOL (fly_mode,                       "Noclip: no gravity, free vertical"))
+
 // -----------------------------------------------------------------------------
 // CLI parsing (--backend=<vulkan|d3d12|auto>)
 // -----------------------------------------------------------------------------
@@ -582,6 +633,16 @@ int main(int argc, char** argv) {
     scn::FlyCamera fly_cam;
     fly_cam.sync_from(scene.camera());
     ImVec2 last_mouse_pos{0, 0};
+
+    // Play-as-player possession: when the game is Playing and a PlayerActor
+    // exists, the host drives its PlayerControllerComponent from real input
+    // and copies the first-person pose onto scene::Camera. `player_id` is
+    // assigned where the pawn is spawned (game-setup block below);
+    // `was_possessing` tracks the edge so we hand the camera off smoothly
+    // (sync the controller's look from the editor cam on Play; sync the
+    // fly-cam back from the player's eye on Stop).
+    cardinal::actor::ActorId player_id{0};
+    bool was_possessing{false};
 
     // Editor tool — what an LMB click in the viewport does.
     //   Select     : pick the entity under the cursor
@@ -1141,6 +1202,18 @@ int main(int argc, char** argv) {
         auto* m = a->add_component<cardinal::actor::MeshComponent>();
         m->asset_id = "primitives/sphere";
         m->tint = {0.55f, 0.85f, 0.95f};
+    }
+    // The pawn the Play button possesses. Visible in the Outliner before
+    // Play; the host (camera/input block) drives it while Playing.
+    if (auto* a = game.spawn_class("PlayerActor", "Player")) {
+        player_id = a->id();
+        if (auto* tr = a->get_component<cardinal::actor::TransformComponent>())
+            tr->translation = {0.0f, 0.0f, 6.0f};
+        auto* m = a->add_component<cardinal::actor::MeshComponent>();
+        m->asset_id = "primitives/box";
+        m->tint = {0.30f, 0.75f, 0.95f};
+        // Ensure the controller exists pre-Play so the inspector shows it.
+        a->add_component<cardinal::actor::PlayerControllerComponent>();
     }
 
     // ----- Sky / Time-of-Day ------------------------------------------
@@ -1785,35 +1858,77 @@ int main(int argc, char** argv) {
         // RMB serves double duty: bare RMB-drag = camera look-mode, and
         // Alt+RMB = viewport context menu (handled inside Studio).
         {
-            scn::FlyInput in{};
             const ImGuiIO& io = ImGui::GetIO();
             const ImVec2  mp  = io.MousePos;
 
-            in.accept_input = ImGui::IsAnyItemActive() ? false :
-                              (ImGui::IsMouseHoveringRect(ImVec2(0,0), io.DisplaySize, false)
-                               && !io.WantCaptureKeyboard);
-
-            // Right mouse button held = look mode.
-            in.look = io.MouseDown[1];
-            if (in.look) {
-                in.mouse_dx = mp.x - last_mouse_pos.x;
-                in.mouse_dy = mp.y - last_mouse_pos.y;
-                in.accept_input = true;   // RMB always grabs input
+            // Possessed? (Playing + pawn alive + has a controller.)
+            cardinal::actor::PlayerControllerComponent* pc = nullptr;
+            if (game.state() == cardinal::game::GameState::Playing &&
+                player_id != 0)
+            {
+                if (auto* pa = aworld.find(player_id))
+                    pc = pa->get_component<
+                        cardinal::actor::PlayerControllerComponent>();
             }
-            last_mouse_pos = mp;
+            const bool possessing = (pc != nullptr);
 
-            // WASDQE for translation. Use ImGuiKey for scancode-portable input.
-            in.forward  = ImGui::IsKeyDown(ImGuiKey_W);
-            in.backward = ImGui::IsKeyDown(ImGuiKey_S);
-            in.left     = ImGui::IsKeyDown(ImGuiKey_A);
-            in.right    = ImGui::IsKeyDown(ImGuiKey_D);
-            in.up       = ImGui::IsKeyDown(ImGuiKey_E);
-            in.down     = ImGui::IsKeyDown(ImGuiKey_Q);
-            in.sprint   = ImGui::IsKeyDown(ImGuiKey_LeftShift) ||
-                          ImGui::IsKeyDown(ImGuiKey_RightShift);
-            in.scroll   = io.MouseWheel;
+            // Smooth camera hand-off on the possession edge.
+            if (possessing && !was_possessing) {
+                pc->sync_look_from_forward(scn::normalize(
+                    scene.camera().target - scene.camera().position));
+            } else if (!possessing && was_possessing) {
+                fly_cam.sync_from(scene.camera());
+            }
+            was_possessing = possessing;
 
-            fly_cam.tick(scene.camera(), in, dt);
+            const bool ui_capture =
+                ImGui::IsAnyItemActive() || io.WantCaptureKeyboard;
+
+            if (possessing) {
+                // ---- Possessed player — first-person control --------
+                cardinal::actor::PlayerInput pin{};
+                pin.accept_input = !ui_capture;
+                pin.move_z = (ImGui::IsKeyDown(ImGuiKey_W) ? 1.0f : 0.0f)
+                           - (ImGui::IsKeyDown(ImGuiKey_S) ? 1.0f : 0.0f);
+                pin.move_x = (ImGui::IsKeyDown(ImGuiKey_D) ? 1.0f : 0.0f)
+                           - (ImGui::IsKeyDown(ImGuiKey_A) ? 1.0f : 0.0f);
+                pin.jump   = ImGui::IsKeyDown(ImGuiKey_Space);
+                pin.sprint = ImGui::IsKeyDown(ImGuiKey_LeftShift) ||
+                             ImGui::IsKeyDown(ImGuiKey_RightShift);
+                pin.look   = io.MouseDown[1];   // RMB look (editor-cam UX)
+                if (pin.look) {
+                    pin.mouse_dx = mp.x - last_mouse_pos.x;
+                    pin.mouse_dy = mp.y - last_mouse_pos.y;
+                }
+                last_mouse_pos = mp;
+                pc->tick(dt, pin);
+                scene.camera().position = pc->camera_eye();
+                scene.camera().target   = pc->camera_target();
+                scene.camera().up       = {0.0f, 1.0f, 0.0f};
+            } else {
+                // ---- Editor fly-cam (unchanged behaviour) -----------
+                scn::FlyInput in{};
+                in.accept_input = ui_capture ? false :
+                    ImGui::IsMouseHoveringRect(ImVec2(0,0),
+                                               io.DisplaySize, false);
+                in.look = io.MouseDown[1];
+                if (in.look) {
+                    in.mouse_dx = mp.x - last_mouse_pos.x;
+                    in.mouse_dy = mp.y - last_mouse_pos.y;
+                    in.accept_input = true;   // RMB always grabs input
+                }
+                last_mouse_pos = mp;
+                in.forward  = ImGui::IsKeyDown(ImGuiKey_W);
+                in.backward = ImGui::IsKeyDown(ImGuiKey_S);
+                in.left     = ImGui::IsKeyDown(ImGuiKey_A);
+                in.right    = ImGui::IsKeyDown(ImGuiKey_D);
+                in.up       = ImGui::IsKeyDown(ImGuiKey_E);
+                in.down     = ImGui::IsKeyDown(ImGuiKey_Q);
+                in.sprint   = ImGui::IsKeyDown(ImGuiKey_LeftShift) ||
+                              ImGui::IsKeyDown(ImGuiKey_RightShift);
+                in.scroll   = io.MouseWheel;
+                fly_cam.tick(scene.camera(), in, dt);
+            }
         }
         // Each viewport panel renders its OWN per-id RTT now — set
         // earlier in this frame inside the per-viewport render loop, so

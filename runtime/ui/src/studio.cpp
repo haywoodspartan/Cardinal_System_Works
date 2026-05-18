@@ -242,6 +242,20 @@ public:
         if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
             style.WindowRounding              = 0.0f;
             style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+
+            // Multi-monitor usability: give every popped-out panel a real
+            // OS window frame (title bar + minimize/maximize/close + system
+            // menu) and its own taskbar entry. Without this ImGui creates
+            // borderless secondary windows that can't be OS-maximized or
+            // Win+Arrow / Snap-tiled, so a panel dragged onto a second
+            // monitor can't fill it. This is a platform-backend (Win32)
+            // setting — identical behaviour whether the render backend is
+            // Vulkan or D3D12 (both just draw into the window ImGui_ImplWin32
+            // creates). Users can now maximize/snap each dock-out window to
+            // whatever monitor it lives on. (Double-click the title bar to
+            // maximize-to-monitor; drag to a screen edge to half-tile.)
+            io.ConfigViewportsNoDecoration   = false;
+            io.ConfigViewportsNoTaskBarIcon  = false;
         }
         if (resolve_ini_path(ini_path_, sizeof(ini_path_))) io.IniFilename = ini_path_;
 
