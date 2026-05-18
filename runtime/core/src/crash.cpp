@@ -38,6 +38,21 @@ using PFN_MiniDumpWriteDump = BOOL (WINAPI*)(
     PMINIDUMP_USER_STREAM_INFORMATION UserStreamParam,
     PMINIDUMP_CALLBACK_INFORMATION CallbackParam);
 
+// Stack-symbolisation surface — also resolved dynamically out of dbghelp.dll
+// so the .log carries a readable frame list (module!symbol+off [file:line])
+// without anyone needing WinDbg to crack the .dmp.
+using PFN_SymInitialize        = BOOL    (WINAPI*)(HANDLE, PCSTR, BOOL);
+using PFN_SymSetOptions        = DWORD   (WINAPI*)(DWORD);
+using PFN_SymFromAddr          = BOOL    (WINAPI*)(HANDLE, DWORD64, PDWORD64, PSYMBOL_INFO);
+using PFN_SymGetLineFromAddr64 = BOOL    (WINAPI*)(HANDLE, DWORD64, PDWORD, PIMAGEHLP_LINE64);
+using PFN_StackWalk64          = BOOL    (WINAPI*)(DWORD, HANDLE, HANDLE, LPSTACKFRAME64,
+                                                   PVOID, PREAD_PROCESS_MEMORY_ROUTINE64,
+                                                   PFUNCTION_TABLE_ACCESS_ROUTINE64,
+                                                   PGET_MODULE_BASE_ROUTINE64,
+                                                   PTRANSLATE_ADDRESS_ROUTINE64);
+using PFN_SymFunctionTableAccess64 = PVOID   (WINAPI*)(HANDLE, DWORD64);
+using PFN_SymGetModuleBase64       = DWORD64 (WINAPI*)(HANDLE, DWORD64);
+
 #endif
 
 namespace cardinal::crash {
@@ -54,6 +69,13 @@ std::string          g_last_dump_path;
 LPTOP_LEVEL_EXCEPTION_FILTER g_prev_filter{nullptr};
 HMODULE                      g_dbghelp{nullptr};
 PFN_MiniDumpWriteDump        g_pfn_minidump{nullptr};
+PFN_SymInitialize            g_pfn_sym_init{nullptr};
+PFN_SymSetOptions            g_pfn_sym_opts{nullptr};
+PFN_SymFromAddr              g_pfn_sym_from_addr{nullptr};
+PFN_SymGetLineFromAddr64     g_pfn_sym_line{nullptr};
+PFN_StackWalk64              g_pfn_stack_walk{nullptr};
+PFN_SymFunctionTableAccess64 g_pfn_fn_table{nullptr};
+PFN_SymGetModuleBase64       g_pfn_mod_base{nullptr};
 
 // Resolve dbghelp.dll lazily. Returns true if MiniDumpWriteDump is
 // usable. Cheap to call repeatedly — caches the resolved pointer.
@@ -63,7 +85,113 @@ bool ensure_dbghelp() {
     if (g_dbghelp == nullptr) return false;
     g_pfn_minidump = reinterpret_cast<PFN_MiniDumpWriteDump>(
         GetProcAddress(g_dbghelp, "MiniDumpWriteDump"));
+
+    // Best-effort symbolisation surface. None of these is required for the
+    // .dmp itself — if any is missing we just emit a thinner stack.
+    g_pfn_sym_init      = reinterpret_cast<PFN_SymInitialize>(
+        GetProcAddress(g_dbghelp, "SymInitialize"));
+    g_pfn_sym_opts      = reinterpret_cast<PFN_SymSetOptions>(
+        GetProcAddress(g_dbghelp, "SymSetOptions"));
+    g_pfn_sym_from_addr = reinterpret_cast<PFN_SymFromAddr>(
+        GetProcAddress(g_dbghelp, "SymFromAddr"));
+    g_pfn_sym_line      = reinterpret_cast<PFN_SymGetLineFromAddr64>(
+        GetProcAddress(g_dbghelp, "SymGetLineFromAddr64"));
+    g_pfn_stack_walk    = reinterpret_cast<PFN_StackWalk64>(
+        GetProcAddress(g_dbghelp, "StackWalk64"));
+    g_pfn_fn_table      = reinterpret_cast<PFN_SymFunctionTableAccess64>(
+        GetProcAddress(g_dbghelp, "SymFunctionTableAccess64"));
+    g_pfn_mod_base      = reinterpret_cast<PFN_SymGetModuleBase64>(
+        GetProcAddress(g_dbghelp, "SymGetModuleBase64"));
+
     return g_pfn_minidump != nullptr;
+}
+
+// Walk + symbolise one thread's stack into `lp`. Best-effort: any missing
+// dbghelp entry, or a frame we can't symbolise, degrades to a raw address.
+// `ctx` is mutated by StackWalk64, so the caller must pass a private copy.
+void write_stack_trace(FILE* lp, CONTEXT* ctx) {
+    if (lp == nullptr || ctx == nullptr) return;
+    if (g_pfn_stack_walk == nullptr || g_pfn_fn_table == nullptr ||
+        g_pfn_mod_base   == nullptr) {
+        std::fprintf(lp, "Stack: <dbghelp StackWalk64 unavailable>\n");
+        return;
+    }
+
+    const HANDLE proc = GetCurrentProcess();
+    const HANDLE thr  = GetCurrentThread();
+
+    if (g_pfn_sym_init != nullptr) {
+        if (g_pfn_sym_opts != nullptr) {
+            // UNDNAME → demangled C++ names; LOAD_LINES → file:line records.
+            g_pfn_sym_opts(SYMOPT_UNDNAME | SYMOPT_LOAD_LINES |
+                           SYMOPT_DEFERRED_LOADS | SYMOPT_FAIL_CRITICAL_ERRORS);
+        }
+        // invade=TRUE → eagerly enumerate the process' modules so PDBs that
+        // sit next to the .exe (our debug build) resolve without a path.
+        g_pfn_sym_init(proc, nullptr, TRUE);
+    }
+
+    STACKFRAME64 sf{};
+    sf.AddrPC.Offset    = ctx->Rip; sf.AddrPC.Mode    = AddrModeFlat;
+    sf.AddrFrame.Offset = ctx->Rbp; sf.AddrFrame.Mode = AddrModeFlat;
+    sf.AddrStack.Offset = ctx->Rsp; sf.AddrStack.Mode = AddrModeFlat;
+
+    std::fprintf(lp, "Stack (faulting thread, most-recent first):\n");
+
+    // SYMBOL_INFO + room for the (undecorated) name.
+    alignas(SYMBOL_INFO) unsigned char sym_buf[sizeof(SYMBOL_INFO) + 512] = {};
+    auto* sym = reinterpret_cast<SYMBOL_INFO*>(sym_buf);
+    sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+    sym->MaxNameLen   = 511;
+
+    for (int frame = 0; frame < 64; ++frame) {
+        if (!g_pfn_stack_walk(IMAGE_FILE_MACHINE_AMD64, proc, thr, &sf, ctx,
+                              nullptr, g_pfn_fn_table, g_pfn_mod_base, nullptr)) {
+            break;
+        }
+        const DWORD64 pc = sf.AddrPC.Offset;
+        if (pc == 0) break;
+
+        char modname[64] = "?";
+        if (g_pfn_mod_base != nullptr) {
+            const DWORD64 base = g_pfn_mod_base(proc, pc);
+            if (base != 0) {
+                char full[MAX_PATH];
+                if (GetModuleFileNameA(reinterpret_cast<HMODULE>(base),
+                                       full, sizeof(full)) > 0) {
+                    const char* leaf = full;
+                    for (const char* p = full; *p; ++p)
+                        if (*p == '\\' || *p == '/') leaf = p + 1;
+                    std::snprintf(modname, sizeof(modname), "%s", leaf);
+                }
+            }
+        }
+
+        DWORD64 disp = 0;
+        bool named = (g_pfn_sym_from_addr != nullptr) &&
+                     g_pfn_sym_from_addr(proc, pc, &disp, sym) != FALSE;
+
+        IMAGEHLP_LINE64 line{}; line.SizeOfStruct = sizeof(line);
+        DWORD line_disp = 0;
+        bool has_line = (g_pfn_sym_line != nullptr) &&
+                        g_pfn_sym_line(proc, pc, &line_disp, &line) != FALSE;
+
+        if (named && has_line) {
+            std::fprintf(lp, "  #%02d %s!%s+0x%llX  [%s:%lu]  (0x%llX)\n",
+                frame, modname, sym->Name,
+                static_cast<unsigned long long>(disp),
+                line.FileName, static_cast<unsigned long>(line.LineNumber),
+                static_cast<unsigned long long>(pc));
+        } else if (named) {
+            std::fprintf(lp, "  #%02d %s!%s+0x%llX  (0x%llX)\n",
+                frame, modname, sym->Name,
+                static_cast<unsigned long long>(disp),
+                static_cast<unsigned long long>(pc));
+        } else {
+            std::fprintf(lp, "  #%02d %s!0x%llX\n",
+                frame, modname, static_cast<unsigned long long>(pc));
+        }
+    }
 }
 
 MINIDUMP_TYPE dump_type_for(CrashConfig::Detail d) {
@@ -194,6 +322,19 @@ bool write_dump_internal(EXCEPTION_POINTERS* eptr, const char* reason) {
         }
         std::fprintf(lp, "Dump : %s\n", dump.c_str());
         std::fprintf(lp, "Open with: WinDbg / Visual Studio (File→Open→Dump).\n");
+        std::fprintf(lp, "\n");
+
+        // Symbolised stack. StackWalk64 mutates the CONTEXT, so always hand
+        // it a private copy. Prefer the faulting thread's context from the
+        // exception record; fall back to capturing the current frame for
+        // the manual write_dump_now() path.
+        CONTEXT walk_ctx{};
+        if (eptr && eptr->ContextRecord) {
+            walk_ctx = *eptr->ContextRecord;
+        } else {
+            RtlCaptureContext(&walk_ctx);
+        }
+        write_stack_trace(lp, &walk_ctx);
         std::fclose(lp);
     }
 
