@@ -2,8 +2,6 @@
 
 #include <cardinal/core/types.hpp>
 
-#include <memory>
-
 namespace cardinal::window {
 
 struct WindowDesc {
@@ -27,7 +25,7 @@ using RawMessageHook = bool (*)(void* hwnd, u32 msg, u64 wparam, i64 lparam, voi
 //   Linux   : (TODO — X11/Wayland to be wired in alongside Vulkan WSI)
 class Window {
 public:
-    static std::unique_ptr<Window> create(const WindowDesc& desc);
+    static cardinal::unique_ptr<Window> create(const WindowDesc& desc);
 
     virtual ~Window() = default;
 

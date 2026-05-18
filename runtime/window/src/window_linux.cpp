@@ -9,7 +9,7 @@
 
 namespace cardinal::window {
 
-std::unique_ptr<Window> Window::create(const WindowDesc& /*desc*/) {
+cardinal::unique_ptr<Window> Window::create(const WindowDesc& /*desc*/) {
     return nullptr;
 }
 

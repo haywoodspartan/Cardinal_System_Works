@@ -6,10 +6,7 @@
 
 #include <Windows.h>
 
-#include <array>
-#include <cstring>
-#include <memory>
-#include <vector>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::window {
 
@@ -214,13 +211,13 @@ private:
     bool                   resize_pending_{false};
     u32                    width_{0};
     u32                    height_{0};
-    std::vector<HookEntry> hooks_;
+    cardinal::vector<HookEntry> hooks_;
 };
 
 }  // namespace
 
-std::unique_ptr<Window> Window::create(const WindowDesc& desc) {
-    return std::make_unique<WindowsWindow>(desc);
+cardinal::unique_ptr<Window> Window::create(const WindowDesc& desc) {
+    return cardinal::make_unique<WindowsWindow>(desc);
 }
 
 }  // namespace cardinal::window
