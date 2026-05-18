@@ -3,34 +3,35 @@
 #include <cardinal/actor/component.hpp>
 #include <cardinal/core/log.hpp>
 
-#include <algorithm>
-#include <cmath>
-#include <queue>
+#include <cardinal/core/algorithm.hpp>    // cardinal::sort/max
+#include <cardinal/core/cmath.hpp>        // cardinal::sqrt
+#include <cardinal/core/containers.hpp>   // cardinal::queue
+#include <cardinal/core/utility.hpp>      // cardinal::move/pair
 
 namespace cardinal::level {
 
 // ---------------------------------------------------------------------------
 // LevelInstance
 // ---------------------------------------------------------------------------
-std::shared_ptr<LevelInstance> LevelInstance::create(LevelInstanceDesc desc) {
-    return std::shared_ptr<LevelInstance>(new LevelInstance(std::move(desc)));
+cardinal::shared_ptr<LevelInstance> LevelInstance::create(LevelInstanceDesc desc) {
+    return cardinal::shared_ptr<LevelInstance>(new LevelInstance(cardinal::move(desc)));
 }
 
 // ---------------------------------------------------------------------------
 // LevelManager
 // ---------------------------------------------------------------------------
-std::shared_ptr<LevelManager> LevelManager::create(cardinal::actor::World& w) {
-    return std::shared_ptr<LevelManager>(new LevelManager(w));
+cardinal::shared_ptr<LevelManager> LevelManager::create(cardinal::actor::World& w) {
+    return cardinal::shared_ptr<LevelManager>(new LevelManager(w));
 }
 LevelManager::~LevelManager() { clear(); }
 
-InstanceId LevelManager::spawn(std::shared_ptr<LevelInstance> inst,
+InstanceId LevelManager::spawn(cardinal::shared_ptr<LevelInstance> inst,
                                 const cardinal::scene::Vec3& trans,
                                 const cardinal::scene::Vec3& rot,
                                 const cardinal::scene::Vec3& scl)
 {
     if (inst == nullptr) return 0;
-    auto p = std::make_unique<Placement>();
+    auto p = cardinal::make_unique<Placement>();
     p->id              = next_id_++;
     p->instance        = inst;
     p->translation     = trans;
@@ -68,7 +69,7 @@ InstanceId LevelManager::spawn(std::shared_ptr<LevelInstance> inst,
     cardinal::log::infof("level",
         "spawned LevelInstance '%s' (%zu actors) -> placement %u",
         inst->desc().name.c_str(), p->spawned_actor_ids.size(), p->id);
-    placements_.push_back(std::move(p));
+    placements_.push_back(cardinal::move(p));
     return placements_.back()->id;
 }
 
@@ -96,8 +97,8 @@ const Placement* LevelManager::find(InstanceId id) const {
     return nullptr;
 }
 
-std::vector<const Placement*> LevelManager::placements() const {
-    std::vector<const Placement*> r;
+cardinal::vector<const Placement*> LevelManager::placements() const {
+    cardinal::vector<const Placement*> r;
     r.reserve(placements_.size());
     for (const auto& p : placements_) r.push_back(p.get());
     return r;
@@ -113,7 +114,7 @@ const HlodNode* HlodTree::find(HlodId id) const noexcept {
 
 namespace {
 
-cardinal::scene::Vec3 vmean(const std::vector<cardinal::scene::Vec3>& v) {
+cardinal::scene::Vec3 vmean(const cardinal::vector<cardinal::scene::Vec3>& v) {
     cardinal::scene::Vec3 c{0,0,0};
     if (v.empty()) return c;
     for (const auto& p : v) { c.x += p.x; c.y += p.y; c.z += p.z; }
@@ -121,7 +122,7 @@ cardinal::scene::Vec3 vmean(const std::vector<cardinal::scene::Vec3>& v) {
     return { c.x * inv, c.y * inv, c.z * inv };
 }
 
-cardinal::core::geom::AABB union_aabbs(const std::vector<cardinal::core::geom::AABB>& v) {
+cardinal::core::geom::AABB union_aabbs(const cardinal::vector<cardinal::core::geom::AABB>& v) {
     auto r = cardinal::core::geom::AABB::make_empty();
     for (const auto& a : v) r.expand(a);
     return r;
@@ -129,43 +130,43 @@ cardinal::core::geom::AABB union_aabbs(const std::vector<cardinal::core::geom::A
 
 f32 vdist(const cardinal::scene::Vec3& a, const cardinal::scene::Vec3& b) {
     const f32 dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
-    return std::sqrt(dx*dx + dy*dy + dz*dz);
+    return cardinal::sqrt(dx*dx + dy*dy + dz*dz);
 }
 
 // Simple greedy spatial clustering — pick a seed, group its k-1 nearest
 // unassigned, repeat. Cheap, fine for LOD baking.
-void cluster_greedy(const std::vector<HlodInput>& inputs,
+void cluster_greedy(const cardinal::vector<HlodInput>& inputs,
                     u32 cluster_size,
-                    std::vector<std::vector<u32>>& out_clusters)
+                    cardinal::vector<cardinal::vector<u32>>& out_clusters)
 {
     const u32 N = static_cast<u32>(inputs.size());
-    std::vector<bool> used(N, false);
+    cardinal::vector<bool> used(N, false);
     out_clusters.clear();
     for (u32 i = 0; i < N; ++i) {
         if (used[i]) continue;
-        std::vector<u32> c{ i };
+        cardinal::vector<u32> c{ i };
         used[i] = true;
         // Collect cluster_size-1 nearest unused.
-        std::vector<std::pair<f32, u32>> ranked;
+        cardinal::vector<cardinal::pair<f32, u32>> ranked;
         ranked.reserve(N);
         for (u32 j = 0; j < N; ++j) {
             if (used[j]) continue;
             ranked.push_back({ vdist(inputs[i].position, inputs[j].position), j });
         }
-        std::sort(ranked.begin(), ranked.end(),
+        cardinal::sort(ranked.begin(), ranked.end(),
             [](const auto& a, const auto& b){ return a.first < b.first; });
         for (const auto& [_, j] : ranked) {
             if (c.size() >= cluster_size) break;
             c.push_back(j);
             used[j] = true;
         }
-        out_clusters.push_back(std::move(c));
+        out_clusters.push_back(cardinal::move(c));
     }
 }
 
 }  // namespace
 
-HlodTree build_hlod(const std::vector<HlodInput>& inputs,
+HlodTree build_hlod(const cardinal::vector<HlodInput>& inputs,
                     const HlodBuildOptions& opts)
 {
     HlodTree t{};
@@ -173,7 +174,7 @@ HlodTree build_hlod(const std::vector<HlodInput>& inputs,
 
     // Leaf nodes — one per input.
     HlodId next_id = 1;
-    std::vector<HlodId> current_layer;
+    cardinal::vector<HlodId> current_layer;
     current_layer.reserve(inputs.size());
     for (const auto& in : inputs) {
         HlodNode n{};
@@ -182,18 +183,18 @@ HlodTree build_hlod(const std::vector<HlodInput>& inputs,
                                               in.position, {0.5f, 0.5f, 0.5f})
                                         : in.bounds;
         n.centroid  = in.position;
-        n.proxy_radius = std::max({n.bounds.size().x, n.bounds.size().y, n.bounds.size().z}) * 0.5f;
+        n.proxy_radius = cardinal::max({n.bounds.size().x, n.bounds.size().y, n.bounds.size().z}) * 0.5f;
         n.is_leaf   = true;
         n.leaf_ids  = { in.id };
         t.index_of[n.id] = static_cast<u32>(t.nodes.size());
         current_layer.push_back(n.id);
-        t.nodes.push_back(std::move(n));
+        t.nodes.push_back(cardinal::move(n));
     }
 
     // Bottom-up: cluster the current layer; each cluster becomes a parent.
     u32 depth = 0;
     while (current_layer.size() > 1 && depth < opts.max_depth) {
-        std::vector<HlodInput> cluster_inputs;
+        cardinal::vector<HlodInput> cluster_inputs;
         cluster_inputs.reserve(current_layer.size());
         for (HlodId child_id : current_layer) {
             const auto* cn = t.find(child_id);
@@ -204,18 +205,18 @@ HlodTree build_hlod(const std::vector<HlodInput>& inputs,
             hi.bounds   = cn->bounds;
             cluster_inputs.push_back(hi);
         }
-        std::vector<std::vector<u32>> clusters;
+        cardinal::vector<cardinal::vector<u32>> clusters;
         cluster_greedy(cluster_inputs, opts.cluster_size, clusters);
         if (clusters.size() >= current_layer.size()) break; // no progress
 
-        std::vector<HlodId> next_layer;
+        cardinal::vector<HlodId> next_layer;
         next_layer.reserve(clusters.size());
         for (const auto& cluster : clusters) {
             HlodNode parent{};
             parent.id      = next_id++;
             parent.is_leaf = false;
-            std::vector<cardinal::scene::Vec3> centroids;
-            std::vector<cardinal::core::geom::AABB>  boxes;
+            cardinal::vector<cardinal::scene::Vec3> centroids;
+            cardinal::vector<cardinal::core::geom::AABB>  boxes;
             centroids.reserve(cluster.size());
             boxes.reserve(cluster.size());
             for (u32 idx : cluster) {
@@ -233,12 +234,12 @@ HlodTree build_hlod(const std::vector<HlodInput>& inputs,
             }
             parent.bounds       = union_aabbs(boxes);
             parent.centroid     = vmean(centroids);
-            parent.proxy_radius = std::max({parent.bounds.size().x,
+            parent.proxy_radius = cardinal::max({parent.bounds.size().x,
                                              parent.bounds.size().y,
                                              parent.bounds.size().z}) * 0.5f;
             t.index_of[parent.id] = static_cast<u32>(t.nodes.size());
             next_layer.push_back(parent.id);
-            t.nodes.push_back(std::move(parent));
+            t.nodes.push_back(cardinal::move(parent));
         }
         current_layer.swap(next_layer);
         ++depth;
@@ -256,7 +257,7 @@ void select_hlod(const HlodTree& tree,
     out.render_leaves.clear();
     if (tree.root == kInvalidHlodId) return;
 
-    std::queue<HlodId> q;
+    cardinal::queue<HlodId> q;
     q.push(tree.root);
     while (!q.empty()) {
         const HlodId id = q.front(); q.pop();

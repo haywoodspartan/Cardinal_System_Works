@@ -23,15 +23,11 @@
 // =============================================================================
 
 #include <cardinal/actor/world.hpp>
-#include <cardinal/core/types.hpp>
+#include <cardinal/core/types.hpp>        // function/memory/string
+#include <cardinal/core/utility.hpp>      // cardinal::move
+#include <cardinal/core/containers.hpp>   // unordered_map/vector
 #include <cardinal/core/geom.hpp>
 #include <cardinal/scene/math.hpp>
-
-#include <functional>
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <vector>
 
 namespace cardinal::level {
 
@@ -42,48 +38,48 @@ namespace cardinal::level {
 // via cardinal::serial (future), instantiate via spawn_in().
 // ---------------------------------------------------------------------------
 struct ActorTemplate {
-    std::string             name;
-    std::string             game_class;          // "" for non-GameActor entries
+    cardinal::string             name;
+    cardinal::string             game_class;          // "" for non-GameActor entries
     cardinal::scene::Vec3   translation{0,0,0};
     cardinal::scene::Vec3   rotation_euler{0,0,0};
     cardinal::scene::Vec3   scale{1,1,1};
-    std::string             mesh_asset;          // optional MeshComponent.asset_id
+    cardinal::string             mesh_asset;          // optional MeshComponent.asset_id
     cardinal::scene::Vec3   tint{1,1,1};
 };
 
 struct LevelInstanceDesc {
-    std::string                  name;
-    std::vector<ActorTemplate>   actors;
+    cardinal::string                  name;
+    cardinal::vector<ActorTemplate>   actors;
 };
 
 using InstanceId = u32;
 
 class LevelInstance {
 public:
-    static std::shared_ptr<LevelInstance> create(LevelInstanceDesc desc);
+    static cardinal::shared_ptr<LevelInstance> create(LevelInstanceDesc desc);
     const LevelInstanceDesc& desc() const noexcept { return desc_; }
 
 private:
-    explicit LevelInstance(LevelInstanceDesc d) : desc_(std::move(d)) {}
+    explicit LevelInstance(LevelInstanceDesc d) : desc_(cardinal::move(d)) {}
     LevelInstanceDesc desc_;
 };
 
 // Spawned placement of a LevelInstance — transformed into the parent world.
 struct Placement {
     InstanceId                                id{0};
-    std::shared_ptr<LevelInstance>            instance;
+    cardinal::shared_ptr<LevelInstance>            instance;
     cardinal::scene::Vec3                     translation{0,0,0};
     cardinal::scene::Vec3                     rotation_euler{0,0,0};
     cardinal::scene::Vec3                     scale{1,1,1};
-    std::vector<cardinal::actor::ActorId>     spawned_actor_ids;
+    cardinal::vector<cardinal::actor::ActorId>     spawned_actor_ids;
 };
 
 class LevelManager {
 public:
-    static std::shared_ptr<LevelManager> create(cardinal::actor::World& world);
+    static cardinal::shared_ptr<LevelManager> create(cardinal::actor::World& world);
     ~LevelManager();
 
-    InstanceId          spawn(std::shared_ptr<LevelInstance> inst,
+    InstanceId          spawn(cardinal::shared_ptr<LevelInstance> inst,
                               const cardinal::scene::Vec3& translation = {0,0,0},
                               const cardinal::scene::Vec3& rotation    = {0,0,0},
                               const cardinal::scene::Vec3& scale       = {1,1,1});
@@ -92,12 +88,12 @@ public:
     usize               placement_count() const noexcept;
 
     const Placement*    find(InstanceId id) const;
-    std::vector<const Placement*> placements() const;
+    cardinal::vector<const Placement*> placements() const;
 
 private:
     explicit LevelManager(cardinal::actor::World& w) : world_(w) {}
     cardinal::actor::World&                       world_;
-    std::vector<std::unique_ptr<Placement>>       placements_;
+    cardinal::vector<cardinal::unique_ptr<Placement>>       placements_;
     InstanceId                                    next_id_{1};
 };
 
@@ -125,13 +121,13 @@ struct HlodNode {
     f32                      proxy_radius{0.0f};   // bounding-sphere radius
     bool                     is_leaf{true};
     HlodId                   parent{kInvalidHlodId};
-    std::vector<HlodId>      children;             // empty when is_leaf
-    std::vector<HlodId>      leaf_ids;             // when is_leaf, the input ids
+    cardinal::vector<HlodId>      children;             // empty when is_leaf
+    cardinal::vector<HlodId>      leaf_ids;             // when is_leaf, the input ids
 };
 
 struct HlodTree {
-    std::vector<HlodNode>                  nodes;
-    std::unordered_map<HlodId, u32>        index_of;     // node id -> nodes[]
+    cardinal::vector<HlodNode>                  nodes;
+    cardinal::unordered_map<HlodId, u32>        index_of;     // node id -> nodes[]
     HlodId                                 root{kInvalidHlodId};
 
     const HlodNode* find(HlodId id) const noexcept;
@@ -142,7 +138,7 @@ struct HlodBuildOptions {
     u32 max_depth{8};
 };
 
-HlodTree build_hlod(const std::vector<HlodInput>& inputs,
+HlodTree build_hlod(const cardinal::vector<HlodInput>& inputs,
                     const HlodBuildOptions& opts = {});
 
 // ---------------------------------------------------------------------------
@@ -152,8 +148,8 @@ HlodTree build_hlod(const std::vector<HlodInput>& inputs,
 // we render the proxy.
 // ---------------------------------------------------------------------------
 struct HlodSelection {
-    std::vector<HlodId> render_proxies;   // internal nodes rendered as proxy
-    std::vector<HlodId> render_leaves;    // leaf ids drawn directly
+    cardinal::vector<HlodId> render_proxies;   // internal nodes rendered as proxy
+    cardinal::vector<HlodId> render_leaves;    // leaf ids drawn directly
 };
 
 void select_hlod(const HlodTree& tree,
