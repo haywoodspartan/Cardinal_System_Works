@@ -9,6 +9,8 @@
 // Alias templates (not typedefs) so they remain fully generic.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <array>
 #include <deque>
 #include <list>
@@ -27,10 +29,10 @@ namespace cardinal {
 template <class T, class A = std::allocator<T>>
 using vector = std::vector<T, A>;
 
-template <class T, std::size_t N>
+template <class T, cardinal::usize N>
 using array = std::array<T, N>;
 
-template <class T, std::size_t E = std::dynamic_extent>
+template <class T, cardinal::usize E = std::dynamic_extent>
 using span = std::span<T, E>;
 
 template <class T, class A = std::allocator<T>>

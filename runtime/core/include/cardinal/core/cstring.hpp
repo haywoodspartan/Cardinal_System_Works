@@ -6,6 +6,8 @@
 // etc. so the bytewise/SIMD policy stays restructurable from one place.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <cstring>
 
 namespace cardinal {

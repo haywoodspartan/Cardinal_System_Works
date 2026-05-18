@@ -6,6 +6,8 @@
 // core/io.hpp remains the higher-level engine I/O surface.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <filesystem>
 #include <system_error>   // std::error_code — the fs no-throw overload arg
 

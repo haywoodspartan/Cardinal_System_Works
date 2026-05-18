@@ -6,6 +6,8 @@
 // alias possible / needed); this exposes the supporting library names.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <new>
 
 namespace cardinal {

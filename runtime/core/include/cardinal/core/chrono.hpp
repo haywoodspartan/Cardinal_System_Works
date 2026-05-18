@@ -6,6 +6,8 @@
 // raw std::chrono for the call sites that measure wall durations directly.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <chrono>
 
 namespace cardinal {

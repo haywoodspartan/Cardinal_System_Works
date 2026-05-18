@@ -5,6 +5,8 @@
 // (single sanctioned include site per the FOUNDATION RULE).
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <optional>
 #include <tuple>
 #include <utility>

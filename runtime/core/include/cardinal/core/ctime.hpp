@@ -6,6 +6,8 @@
 // this is the wall-clock / calendar surface used by build stamps etc.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <ctime>
 
 namespace cardinal {

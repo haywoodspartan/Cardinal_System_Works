@@ -6,6 +6,8 @@
 // restructurable from one place.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <atomic>
 
 namespace cardinal {
@@ -24,10 +26,10 @@ using std::atomic_signal_fence;
 using std::atomic_init;
 
 using atomic_bool = std::atomic<bool>;
-using atomic_i32  = std::atomic<std::int32_t>;
-using atomic_u32  = std::atomic<std::uint32_t>;
-using atomic_i64  = std::atomic<std::int64_t>;
-using atomic_u64  = std::atomic<std::uint64_t>;
-using atomic_usize = std::atomic<std::size_t>;
+using atomic_i32  = std::atomic<cardinal::i32>;
+using atomic_u32  = std::atomic<cardinal::u32>;
+using atomic_i64  = std::atomic<cardinal::i64>;
+using atomic_u64  = std::atomic<cardinal::u64>;
+using atomic_usize = std::atomic<cardinal::usize>;
 
 }  // namespace cardinal

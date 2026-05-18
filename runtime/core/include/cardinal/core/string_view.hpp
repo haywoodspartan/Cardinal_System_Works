@@ -5,6 +5,8 @@
 // per the FOUNDATION RULE). Companion to cardinal::string in core/types.hpp.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <string_view>
 
 namespace cardinal {

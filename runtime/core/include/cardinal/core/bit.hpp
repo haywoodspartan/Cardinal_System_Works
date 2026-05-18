@@ -6,6 +6,8 @@
 // memcpy bit-casts); the rest is constexpr bit twiddling.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <bit>
 
 namespace cardinal {

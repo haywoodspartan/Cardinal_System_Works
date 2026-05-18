@@ -6,6 +6,8 @@
 // `unsigned char` (or EOF) — passing a plain signed char is UB.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <cctype>
 
 namespace cardinal {

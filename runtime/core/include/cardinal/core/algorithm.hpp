@@ -7,6 +7,8 @@
 // using-declarations import every overload, so these stay fully generic.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <algorithm>
 #include <numeric>
 

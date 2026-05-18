@@ -7,6 +7,8 @@
 // text-format readers/writers (serial, project, …) that want them directly.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <fstream>
 #include <istream>
 #include <ostream>

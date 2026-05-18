@@ -10,4 +10,6 @@
 // `assert` only in throwaway/internal invariants.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <cassert>

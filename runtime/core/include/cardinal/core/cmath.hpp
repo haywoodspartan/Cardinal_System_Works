@@ -7,6 +7,8 @@
 // import every overload so float/double both resolve.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <cmath>
 
 namespace cardinal {

@@ -5,6 +5,8 @@
 // the FOUNDATION RULE). Locale-independent, allocation-free number<->text.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <charconv>
 #include <system_error>   // std::errc is the result-status enum of to/from_chars
 

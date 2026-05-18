@@ -6,6 +6,8 @@
 // std::future/promise back the few APIs that hand out a waitable result.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <future>
 
 namespace cardinal {

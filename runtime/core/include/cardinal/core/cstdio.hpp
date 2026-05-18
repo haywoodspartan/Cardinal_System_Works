@@ -8,6 +8,8 @@
 // the <cstdio> *include* still lives only in cardinal::core.
 // =============================================================================
 
+#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
+
 #include <cstdio>
 
 namespace cardinal {
