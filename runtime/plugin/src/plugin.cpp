@@ -8,9 +8,9 @@
 #include <cardinal/render/algos.hpp>
 #include <cardinal/trace/stack.hpp>
 
-#include <filesystem>
-#include <string>
-#include <vector>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/filesystem.hpp>
+#include <cardinal/core/utility.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
     #include <Windows.h>
@@ -33,7 +33,7 @@
 namespace cardinal::plugin {
 
 struct Registry::Loaded {
-    std::string             path;
+    cardinal::string             path;
     LibHandle               lib{};
     CardinalPluginInfo      info{};
     // The plugin holds onto the host API pointer for its entire lifetime, so
@@ -79,7 +79,7 @@ bool register_render_algo_thunk(cardinal::u32 category_id,
             cpu_fn(static_cast<const void*>(&in), static_cast<void*>(&out));
         };
     }
-    return AlgoRegistry::instance().register_algo(std::move(a));
+    return AlgoRegistry::instance().register_algo(cardinal::move(a));
 }
 
 CardinalPluginHostApi make_host_api() {
@@ -102,7 +102,7 @@ Registry& Registry::instance() {
 
 void Registry::ensure_impl() {
     if (impl_ == nullptr) {
-        impl_ = new std::vector<std::unique_ptr<Loaded>>();
+        impl_ = new cardinal::vector<cardinal::unique_ptr<Loaded>>();
     }
 }
 
@@ -117,8 +117,8 @@ bool Registry::load(const char* file_path) {
     if (file_path == nullptr) return false;
 
     // Skip already-loaded plugins by canonical path.
-    std::error_code ec;
-    auto canon = std::filesystem::weakly_canonical(file_path, ec).string();
+    cardinal::error_code ec;
+    auto canon = cardinal::fs::weakly_canonical(file_path, ec).string();
     for (auto& p : *impl_) if (p->path == canon) return true;
 
     LibHandle h = lib_open(file_path);
@@ -157,29 +157,29 @@ bool Registry::load(const char* file_path) {
     // Own the host API on the heap so the plugin's stored pointer stays
     // valid for the plugin's entire lifetime (the plugin will keep
     // dereferencing it during on_tick / on_detach).
-    auto rec = std::make_unique<Loaded>();
+    auto rec = cardinal::make_unique<Loaded>();
     rec->path     = canon;
     rec->lib      = h;
     rec->info     = info;
     rec->host_api = make_host_api();
     if (info.on_attach) info.on_attach(&rec->host_api);
-    impl_->push_back(std::move(rec));
+    impl_->push_back(cardinal::move(rec));
     return true;
 }
 
 u32 Registry::load_directory(const char* dir) {
     ensure_impl();
     if (dir == nullptr) return 0;
-    std::error_code ec;
-    if (!std::filesystem::exists(dir, ec) ||
-        !std::filesystem::is_directory(dir, ec)) {
+    cardinal::error_code ec;
+    if (!cardinal::fs::exists(dir, ec) ||
+        !cardinal::fs::is_directory(dir, ec)) {
         cardinal::log::warnf("plugin", "directory missing: %s", dir);
         return 0;
     }
     u32 count = 0;
-    for (auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+    for (auto& entry : cardinal::fs::directory_iterator(dir, ec)) {
         if (!entry.is_regular_file(ec)) continue;
-        const std::string ext = entry.path().extension().string();
+        const cardinal::string ext = entry.path().extension().string();
         if (ext != lib_ext()) continue;
         if (load(entry.path().string().c_str())) ++count;
     }
@@ -239,24 +239,24 @@ u32 Registry::loaded_count() const noexcept {
 // `Loaded` is a private nested type so this helper lives as a member rather
 // than a free function (free functions in the same namespace would still
 // fail access control on `Loaded`'s members).
-bool Registry::matches_loaded_(const Loaded& p, const std::string& q) {
+bool Registry::matches_loaded_(const Loaded& p, const cardinal::string& q) {
     if (q.empty()) return false;
     if (p.info.name && q == p.info.name) return true;
     if (q == p.path) return true;
     // Tolerate user-typed paths that aren't canonicalised (e.g. relative).
-    std::error_code ec;
-    auto canon = std::filesystem::weakly_canonical(q, ec).string();
+    cardinal::error_code ec;
+    auto canon = cardinal::fs::weakly_canonical(q, ec).string();
     return !ec && canon == p.path;
 }
 
 bool Registry::unload(const char* name_or_path) {
     ensure_impl();
     if (name_or_path == nullptr) return false;
-    const std::string q = name_or_path;
+    const cardinal::string q = name_or_path;
     for (auto it = impl_->begin(); it != impl_->end(); ++it) {
         auto& p = **it;
         if (!matches_loaded_(p, q)) continue;
-        const std::string nm = p.info.name ? p.info.name : "(unnamed)";
+        const cardinal::string nm = p.info.name ? p.info.name : "(unnamed)";
         // Detach is best-effort. We INTENTIONALLY don't SEH-wrap detach:
         // a plugin that crashes on detach is a programming bug we want to
         // see in a debugger, not silently swallow. If it becomes a problem
@@ -274,11 +274,11 @@ bool Registry::unload(const char* name_or_path) {
 bool Registry::reload(const char* name_or_path) {
     ensure_impl();
     if (name_or_path == nullptr) return false;
-    const std::string q = name_or_path;
+    const cardinal::string q = name_or_path;
 
     // Find the loaded record so we can recover its on-disk path BEFORE
     // unloading (since unload removes the entry from impl_).
-    std::string path_to_reload;
+    cardinal::string path_to_reload;
     for (auto& p : *impl_) {
         if (matches_loaded_(*p, q)) { path_to_reload = p->path; break; }
     }
@@ -292,8 +292,8 @@ bool Registry::reload(const char* name_or_path) {
     return load(path_to_reload.c_str());
 }
 
-std::vector<Registry::Info> Registry::enumerate() const {
-    std::vector<Info> out;
+cardinal::vector<Registry::Info> Registry::enumerate() const {
+    cardinal::vector<Info> out;
     if (impl_ == nullptr) return out;
     out.reserve(impl_->size());
     for (const auto& p : *impl_) {
@@ -304,7 +304,7 @@ std::vector<Registry::Info> Registry::enumerate() const {
         i.description = p->info.description ? p->info.description : "";
         i.path        = p->path;
         i.disabled    = p->disabled;
-        out.push_back(std::move(i));
+        out.push_back(cardinal::move(i));
     }
     return out;
 }

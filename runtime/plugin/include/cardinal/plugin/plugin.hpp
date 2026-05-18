@@ -19,10 +19,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-
-#include <memory>
-#include <string>
-#include <vector>
+#include <cardinal/core/containers.hpp>
 
 extern "C" {
 
@@ -131,14 +128,14 @@ public:
     // Snapshot of every loaded plugin's metadata + status — used by the
     // Studio panel + the `plugin.list` console command.
     struct Info {
-        std::string name;
-        std::string version;
-        std::string author;
-        std::string description;
-        std::string path;
+        cardinal::string name;
+        cardinal::string version;
+        cardinal::string author;
+        cardinal::string description;
+        cardinal::string path;
         bool        disabled{false};   // true if the plugin's tick crashed
     };
-    std::vector<Info> enumerate() const;
+    cardinal::vector<Info> enumerate() const;
 
 private:
     Registry() = default;
@@ -147,9 +144,9 @@ private:
     ~Registry();
 
     struct Loaded;
-    std::vector<std::unique_ptr<Loaded>>* impl_{nullptr};   // PIMPL via header-only fwd
+    cardinal::vector<cardinal::unique_ptr<Loaded>>* impl_{nullptr};   // PIMPL via header-only fwd
     void ensure_impl();
-    static bool matches_loaded_(const Loaded& p, const std::string& q);
+    static bool matches_loaded_(const Loaded& p, const cardinal::string& q);
 };
 
 }  // namespace cardinal::plugin
