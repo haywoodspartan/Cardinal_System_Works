@@ -53,7 +53,14 @@ using isize = std::ptrdiff_t;
 // cardinal::core alone. Alias templates (not typedefs) so they stay
 // fully generic; make_unique/make_shared re-exported for call sites.
 // ---------------------------------------------------------------------------
-using string = std::string;
+using string  = std::string;
+using wstring = std::wstring;
+using std::to_string;
+using std::to_wstring;
+using std::stoi;   using std::stol;   using std::stoll;
+using std::stoul;  using std::stoull;
+using std::stof;   using std::stod;   using std::stold;
+using std::getline;                     // std::getline(istream, std::string&)
 
 template <class T, class D = std::default_delete<T>>
 using unique_ptr = std::unique_ptr<T, D>;          // D defaulted: existing

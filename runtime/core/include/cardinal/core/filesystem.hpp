@@ -7,9 +7,17 @@
 // =============================================================================
 
 #include <filesystem>
+#include <system_error>   // std::error_code — the fs no-throw overload arg
 
 namespace cardinal {
 
 namespace fs = std::filesystem;
+
+using std::error_code;
+using std::error_condition;
+using std::error_category;
+using std::system_error;
+using std::system_category;
+using std::generic_category;
 
 }  // namespace cardinal
