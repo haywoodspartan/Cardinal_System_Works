@@ -35,7 +35,10 @@ using std::lower_bound;  using std::upper_bound;
 using std::binary_search; using std::equal_range;
 using std::all_of;       using std::any_of;       using std::none_of;
 using std::equal;        using std::mismatch;
-using std::partition;    using std::stable_partition;
+// NOTE: bare `partition` / `stable_partition` are intentionally NOT
+// re-exported — `cardinal::partition` is an engine module namespace
+// (runtime/partition). Use std::partition directly inside cardinal::core
+// only, or add a non-colliding alias if a consumer ever needs it.
 using std::swap_ranges;
 using std::merge;        using std::set_union;    using std::set_intersection;
 using std::set_difference;

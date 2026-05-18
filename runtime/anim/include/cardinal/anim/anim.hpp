@@ -17,19 +17,16 @@
 //   CubicHermite  - cubic Hermite using user-supplied tangents (defaults are
 //                   centripetal Catmull-Rom for nice editor-default curves)
 //
-// Tracks are bound to a write-target via std::function — the host sets up
+// Tracks are bound to a write-target via cardinal::function — the host sets up
 // the binding when the clip is created. Generic enough to drive transforms,
 // material parameters, post-process, audio volume, anything float-or-vec.
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
+#include <cardinal/core/types.hpp>        // function/string/unique_ptr/shared_ptr
+#include <cardinal/core/algorithm.hpp>    // cardinal::lower_bound
+#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/utility.hpp>      // cardinal::move
 #include <cardinal/scene/math.hpp>
-
-#include <algorithm>
-#include <functional>
-#include <memory>
-#include <string>
-#include <vector>
 
 namespace cardinal::anim {
 
@@ -47,13 +44,13 @@ struct Key {
 
 template <class T>
 struct Curve {
-    std::vector<Key<T>> keys;
+    cardinal::vector<Key<T>> keys;
     WrapMode            wrap{WrapMode::Clamp};
 
     void add_key(float t, const T& v, InterpMode m = InterpMode::Linear) {
         Key<T> k{}; k.time = t; k.value = v; k.mode = m;
         // Insert sorted by time.
-        auto it = std::lower_bound(keys.begin(), keys.end(), k,
+        auto it = cardinal::lower_bound(keys.begin(), keys.end(), k,
             [](const Key<T>& a, const Key<T>& b){ return a.time < b.time; });
         keys.insert(it, k);
     }
@@ -76,14 +73,14 @@ struct ITrack {
     virtual ~ITrack() = default;
     virtual void  apply(float t)         = 0;
     virtual float duration() const noexcept = 0;
-    virtual const std::string& name() const noexcept = 0;
+    virtual const cardinal::string& name() const noexcept = 0;
 };
 
 template <class T>
 class Track final : public ITrack {
 public:
-    Track(std::string n, std::function<void(const T&)> writer)
-        : name_(std::move(n)), writer_(std::move(writer)) {}
+    Track(cardinal::string n, cardinal::function<void(const T&)> writer)
+        : name_(cardinal::move(n)), writer_(cardinal::move(writer)) {}
 
     Curve<T>& curve() noexcept { return curve_; }
     const Curve<T>& curve() const noexcept { return curve_; }
@@ -93,11 +90,11 @@ public:
         writer_(curve_.sample(t));
     }
     float duration() const noexcept override { return curve_.duration(); }
-    const std::string& name() const noexcept override { return name_; }
+    const cardinal::string& name() const noexcept override { return name_; }
 
 private:
-    std::string                       name_;
-    std::function<void(const T&)>     writer_;
+    cardinal::string                       name_;
+    cardinal::function<void(const T&)>     writer_;
     Curve<T>                          curve_;
 };
 
@@ -106,18 +103,18 @@ private:
 // ---------------------------------------------------------------------------
 class Clip {
 public:
-    explicit Clip(std::string name) : name_(std::move(name)) {}
+    explicit Clip(cardinal::string name) : name_(cardinal::move(name)) {}
 
-    void  add_track(std::unique_ptr<ITrack> tr);
+    void  add_track(cardinal::unique_ptr<ITrack> tr);
     float duration() const noexcept;
-    const std::string& name() const noexcept { return name_; }
-    const std::vector<std::unique_ptr<ITrack>>& tracks() const noexcept { return tracks_; }
+    const cardinal::string& name() const noexcept { return name_; }
+    const cardinal::vector<cardinal::unique_ptr<ITrack>>& tracks() const noexcept { return tracks_; }
 
     void apply(float t);
 
 private:
-    std::string                                name_;
-    std::vector<std::unique_ptr<ITrack>>       tracks_;
+    cardinal::string                                name_;
+    cardinal::vector<cardinal::unique_ptr<ITrack>>       tracks_;
 };
 
 // ---------------------------------------------------------------------------
@@ -125,9 +122,9 @@ private:
 // ---------------------------------------------------------------------------
 class Player {
 public:
-    explicit Player(std::shared_ptr<Clip> clip = nullptr) : clip_(std::move(clip)) {}
+    explicit Player(cardinal::shared_ptr<Clip> clip = nullptr) : clip_(cardinal::move(clip)) {}
 
-    void  set_clip(std::shared_ptr<Clip> c) { clip_ = std::move(c); time_ = 0.0f; }
+    void  set_clip(cardinal::shared_ptr<Clip> c) { clip_ = cardinal::move(c); time_ = 0.0f; }
     Clip* clip() noexcept { return clip_.get(); }
 
     void  play()  { playing_ = true; }
@@ -146,7 +143,7 @@ public:
     void tick(float dt);
 
 private:
-    std::shared_ptr<Clip> clip_;
+    cardinal::shared_ptr<Clip> clip_;
     float                 time_   {0.0f};
     float                 speed_  {1.0f};
     bool                  playing_{false};

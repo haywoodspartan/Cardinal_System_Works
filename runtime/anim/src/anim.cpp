@@ -1,7 +1,7 @@
 #include <cardinal/anim/anim.hpp>
 
-#include <algorithm>
-#include <cmath>
+#include <cardinal/core/algorithm.hpp>   // cardinal::lower_bound/max
+#include <cardinal/core/cmath.hpp>       // cardinal::fmod
 
 namespace cardinal::anim {
 
@@ -15,13 +15,13 @@ float wrap_time(float t, float duration, WrapMode mode) noexcept {
             if (t > duration) return duration;
             return t;
         case WrapMode::Loop: {
-            float r = std::fmod(t, duration);
+            float r = cardinal::fmod(t, duration);
             if (r < 0.0f) r += duration;
             return r;
         }
         case WrapMode::PingPong: {
             const float two = 2.0f * duration;
-            float r = std::fmod(t, two);
+            float r = cardinal::fmod(t, two);
             if (r < 0.0f) r += two;
             return r > duration ? (two - r) : r;
         }
@@ -111,13 +111,13 @@ T Curve<T>::sample(float t) const noexcept {
     if (t <= keys.front().time) return keys.front().value;
     if (t >= keys.back().time)  return keys.back().value;
     // Binary search for the segment.
-    auto it = std::lower_bound(keys.begin(), keys.end(), t,
+    auto it = cardinal::lower_bound(keys.begin(), keys.end(), t,
         [](const Key<T>& k, float v){ return k.time < v; });
     const usize i1 = static_cast<usize>(it - keys.begin());
     const usize i0 = i1 - 1;
     const Key<T>& k0 = keys[i0];
     const Key<T>& k1 = keys[i1];
-    const float span = std::max(1e-6f, k1.time - k0.time);
+    const float span = cardinal::max(1e-6f, k1.time - k0.time);
     const float u    = (t - k0.time) / span;
     switch (k0.mode) {
         case InterpMode::Step:         return k0.value;
@@ -133,12 +133,12 @@ template struct Curve<float>;
 template struct Curve<cardinal::scene::Vec3>;
 template struct Curve<cardinal::scene::Vec4>;
 
-void Clip::add_track(std::unique_ptr<ITrack> tr) {
-    tracks_.push_back(std::move(tr));
+void Clip::add_track(cardinal::unique_ptr<ITrack> tr) {
+    tracks_.push_back(cardinal::move(tr));
 }
 float Clip::duration() const noexcept {
     float d = 0.0f;
-    for (const auto& t : tracks_) d = std::max(d, t->duration());
+    for (const auto& t : tracks_) d = cardinal::max(d, t->duration());
     return d;
 }
 void Clip::apply(float t) {
@@ -152,7 +152,7 @@ void Player::tick(float dt) {
     if (dur > 0.0f) {
         if (time_ > dur) {
             if (loop_) {
-                time_ = std::fmod(time_, dur);
+                time_ = cardinal::fmod(time_, dur);
             } else {
                 time_    = dur;
                 playing_ = false;
