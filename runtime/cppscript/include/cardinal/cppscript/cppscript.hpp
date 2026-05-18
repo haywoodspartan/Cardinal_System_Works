@@ -42,11 +42,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-
-#include <functional>
-#include <memory>
-#include <string>
-#include <vector>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::cppscript {
 
@@ -67,10 +63,10 @@ struct JobHandle { u64 id{0}; explicit operator bool() const { return id != 0; }
 // Snapshot of a job's state — returned by Engine::query().
 struct JobInfo {
     JobHandle    handle;
-    std::string  source_path;     // input .cpp
-    std::string  dll_path;        // output .dll (filled once compile starts)
+    cardinal::string  source_path;     // input .cpp
+    cardinal::string  dll_path;        // output .dll (filled once compile starts)
     JobStatus    status{JobStatus::Pending};
-    std::string  diagnostics;     // compiler stdout+stderr; populated on completion
+    cardinal::string  diagnostics;     // compiler stdout+stderr; populated on completion
     i64          exit_code{0};    // compiler exit code; valid once status >= LoadPending
     f64          elapsed_seconds{0.0};
 };
@@ -84,20 +80,20 @@ enum class CompilerKind : u32 { Auto, ClangCl, ClPath, ClangPosix };
 
 struct Desc {
     // Where to drop compiled .dll/.so files. Defaults to <exe>/cppscript_cache.
-    std::string cache_dir{};
+    cardinal::string cache_dir{};
 
     // Extra compile flags appended to the default set (the defaults
     // already include /std:c++23 /MD /EHsc /Zc:preprocessor /D_HAS_EXCEPTIONS=1
     // on MSVC; -std=c++23 -fPIC on POSIX).
-    std::vector<std::string> extra_flags{};
+    cardinal::vector<cardinal::string> extra_flags{};
 
     // Include search dirs added to the compile command (the engine's own
     // public-include tree should be added here so scripts can reach the
     // plugin headers).
-    std::vector<std::string> include_dirs{};
+    cardinal::vector<cardinal::string> include_dirs{};
 
     // Macro definitions added to the compile command.
-    std::vector<std::string> defines{};
+    cardinal::vector<cardinal::string> defines{};
 
     // Compiler choice (Auto by default).
     CompilerKind compiler{CompilerKind::Auto};
@@ -105,16 +101,16 @@ struct Desc {
     // Override path to the compiler executable. When non-empty, takes
     // precedence over `compiler`. Use this to pin a specific clang-cl /
     // cl.exe (e.g. an installed VS2022 path).
-    std::string compiler_override{};
+    cardinal::string compiler_override{};
 };
 
 // Optional callback fired once per terminal job state transition (Loaded /
 // CompileFailed / LoadFailed). Useful for the Studio panel to refresh.
-using JobObserver = std::function<void(const JobInfo&)>;
+using JobObserver = cardinal::function<void(const JobInfo&)>;
 
 class Engine {
 public:
-    static std::unique_ptr<Engine> create(const Desc& desc);
+    static cardinal::unique_ptr<Engine> create(const Desc& desc);
     virtual ~Engine() = default;
     Engine(const Engine&)            = delete;
     Engine& operator=(const Engine&) = delete;
@@ -151,10 +147,10 @@ public:
 
     // Read-only snapshots.
     virtual JobInfo              query(JobHandle h) const = 0;
-    virtual std::vector<JobInfo> jobs() const = 0;
+    virtual cardinal::vector<JobInfo> jobs() const = 0;
     // Path of the resolved compiler executable (for the `cppscript.compiler`
     // console command). Empty when no compiler was found.
-    virtual std::string          compiler_path() const = 0;
+    virtual cardinal::string          compiler_path() const = 0;
 
 protected:
     Engine() = default;

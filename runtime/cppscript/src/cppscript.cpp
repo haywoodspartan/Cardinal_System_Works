@@ -19,20 +19,18 @@
 #include <cardinal/core/platform.hpp>
 #include <cardinal/plugin/plugin.hpp>
 
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
-#include <cstdlib>
-#include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <mutex>
-#include <queue>
-#include <string>
-#include <thread>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/atomic.hpp>
+#include <cardinal/core/chrono.hpp>
+#include <cardinal/core/cctype.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/cstdlib.hpp>
+#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/filesystem.hpp>
+#include <cardinal/core/fstream.hpp>
+#include <cardinal/core/thread.hpp>
+#include <cardinal/core/utility.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
     #ifndef WIN32_LEAN_AND_MEAN
@@ -48,7 +46,7 @@
 
 namespace cardinal::cppscript {
 
-namespace fs = std::filesystem;
+namespace fs = cardinal::fs;
 
 // ----------------------------------------------------------------------------
 // Compiler discovery — runs once at Engine::create. Probes a few candidates
@@ -56,48 +54,48 @@ namespace fs = std::filesystem;
 // ----------------------------------------------------------------------------
 namespace {
 
-bool file_exists(const std::string& path) {
-    std::error_code ec;
+bool file_exists(const cardinal::string& path) {
+    cardinal::error_code ec;
     return !path.empty() && fs::exists(path, ec) && fs::is_regular_file(path, ec);
 }
 
-std::string from_env(const char* name) {
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string{};
+cardinal::string from_env(const char* name) {
+    const char* v = cardinal::getenv(name);
+    return v ? cardinal::string(v) : cardinal::string{};
 }
 
 #if CARDINAL_PLATFORM_WINDOWS
 // `where <exe>` returns the first hit on PATH. We invoke it via popen because
 // implementing the full PATH walk + .EXE/.CMD/.BAT extension search would
 // duplicate cmd.exe's logic and is brittle on systems with PATHEXT tweaks.
-std::string which_via_where(const char* exe_basename) {
-    std::string cmd = "where ";
+cardinal::string which_via_where(const char* exe_basename) {
+    cardinal::string cmd = "where ";
     cmd += exe_basename;
     cmd += " 2>NUL";
     FILE* f = _popen(cmd.c_str(), "r");
     if (f == nullptr) return {};
-    std::string out;
+    cardinal::string out;
     char buf[1024];
-    while (std::fgets(buf, sizeof(buf), f) != nullptr) out += buf;
+    while (cardinal::fgets(buf, sizeof(buf), f) != nullptr) out += buf;
     _pclose(f);
     // Strip the first line (where prints multiple if there are multiple hits).
     auto nl = out.find_first_of("\r\n");
-    if (nl != std::string::npos) out.resize(nl);
+    if (nl != cardinal::string::npos) out.resize(nl);
     return out;
 }
 
 // vswhere.exe ships with every Visual Studio 2017+ install; locating it is
 // reliable because Microsoft committed to its location.
-std::string vswhere_find_install_path() {
-    const std::string vswhere =
+cardinal::string vswhere_find_install_path() {
+    const cardinal::string vswhere =
         R"(C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe)";
     if (!file_exists(vswhere)) return {};
-    std::string cmd = "\"" + vswhere +
+    cardinal::string cmd = "\"" + vswhere +
         R"(" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>NUL)";
     FILE* f = _popen(cmd.c_str(), "r");
     if (f == nullptr) return {};
-    char buf[1024]; std::string install_path;
-    while (std::fgets(buf, sizeof(buf), f) != nullptr) install_path += buf;
+    char buf[1024]; cardinal::string install_path;
+    while (cardinal::fgets(buf, sizeof(buf), f) != nullptr) install_path += buf;
     _pclose(f);
     while (!install_path.empty() &&
            (install_path.back() == '\n' || install_path.back() == '\r' ||
@@ -105,38 +103,38 @@ std::string vswhere_find_install_path() {
     return install_path;
 }
 
-std::string vswhere_find_cl() {
-    const std::string install_path = vswhere_find_install_path();
+cardinal::string vswhere_find_cl() {
+    const cardinal::string install_path = vswhere_find_install_path();
     if (install_path.empty()) return {};
 
     fs::path tools = fs::path(install_path) / "VC" / "Tools" / "MSVC";
-    std::error_code ec;
+    cardinal::error_code ec;
     if (!fs::exists(tools, ec)) return {};
 
-    std::string best_version;
+    cardinal::string best_version;
     for (auto& e : fs::directory_iterator(tools, ec)) {
         if (!e.is_directory(ec)) continue;
-        const std::string v = e.path().filename().string();
+        const cardinal::string v = e.path().filename().string();
         if (v > best_version) best_version = v;
     }
     if (best_version.empty()) return {};
 
     fs::path cl = tools / best_version / "bin" / "Hostx64" / "x64" / "cl.exe";
-    return file_exists(cl.string()) ? cl.string() : std::string{};
+    return file_exists(cl.string()) ? cl.string() : cardinal::string{};
 }
 
 // Locate VsDevCmd.bat. Sourced before each cl.exe invocation so cl can find
 // <cstddef>, <Windows.h>, kernel32.lib, etc. without us re-implementing the
 // full INCLUDE/LIB scan. vswhere → installationPath → Common7\Tools\VsDevCmd.bat.
-std::string vswhere_find_vsdevcmd() {
-    const std::string install_path = vswhere_find_install_path();
+cardinal::string vswhere_find_vsdevcmd() {
+    const cardinal::string install_path = vswhere_find_install_path();
     if (install_path.empty()) return {};
     fs::path bat = fs::path(install_path) / "Common7" / "Tools" / "VsDevCmd.bat";
-    return file_exists(bat.string()) ? bat.string() : std::string{};
+    return file_exists(bat.string()) ? bat.string() : cardinal::string{};
 }
 #endif
 
-std::string discover_compiler(const Desc& d) {
+cardinal::string discover_compiler(const Desc& d) {
     if (!d.compiler_override.empty() && file_exists(d.compiler_override)) {
         return d.compiler_override;
     }
@@ -154,12 +152,12 @@ std::string discover_compiler(const Desc& d) {
 #else
     (void)d;
     // POSIX path: just probe PATH for clang++ then g++.
-    auto which = [](const char* name) -> std::string {
-        std::string cmd = std::string("which ") + name + " 2>/dev/null";
+    auto which = [](const char* name) -> cardinal::string {
+        cardinal::string cmd = cardinal::string("which ") + name + " 2>/dev/null";
         FILE* f = popen(cmd.c_str(), "r");
         if (!f) return {};
-        char buf[512]; std::string out;
-        while (std::fgets(buf, sizeof(buf), f)) out += buf;
+        char buf[512]; cardinal::string out;
+        while (cardinal::fgets(buf, sizeof(buf), f)) out += buf;
         pclose(f);
         while (!out.empty() && (out.back()=='\n' || out.back()=='\r')) out.pop_back();
         return out;
@@ -170,27 +168,27 @@ std::string discover_compiler(const Desc& d) {
     return {};
 }
 
-bool compiler_is_msvc_style(const std::string& path) {
+bool compiler_is_msvc_style(const cardinal::string& path) {
     // clang-cl AND cl.exe both accept MSVC-style flags ("/std:c++23"), so
     // we treat them the same for command-line construction.
     auto base = fs::path(path).filename().string();
-    for (auto& c : base) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (auto& c : base) c = static_cast<char>(cardinal::tolower(static_cast<unsigned char>(c)));
     return base == "cl.exe" || base == "clang-cl.exe";
 }
 
 // Run a child process; capture stdout+stderr together; block until exit.
 // Returns the process exit code (-1 on spawn failure).
-i64 run_subprocess_capturing(const std::string& exe,
-                             const std::vector<std::string>& argv,
-                             std::string& out_log)
+i64 run_subprocess_capturing(const cardinal::string& exe,
+                             const cardinal::vector<cardinal::string>& argv,
+                             cardinal::string& out_log)
 {
 #if CARDINAL_PLATFORM_WINDOWS
     // Build a properly-quoted command line. Standard CreateProcess quoting:
     // wrap each argv in double-quotes, escape embedded "s as \", escape
     // embedded backslashes that immediately precede a quote.
-    auto quote = [](const std::string& s) -> std::string {
-        if (!s.empty() && s.find_first_of(" \t\"") == std::string::npos) return s;
-        std::string q = "\"";
+    auto quote = [](const cardinal::string& s) -> cardinal::string {
+        if (!s.empty() && s.find_first_of(" \t\"") == cardinal::string::npos) return s;
+        cardinal::string q = "\"";
         size_t bs = 0;
         for (char c : s) {
             if (c == '\\') { ++bs; q.push_back(c); continue; }
@@ -207,7 +205,7 @@ i64 run_subprocess_capturing(const std::string& exe,
         q.push_back('"');
         return q;
     };
-    std::string cmdline = quote(exe);
+    cardinal::string cmdline = quote(exe);
     for (const auto& a : argv) { cmdline.push_back(' '); cmdline += quote(a); }
 
     SECURITY_ATTRIBUTES sa{};
@@ -236,7 +234,7 @@ i64 run_subprocess_capturing(const std::string& exe,
     CloseHandle(wr);
     if (!ok) {
         CloseHandle(rd);
-        out_log = "[cppscript] CreateProcessA failed: " + std::to_string(GetLastError()) + "\n";
+        out_log = "[cppscript] CreateProcessA failed: " + cardinal::to_string(GetLastError()) + "\n";
         return -1;
     }
 
@@ -265,7 +263,7 @@ i64 run_subprocess_capturing(const std::string& exe,
     posix_spawn_file_actions_adddup2 (&fa, pipe_fd[1], STDERR_FILENO);
     posix_spawn_file_actions_addclose(&fa, pipe_fd[1]);
 
-    std::vector<char*> argv_c;
+    cardinal::vector<char*> argv_c;
     argv_c.reserve(argv.size() + 2);
     argv_c.push_back(const_cast<char*>(exe.c_str()));
     for (auto& a : argv) argv_c.push_back(const_cast<char*>(a.c_str()));
@@ -339,16 +337,16 @@ public:
             // but cwd is what the launcher already sets to bin/.
             desc_.cache_dir = (fs::current_path() / "cppscript_cache").string();
         }
-        std::error_code ec;
+        cardinal::error_code ec;
         fs::create_directories(desc_.cache_dir, ec);
 
-        worker_ = std::thread([this]{ worker_main(); });
+        worker_ = cardinal::thread([this]{ worker_main(); });
         return true;
     }
 
     ~EngineImpl() override {
         {
-            std::lock_guard lk(queue_mu_);
+            cardinal::lock_guard lk(queue_mu_);
             shutting_down_ = true;
             queue_cv_.notify_all();
         }
@@ -357,8 +355,8 @@ public:
 
     JobHandle compile_and_load(const char* source_path) override {
         if (source_path == nullptr || *source_path == '\0') return {};
-        std::error_code ec;
-        std::string canon = fs::weakly_canonical(source_path, ec).string();
+        cardinal::error_code ec;
+        cardinal::string canon = fs::weakly_canonical(source_path, ec).string();
         if (canon.empty()) canon = source_path;
         return enqueue_job_(canon, /*is_string=*/false, /*literal=*/{});
     }
@@ -371,11 +369,11 @@ public:
         // see it. We use the logical name for the on-disk file too so
         // multiple compile_string calls with the same name overwrite each
         // other (intended for live-edit workflows).
-        std::string fname = std::string(logical_name) + ".cpp";
+        cardinal::string fname = cardinal::string(logical_name) + ".cpp";
         // Sanitise: strip path separators so the user can't escape the cache.
         for (char& c : fname) if (c == '/' || c == '\\') c = '_';
         fs::path src = fs::path(desc_.cache_dir) / fname;
-        std::ofstream f(src, std::ios::binary | std::ios::trunc);
+        cardinal::ofstream f(src, cardinal::ios::binary | cardinal::ios::trunc);
         if (!f) return {};
         f << source_code;
         f.close();
@@ -387,7 +385,7 @@ public:
         // Look up which DLL we built for this source so the user can pass
         // either the .cpp source path or the plugin's name.
         {
-            std::lock_guard lk(records_mu_);
+            cardinal::lock_guard lk(records_mu_);
             for (auto& [id, r] : records_) {
                 if (r.source_path == name_or_path) {
                     return cardinal::plugin::Registry::instance().unload(
@@ -405,9 +403,9 @@ public:
         // unload + load to force a re-attach.
         if (source_path == nullptr) return {};
         // Find prior DLL output for this source so we can unload first.
-        std::string prior_dll;
+        cardinal::string prior_dll;
         {
-            std::lock_guard lk(records_mu_);
+            cardinal::lock_guard lk(records_mu_);
             for (auto& [id, r] : records_) {
                 if (r.source_path == source_path && !r.dll_path.empty()) {
                     prior_dll = r.dll_path;
@@ -423,18 +421,18 @@ public:
 
     void watch(const char* path) override {
         if (path == nullptr) return;
-        std::lock_guard lk(watch_mu_);
+        cardinal::lock_guard lk(watch_mu_);
         WatchEntry e;
         e.path = path;
-        std::error_code ec;
+        cardinal::error_code ec;
         e.last_mtime = fs::last_write_time(path, ec);
-        watches_.push_back(std::move(e));
+        watches_.push_back(cardinal::move(e));
     }
 
     void unwatch(const char* path) override {
         if (path == nullptr) return;
-        std::lock_guard lk(watch_mu_);
-        watches_.erase(std::remove_if(watches_.begin(), watches_.end(),
+        cardinal::lock_guard lk(watch_mu_);
+        watches_.erase(cardinal::remove_if(watches_.begin(), watches_.end(),
             [&](const WatchEntry& e){ return e.path == path; }),
             watches_.end());
     }
@@ -443,9 +441,9 @@ public:
         // 1. Promote LoadPending records → actual plugin load. This MUST
         //    run on the main thread because LoadLibrary + plugin on_attach
         //    aren't thread-safe relative to the engine.
-        std::vector<u64> to_load;
+        cardinal::vector<u64> to_load;
         {
-            std::lock_guard lk(records_mu_);
+            cardinal::lock_guard lk(records_mu_);
             for (auto& [id, r] : records_) {
                 if (r.status == JobStatus::LoadPending) to_load.push_back(id);
             }
@@ -457,35 +455,35 @@ public:
     }
 
     void set_observer(JobObserver cb) override {
-        std::lock_guard lk(records_mu_);
-        observer_ = std::move(cb);
+        cardinal::lock_guard lk(records_mu_);
+        observer_ = cardinal::move(cb);
     }
 
     JobInfo query(JobHandle h) const override {
-        std::lock_guard lk(records_mu_);
+        cardinal::lock_guard lk(records_mu_);
         auto it = records_.find(h.id);
         return (it != records_.end()) ? it->second.snapshot() : JobInfo{};
     }
 
-    std::vector<JobInfo> jobs() const override {
-        std::vector<JobInfo> out;
-        std::lock_guard lk(records_mu_);
+    cardinal::vector<JobInfo> jobs() const override {
+        cardinal::vector<JobInfo> out;
+        cardinal::lock_guard lk(records_mu_);
         out.reserve(records_.size());
         for (auto& [id, r] : records_) out.push_back(r.snapshot());
         return out;
     }
 
-    std::string compiler_path() const override { return compiler_; }
+    cardinal::string compiler_path() const override { return compiler_; }
 
 private:
     struct Record {
         JobHandle    handle;
-        std::string  source_path;
-        std::string  dll_path;
+        cardinal::string  source_path;
+        cardinal::string  dll_path;
         JobStatus    status{JobStatus::Pending};
-        std::string  diagnostics;
+        cardinal::string  diagnostics;
         i64          exit_code{0};
-        std::chrono::steady_clock::time_point t_start;
+        cardinal::chrono::steady_clock::time_point t_start;
         f64          elapsed_seconds{0.0};
 
         JobInfo snapshot() const {
@@ -501,9 +499,9 @@ private:
         }
     };
 
-    JobHandle enqueue_job_(const std::string& source_path,
+    JobHandle enqueue_job_(const cardinal::string& source_path,
                            bool /*is_string*/,
-                           const std::string& /*literal*/)
+                           const cardinal::string& /*literal*/)
     {
         const u64 id = ++next_job_id_;
         Record r;
@@ -511,16 +509,16 @@ private:
         r.source_path  = source_path;
         // Output DLL path: <cache>/<base>.<id>.dll. Embedding the job id
         // means hot-reload always loads a fresh DLL the loader hasn't seen.
-        const std::string base = fs::path(source_path).stem().string();
+        const cardinal::string base = fs::path(source_path).stem().string();
         r.dll_path     = (fs::path(desc_.cache_dir) /
-                          (base + "." + std::to_string(id) + ".dll")).string();
-        r.t_start      = std::chrono::steady_clock::now();
+                          (base + "." + cardinal::to_string(id) + ".dll")).string();
+        r.t_start      = cardinal::chrono::steady_clock::now();
         {
-            std::lock_guard lk(records_mu_);
-            records_.emplace(id, std::move(r));
+            cardinal::lock_guard lk(records_mu_);
+            records_.emplace(id, cardinal::move(r));
         }
         {
-            std::lock_guard lk(queue_mu_);
+            cardinal::lock_guard lk(queue_mu_);
             queue_.push(id);
             queue_cv_.notify_one();
         }
@@ -531,7 +529,7 @@ private:
         for (;;) {
             u64 id = 0;
             {
-                std::unique_lock lk(queue_mu_);
+                cardinal::unique_lock lk(queue_mu_);
                 queue_cv_.wait(lk, [&]{ return shutting_down_ || !queue_.empty(); });
                 if (shutting_down_ && queue_.empty()) return;
                 id = queue_.front(); queue_.pop();
@@ -543,9 +541,9 @@ private:
     void run_compile_job_(u64 id) {
         // Snapshot what we need under the lock so we don't hold it across
         // the compiler subprocess (which can take seconds).
-        std::string source_path, dll_path;
+        cardinal::string source_path, dll_path;
         {
-            std::lock_guard lk(records_mu_);
+            cardinal::lock_guard lk(records_mu_);
             auto it = records_.find(id);
             if (it == records_.end()) return;
             it->second.status = JobStatus::Compiling;
@@ -558,8 +556,8 @@ private:
             return;
         }
 
-        std::vector<std::string> args = build_compile_args_(source_path, dll_path);
-        std::string log;
+        cardinal::vector<cardinal::string> args = build_compile_args_(source_path, dll_path);
+        cardinal::string log;
         i64 rc = -1;
 
 #if CARDINAL_PLATFORM_WINDOWS
@@ -570,7 +568,7 @@ private:
         // and returns a pipe with stdout+stderr (because of 2>&1 + cmd's
         // own pipe handling).
         if (compiler_is_msvc_style(compiler_) && !vsdevcmd_path_.empty()) {
-            std::string cmdline;
+            cardinal::string cmdline;
             cmdline.reserve(2048);
             // Outer quotes are critical — cmd /c "..." treats the contents
             // as a single command.
@@ -581,7 +579,7 @@ private:
             cmdline += "\"";
             for (const auto& a : args) {
                 cmdline += " ";
-                if (a.find_first_of(" \t\"") != std::string::npos) {
+                if (a.find_first_of(" \t\"") != cardinal::string::npos) {
                     cmdline += "\"";
                     for (char c : a) {
                         if (c == '"') cmdline += "\\\"";
@@ -603,7 +601,7 @@ private:
                 rc = -1;
             } else {
                 char buf[4096];
-                while (std::fgets(buf, sizeof(buf), f) != nullptr) log += buf;
+                while (cardinal::fgets(buf, sizeof(buf), f) != nullptr) log += buf;
                 int term = _pclose(f);
                 rc = static_cast<i64>(term);
             }
@@ -614,16 +612,16 @@ private:
         }
 
         if (rc != 0 || !file_exists(dll_path)) {
-            finalize_(id, JobStatus::CompileFailed, rc, std::move(log));
+            finalize_(id, JobStatus::CompileFailed, rc, cardinal::move(log));
             return;
         }
-        finalize_(id, JobStatus::LoadPending, rc, std::move(log));
+        finalize_(id, JobStatus::LoadPending, rc, cardinal::move(log));
     }
 
-    std::vector<std::string> build_compile_args_(const std::string& src,
-                                                 const std::string& dll)
+    cardinal::vector<cardinal::string> build_compile_args_(const cardinal::string& src,
+                                                 const cardinal::string& dll)
     {
-        std::vector<std::string> a;
+        cardinal::vector<cardinal::string> a;
         const bool msvc = compiler_is_msvc_style(compiler_);
         if (msvc) {
             a.push_back("/nologo");
@@ -643,7 +641,7 @@ private:
             a.push_back("/Fe:" + dll);
             // Drop intermediate .obj / .exp / .lib next to the DLL so the
             // cache_dir doesn't accumulate clutter elsewhere.
-            const std::string stem = (fs::path(dll).parent_path() / fs::path(dll).stem()).string();
+            const cardinal::string stem = (fs::path(dll).parent_path() / fs::path(dll).stem()).string();
             a.push_back("/Fo" + stem + ".obj");
             a.push_back("/link");
             a.push_back("/IMPLIB:" + stem + ".lib");
@@ -664,18 +662,18 @@ private:
         return a;
     }
 
-    void finalize_(u64 id, JobStatus status, i64 rc, std::string log) {
+    void finalize_(u64 id, JobStatus status, i64 rc, cardinal::string log) {
         JobInfo snap;
         JobObserver cb_copy;
         {
-            std::lock_guard lk(records_mu_);
+            cardinal::lock_guard lk(records_mu_);
             auto it = records_.find(id);
             if (it == records_.end()) return;
             it->second.status      = status;
             it->second.exit_code   = rc;
-            it->second.diagnostics = std::move(log);
-            it->second.elapsed_seconds = std::chrono::duration<f64>(
-                std::chrono::steady_clock::now() - it->second.t_start).count();
+            it->second.diagnostics = cardinal::move(log);
+            it->second.elapsed_seconds = cardinal::chrono::duration<f64>(
+                cardinal::chrono::steady_clock::now() - it->second.t_start).count();
             snap   = it->second.snapshot();
             cb_copy = observer_;
         }
@@ -687,9 +685,9 @@ private:
     }
 
     void attempt_load_main_thread_(u64 id) {
-        std::string dll_path; std::string source_path;
+        cardinal::string dll_path; cardinal::string source_path;
         {
-            std::lock_guard lk(records_mu_);
+            cardinal::lock_guard lk(records_mu_);
             auto it = records_.find(id);
             if (it == records_.end()) return;
             if (it->second.status != JobStatus::LoadPending) return;
@@ -700,7 +698,7 @@ private:
         // dll_path (because we embed the job id in the filename), unload it
         // first so two copies don't run simultaneously.
         {
-            std::lock_guard lk(records_mu_);
+            cardinal::lock_guard lk(records_mu_);
             for (auto& [oid, r] : records_) {
                 if (oid == id) continue;
                 if (r.source_path == source_path &&
@@ -714,7 +712,7 @@ private:
         const bool ok = cardinal::plugin::Registry::instance().load(dll_path.c_str());
         JobObserver cb_copy; JobInfo snap;
         {
-            std::lock_guard lk(records_mu_);
+            cardinal::lock_guard lk(records_mu_);
             auto it = records_.find(id);
             if (it == records_.end()) return;
             it->second.status = ok ? JobStatus::Loaded : JobStatus::LoadFailed;
@@ -725,11 +723,11 @@ private:
     }
 
     void service_watches_() {
-        std::vector<std::string> reload_paths;
+        cardinal::vector<cardinal::string> reload_paths;
         {
-            std::lock_guard lk(watch_mu_);
+            cardinal::lock_guard lk(watch_mu_);
             for (auto& w : watches_) {
-                std::error_code ec;
+                cardinal::error_code ec;
                 if (!fs::exists(w.path, ec)) continue;
                 auto m = fs::last_write_time(w.path, ec);
                 if (ec) continue;
@@ -746,32 +744,32 @@ private:
     }
 
     Desc                                desc_;
-    std::string                         compiler_;
+    cardinal::string                         compiler_;
     // MSVC-only — the .bat script we source in each child process to set
     // up INCLUDE / LIB / PATH for cl.exe before it runs. Empty when the
     // compiler isn't MSVC-style or VsDevCmd.bat couldn't be located.
-    std::string                         vsdevcmd_path_;
-    std::thread                         worker_;
-    std::mutex                          queue_mu_;
-    std::condition_variable             queue_cv_;
-    std::queue<u64>                     queue_;
+    cardinal::string                         vsdevcmd_path_;
+    cardinal::thread                         worker_;
+    cardinal::mutex                          queue_mu_;
+    cardinal::condition_variable             queue_cv_;
+    cardinal::queue<u64>                     queue_;
     bool                                shutting_down_{false};
 
-    mutable std::mutex                  records_mu_;
-    std::unordered_map<u64, Record>     records_;
-    std::atomic<u64>                    next_job_id_{0};
+    mutable cardinal::mutex                  records_mu_;
+    cardinal::unordered_map<u64, Record>     records_;
+    cardinal::atomic<u64>                    next_job_id_{0};
     JobObserver                         observer_;
 
     struct WatchEntry {
-        std::string                     path;
+        cardinal::string                     path;
         fs::file_time_type              last_mtime{};
     };
-    std::mutex                          watch_mu_;
-    std::vector<WatchEntry>             watches_;
+    cardinal::mutex                          watch_mu_;
+    cardinal::vector<WatchEntry>             watches_;
 };
 
-std::unique_ptr<Engine> Engine::create(const Desc& desc) {
-    auto e = std::make_unique<EngineImpl>(desc);
+cardinal::unique_ptr<Engine> Engine::create(const Desc& desc) {
+    auto e = cardinal::make_unique<EngineImpl>(desc);
     if (!e->initialize()) return nullptr;
     return e;
 }
