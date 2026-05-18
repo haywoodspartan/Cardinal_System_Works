@@ -12,15 +12,10 @@
 // `find(key) -> bytes` interface; the Registry doesn't care.
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
+#include <cardinal/core/types.hpp>        // function/memory/string
+#include <cardinal/core/containers.hpp>   // unordered_map/vector
 #include <cardinal/cook/cook.hpp>
 #include <cardinal/scene/math.hpp>
-
-#include <functional>
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <vector>
 
 namespace cardinal::pack { class Archive; }
 
@@ -34,7 +29,7 @@ struct TextureAsset {
     u32             width{0};
     u32             height{0};
     u32             channels{4};
-    std::vector<u8> rgba;          // size = width*height*channels
+    cardinal::vector<u8> rgba;          // size = width*height*channels
 };
 
 struct MeshVertex {
@@ -44,14 +39,14 @@ struct MeshVertex {
 };
 
 struct MeshAsset {
-    std::vector<MeshVertex> vertices;
-    std::vector<u32>        indices;     // triangle list
+    cardinal::vector<MeshVertex> vertices;
+    cardinal::vector<u32>        indices;     // triangle list
 };
 
 struct ShaderAsset {
     u32              stage{0};            // shader::Stage as u32
-    std::string      entry_point;
-    std::vector<u8>  bytecode;            // SPIR-V or DXIL
+    cardinal::string      entry_point;
+    cardinal::vector<u8>  bytecode;            // SPIR-V or DXIL
 };
 
 // PBR-ish material properties. Renderer's "Solid" mode multiplies these
@@ -62,7 +57,7 @@ struct MaterialAsset {
     float                 roughness  {0.5f};
     cardinal::scene::Vec3 emission   {0.0f, 0.0f, 0.0f};
     float                 emission_strength{0.0f};
-    std::string           base_color_texture;     // asset key (optional)
+    cardinal::string           base_color_texture;     // asset key (optional)
 };
 
 // ---------------------------------------------------------------------------
@@ -70,35 +65,35 @@ struct MaterialAsset {
 // ---------------------------------------------------------------------------
 class Registry {
 public:
-    static std::shared_ptr<Registry> create();
+    static cardinal::shared_ptr<Registry> create();
     ~Registry();
 
     // ----- Backing-store mounts -------------------------------------
-    void mount_directory(const std::string& cooked_dir);
-    void mount_archive  (std::shared_ptr<cardinal::pack::Archive> archive);
+    void mount_directory(const cardinal::string& cooked_dir);
+    void mount_archive  (cardinal::shared_ptr<cardinal::pack::Archive> archive);
     void clear_mounts() noexcept;
 
     // ----- Existence query ------------------------------------------
-    bool                       contains(const std::string& key) const;
-    cook::AssetType            type_of(const std::string& key) const;
-    std::vector<std::string>   keys() const;
+    bool                       contains(const cardinal::string& key) const;
+    cook::AssetType            type_of(const cardinal::string& key) const;
+    cardinal::vector<cardinal::string>   keys() const;
 
     // ----- Typed loaders -------------------------------------------
     // Each returns a shared_ptr cached by key. If the asset is missing or
     // the cooked blob doesn't decode as the expected type, returns null.
-    std::shared_ptr<TextureAsset>  load_texture (const std::string& key);
-    std::shared_ptr<MeshAsset>     load_mesh    (const std::string& key);
-    std::shared_ptr<ShaderAsset>   load_shader  (const std::string& key);
-    std::shared_ptr<MaterialAsset> load_material(const std::string& key);
+    cardinal::shared_ptr<TextureAsset>  load_texture (const cardinal::string& key);
+    cardinal::shared_ptr<MeshAsset>     load_mesh    (const cardinal::string& key);
+    cardinal::shared_ptr<ShaderAsset>   load_shader  (const cardinal::string& key);
+    cardinal::shared_ptr<MaterialAsset> load_material(const cardinal::string& key);
 
     // Generic raw-bytes loader (still indirects through cooked-blob unwrap).
-    bool load_raw(const std::string& key, std::vector<u8>& out_bytes);
+    bool load_raw(const cardinal::string& key, cardinal::vector<u8>& out_bytes);
 
     // ----- Material registration / overrides ------------------------
     // Materials are tiny, so we keep them in-memory (no disk round-trip
     // unless explicitly cooked). register_material lets game/editor code
     // create runtime materials that look the same as cooked ones.
-    void register_material(const std::string& key, MaterialAsset m);
+    void register_material(const cardinal::string& key, MaterialAsset m);
 
     struct Stats {
         u32 mount_dirs{0};
@@ -113,29 +108,29 @@ public:
 
 private:
     Registry() = default;
-    bool fetch_raw_(const std::string& key, std::vector<u8>& out_bytes,
+    bool fetch_raw_(const cardinal::string& key, cardinal::vector<u8>& out_bytes,
                     cook::AssetType* out_type);
 
-    std::vector<std::string>                                    dirs_;
-    std::vector<std::shared_ptr<cardinal::pack::Archive>>       archives_;
-    std::unordered_map<std::string, std::shared_ptr<TextureAsset>>  tex_cache_;
-    std::unordered_map<std::string, std::shared_ptr<MeshAsset>>     mesh_cache_;
-    std::unordered_map<std::string, std::shared_ptr<ShaderAsset>>   shader_cache_;
-    std::unordered_map<std::string, std::shared_ptr<MaterialAsset>> mat_cache_;
+    cardinal::vector<cardinal::string>                                    dirs_;
+    cardinal::vector<cardinal::shared_ptr<cardinal::pack::Archive>>       archives_;
+    cardinal::unordered_map<cardinal::string, cardinal::shared_ptr<TextureAsset>>  tex_cache_;
+    cardinal::unordered_map<cardinal::string, cardinal::shared_ptr<MeshAsset>>     mesh_cache_;
+    cardinal::unordered_map<cardinal::string, cardinal::shared_ptr<ShaderAsset>>   shader_cache_;
+    cardinal::unordered_map<cardinal::string, cardinal::shared_ptr<MaterialAsset>> mat_cache_;
 };
 
 // ---------------------------------------------------------------------------
 // Helpers — typed serialise/deserialise of the cook payloads.
 // ---------------------------------------------------------------------------
 namespace codec {
-    std::vector<u8>  encode_texture (const TextureAsset& t);
-    bool             decode_texture (const std::vector<u8>& bytes, TextureAsset& out);
-    std::vector<u8>  encode_mesh    (const MeshAsset& m);
-    bool             decode_mesh    (const std::vector<u8>& bytes, MeshAsset& out);
-    std::vector<u8>  encode_shader  (const ShaderAsset& s);
-    bool             decode_shader  (const std::vector<u8>& bytes, ShaderAsset& out);
-    std::vector<u8>  encode_material(const MaterialAsset& m);
-    bool             decode_material(const std::vector<u8>& bytes, MaterialAsset& out);
+    cardinal::vector<u8>  encode_texture (const TextureAsset& t);
+    bool             decode_texture (const cardinal::vector<u8>& bytes, TextureAsset& out);
+    cardinal::vector<u8>  encode_mesh    (const MeshAsset& m);
+    bool             decode_mesh    (const cardinal::vector<u8>& bytes, MeshAsset& out);
+    cardinal::vector<u8>  encode_shader  (const ShaderAsset& s);
+    bool             decode_shader  (const cardinal::vector<u8>& bytes, ShaderAsset& out);
+    cardinal::vector<u8>  encode_material(const MaterialAsset& m);
+    bool             decode_material(const cardinal::vector<u8>& bytes, MaterialAsset& out);
 }
 
 }  // namespace cardinal::asset

@@ -3,12 +3,14 @@
 #include <cardinal/core/log.hpp>
 #include <cardinal/pack/pack.hpp>
 
-#include <algorithm>
-#include <cstring>
-#include <filesystem>
-#include <fstream>
+#include <cardinal/core/algorithm.hpp>    // cardinal::sort/unique
+#include <cardinal/core/cstring.hpp>      // cardinal::memcpy
+#include <cardinal/core/filesystem.hpp>   // cardinal::fs, error_code
+#include <cardinal/core/fstream.hpp>      // cardinal::ifstream/ios
+#include <cardinal/core/utility.hpp>      // cardinal::move
+#include <cardinal/core/containers.hpp>   // cardinal::vector
 
-namespace fs = std::filesystem;
+namespace fs = cardinal::fs;
 
 namespace cardinal::asset {
 
@@ -19,21 +21,21 @@ namespace codec {
 
 namespace {
 
-void wr_u32(std::vector<u8>& o, u32 v) {
+void wr_u32(cardinal::vector<u8>& o, u32 v) {
     o.push_back(static_cast<u8>(v));
     o.push_back(static_cast<u8>(v >> 8));
     o.push_back(static_cast<u8>(v >> 16));
     o.push_back(static_cast<u8>(v >> 24));
 }
-void wr_f(std::vector<u8>& o, float v) {
+void wr_f(cardinal::vector<u8>& o, float v) {
     u32 bits;
-    std::memcpy(&bits, &v, sizeof(bits));
+    cardinal::memcpy(&bits, &v, sizeof(bits));
     wr_u32(o, bits);
 }
-void wr_bytes(std::vector<u8>& o, const u8* p, usize n) {
+void wr_bytes(cardinal::vector<u8>& o, const u8* p, usize n) {
     o.insert(o.end(), p, p + n);
 }
-void wr_str(std::vector<u8>& o, const std::string& s) {
+void wr_str(cardinal::vector<u8>& o, const cardinal::string& s) {
     wr_u32(o, static_cast<u32>(s.size()));
     wr_bytes(o, reinterpret_cast<const u8*>(s.data()), s.size());
 }
@@ -45,14 +47,14 @@ u32 rd_u32(const u8* p) {
 float rd_f(const u8* p) {
     u32 bits = rd_u32(p);
     float v;
-    std::memcpy(&v, &bits, sizeof(v));
+    cardinal::memcpy(&v, &bits, sizeof(v));
     return v;
 }
 
 }  // namespace
 
-std::vector<u8> encode_texture(const TextureAsset& t) {
-    std::vector<u8> o;
+cardinal::vector<u8> encode_texture(const TextureAsset& t) {
+    cardinal::vector<u8> o;
     wr_u32(o, t.width);
     wr_u32(o, t.height);
     wr_u32(o, t.channels);
@@ -61,7 +63,7 @@ std::vector<u8> encode_texture(const TextureAsset& t) {
     return o;
 }
 
-bool decode_texture(const std::vector<u8>& bytes, TextureAsset& out) {
+bool decode_texture(const cardinal::vector<u8>& bytes, TextureAsset& out) {
     if (bytes.size() < 16) return false;
     out.width    = rd_u32(bytes.data() + 0);
     out.height   = rd_u32(bytes.data() + 4);
@@ -72,8 +74,8 @@ bool decode_texture(const std::vector<u8>& bytes, TextureAsset& out) {
     return true;
 }
 
-std::vector<u8> encode_mesh(const MeshAsset& m) {
-    std::vector<u8> o;
+cardinal::vector<u8> encode_mesh(const MeshAsset& m) {
+    cardinal::vector<u8> o;
     wr_u32(o, static_cast<u32>(m.vertices.size()));
     for (const auto& v : m.vertices) {
         wr_f(o, v.position.x); wr_f(o, v.position.y); wr_f(o, v.position.z);
@@ -85,7 +87,7 @@ std::vector<u8> encode_mesh(const MeshAsset& m) {
     return o;
 }
 
-bool decode_mesh(const std::vector<u8>& bytes, MeshAsset& out) {
+bool decode_mesh(const cardinal::vector<u8>& bytes, MeshAsset& out) {
     if (bytes.size() < 4) return false;
     const u32 vc = rd_u32(bytes.data());
     const usize per_vert = 9 * 4;
@@ -113,8 +115,8 @@ bool decode_mesh(const std::vector<u8>& bytes, MeshAsset& out) {
     return true;
 }
 
-std::vector<u8> encode_shader(const ShaderAsset& s) {
-    std::vector<u8> o;
+cardinal::vector<u8> encode_shader(const ShaderAsset& s) {
+    cardinal::vector<u8> o;
     wr_u32(o, s.stage);
     wr_str(o, s.entry_point);
     wr_u32(o, static_cast<u32>(s.bytecode.size()));
@@ -122,7 +124,7 @@ std::vector<u8> encode_shader(const ShaderAsset& s) {
     return o;
 }
 
-bool decode_shader(const std::vector<u8>& bytes, ShaderAsset& out) {
+bool decode_shader(const cardinal::vector<u8>& bytes, ShaderAsset& out) {
     if (bytes.size() < 8) return false;
     out.stage = rd_u32(bytes.data());
     const u32 nl = rd_u32(bytes.data() + 4);
@@ -137,8 +139,8 @@ bool decode_shader(const std::vector<u8>& bytes, ShaderAsset& out) {
     return true;
 }
 
-std::vector<u8> encode_material(const MaterialAsset& m) {
-    std::vector<u8> o;
+cardinal::vector<u8> encode_material(const MaterialAsset& m) {
+    cardinal::vector<u8> o;
     wr_f(o, m.base_color.x); wr_f(o, m.base_color.y); wr_f(o, m.base_color.z);
     wr_f(o, m.metallic);
     wr_f(o, m.roughness);
@@ -148,7 +150,7 @@ std::vector<u8> encode_material(const MaterialAsset& m) {
     return o;
 }
 
-bool decode_material(const std::vector<u8>& bytes, MaterialAsset& out) {
+bool decode_material(const cardinal::vector<u8>& bytes, MaterialAsset& out) {
     if (bytes.size() < 36) return false;
     out.base_color.x       = rd_f(bytes.data() + 0);
     out.base_color.y       = rd_f(bytes.data() + 4);
@@ -171,18 +173,18 @@ bool decode_material(const std::vector<u8>& bytes, MaterialAsset& out) {
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
-std::shared_ptr<Registry> Registry::create() {
-    return std::shared_ptr<Registry>(new Registry());
+cardinal::shared_ptr<Registry> Registry::create() {
+    return cardinal::shared_ptr<Registry>(new Registry());
 }
 Registry::~Registry() = default;
 
-void Registry::mount_directory(const std::string& dir) { dirs_.push_back(dir); }
-void Registry::mount_archive  (std::shared_ptr<cardinal::pack::Archive> a) {
-    if (a) archives_.push_back(std::move(a));
+void Registry::mount_directory(const cardinal::string& dir) { dirs_.push_back(dir); }
+void Registry::mount_archive  (cardinal::shared_ptr<cardinal::pack::Archive> a) {
+    if (a) archives_.push_back(cardinal::move(a));
 }
 void Registry::clear_mounts() noexcept { dirs_.clear(); archives_.clear(); }
 
-bool Registry::contains(const std::string& key) const {
+bool Registry::contains(const cardinal::string& key) const {
     for (const auto& a : archives_) if (a && a->contains(key)) return true;
     for (const auto& d : dirs_) {
         if (fs::exists(d + "/" + key + ".cooked")) return true;
@@ -190,127 +192,127 @@ bool Registry::contains(const std::string& key) const {
     return false;
 }
 
-cook::AssetType Registry::type_of(const std::string& key) const {
+cook::AssetType Registry::type_of(const cardinal::string& key) const {
     for (const auto& a : archives_) {
         if (auto* e = a ? a->find(key) : nullptr) return e->type;
     }
     return cook::AssetType::Unknown;
 }
 
-std::vector<std::string> Registry::keys() const {
-    std::vector<std::string> r;
+cardinal::vector<cardinal::string> Registry::keys() const {
+    cardinal::vector<cardinal::string> r;
     for (const auto& a : archives_) {
         if (!a) continue;
         for (const auto& e : a->entries()) r.push_back(e.key);
     }
     for (const auto& d : dirs_) {
-        std::error_code ec;
+        cardinal::error_code ec;
         if (!fs::exists(d, ec)) continue;
         for (auto& it : fs::recursive_directory_iterator(d, ec)) {
             if (ec) break;
             if (!it.is_regular_file()) continue;
             if (it.path().extension() != ".cooked") continue;
-            const std::string rel = fs::relative(it.path(), d).string();
+            const cardinal::string rel = fs::relative(it.path(), d).string();
             // Strip ".cooked" suffix.
             r.push_back(rel.substr(0, rel.size() - 7));
         }
     }
-    std::sort(r.begin(), r.end());
-    r.erase(std::unique(r.begin(), r.end()), r.end());
+    cardinal::sort(r.begin(), r.end());
+    r.erase(cardinal::unique(r.begin(), r.end()), r.end());
     return r;
 }
 
-bool Registry::fetch_raw_(const std::string& key, std::vector<u8>& out_bytes,
+bool Registry::fetch_raw_(const cardinal::string& key, cardinal::vector<u8>& out_bytes,
                           cook::AssetType* out_type)
 {
     // Archives win over directories (shipping mode > development mode).
     for (const auto& a : archives_) {
         if (a && a->contains(key)) {
-            std::vector<u8> wrapped;
+            cardinal::vector<u8> wrapped;
             if (!a->load_blocking(key, wrapped)) return false;
             cook::CookedAsset cooked;
             if (!cook::CookedAsset::deserialize(wrapped, cooked)) return false;
             if (out_type) *out_type = cooked.type;
-            out_bytes = std::move(cooked.payload);
+            out_bytes = cardinal::move(cooked.payload);
             return true;
         }
     }
     for (const auto& d : dirs_) {
-        const std::string p = d + "/" + key + ".cooked";
-        std::ifstream f(p, std::ios::binary);
+        const cardinal::string p = d + "/" + key + ".cooked";
+        cardinal::ifstream f(p, cardinal::ios::binary);
         if (!f) continue;
-        f.seekg(0, std::ios::end);
+        f.seekg(0, cardinal::ios::end);
         const auto n = f.tellg();
-        f.seekg(0, std::ios::beg);
-        std::vector<u8> wrapped(static_cast<usize>(n));
+        f.seekg(0, cardinal::ios::beg);
+        cardinal::vector<u8> wrapped(static_cast<usize>(n));
         f.read(reinterpret_cast<char*>(wrapped.data()), n);
         cook::CookedAsset cooked;
         if (!cook::CookedAsset::deserialize(wrapped, cooked)) continue;
         if (out_type) *out_type = cooked.type;
-        out_bytes = std::move(cooked.payload);
+        out_bytes = cardinal::move(cooked.payload);
         return true;
     }
     return false;
 }
 
-bool Registry::load_raw(const std::string& key, std::vector<u8>& out) {
+bool Registry::load_raw(const cardinal::string& key, cardinal::vector<u8>& out) {
     return fetch_raw_(key, out, nullptr);
 }
 
-std::shared_ptr<TextureAsset> Registry::load_texture(const std::string& key) {
+cardinal::shared_ptr<TextureAsset> Registry::load_texture(const cardinal::string& key) {
     auto it = tex_cache_.find(key);
     if (it != tex_cache_.end()) return it->second;
-    std::vector<u8> bytes;
+    cardinal::vector<u8> bytes;
     cook::AssetType type;
     if (!fetch_raw_(key, bytes, &type)) return nullptr;
     if (type != cook::AssetType::Texture) return nullptr;
-    auto a = std::make_shared<TextureAsset>();
+    auto a = cardinal::make_shared<TextureAsset>();
     if (!codec::decode_texture(bytes, *a)) return nullptr;
     tex_cache_[key] = a;
     return a;
 }
 
-std::shared_ptr<MeshAsset> Registry::load_mesh(const std::string& key) {
+cardinal::shared_ptr<MeshAsset> Registry::load_mesh(const cardinal::string& key) {
     auto it = mesh_cache_.find(key);
     if (it != mesh_cache_.end()) return it->second;
-    std::vector<u8> bytes;
+    cardinal::vector<u8> bytes;
     cook::AssetType type;
     if (!fetch_raw_(key, bytes, &type)) return nullptr;
     if (type != cook::AssetType::Mesh) return nullptr;
-    auto a = std::make_shared<MeshAsset>();
+    auto a = cardinal::make_shared<MeshAsset>();
     if (!codec::decode_mesh(bytes, *a)) return nullptr;
     mesh_cache_[key] = a;
     return a;
 }
 
-std::shared_ptr<ShaderAsset> Registry::load_shader(const std::string& key) {
+cardinal::shared_ptr<ShaderAsset> Registry::load_shader(const cardinal::string& key) {
     auto it = shader_cache_.find(key);
     if (it != shader_cache_.end()) return it->second;
-    std::vector<u8> bytes;
+    cardinal::vector<u8> bytes;
     cook::AssetType type;
     if (!fetch_raw_(key, bytes, &type)) return nullptr;
     if (type != cook::AssetType::Shader) return nullptr;
-    auto a = std::make_shared<ShaderAsset>();
+    auto a = cardinal::make_shared<ShaderAsset>();
     if (!codec::decode_shader(bytes, *a)) return nullptr;
     shader_cache_[key] = a;
     return a;
 }
 
-std::shared_ptr<MaterialAsset> Registry::load_material(const std::string& key) {
+cardinal::shared_ptr<MaterialAsset> Registry::load_material(const cardinal::string& key) {
     auto it = mat_cache_.find(key);
     if (it != mat_cache_.end()) return it->second;
-    std::vector<u8> bytes;
+    cardinal::vector<u8> bytes;
     cook::AssetType type;
     if (!fetch_raw_(key, bytes, &type)) return nullptr;
     if (type != cook::AssetType::Material) return nullptr;
-    auto a = std::make_shared<MaterialAsset>();
+    auto a = cardinal::make_shared<MaterialAsset>();
     if (!codec::decode_material(bytes, *a)) return nullptr;
     mat_cache_[key] = a;
     return a;
 }
 
-void Registry::register_material(const std::string& key, MaterialAsset m) {
-    mat_cache_[key] = std::make_shared<MaterialAsset>(std::move(m));
+void Registry::register_material(const cardinal::string& key, MaterialAsset m) {
+    mat_cache_[key] = cardinal::make_shared<MaterialAsset>(cardinal::move(m));
 }
 
 Registry::Stats Registry::stats() const noexcept {
