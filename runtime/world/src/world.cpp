@@ -5,8 +5,9 @@
 
 #include <cardinal/core/log.hpp>
 
-#include <algorithm>
-#include <cmath>
+#include <cardinal/core/algorithm.hpp>   // cardinal::max
+#include <cardinal/core/cmath.hpp>       // cardinal::floor
+// cardinal::move/vector arrive via world.hpp
 
 namespace cardinal::world {
 
@@ -22,12 +23,12 @@ WorldGrid::WorldGrid(const WorldGridDesc& d) noexcept : desc_(d) {
     if (desc_.render_distance_y  < 0)     desc_.render_distance_y  = 0;
 }
 
-void WorldGrid::set_chunk_size(f32 s) noexcept           { desc_.chunk_size = std::max(1e-3f, s); }
-void WorldGrid::set_render_distance_xz(i32 d) noexcept   { desc_.render_distance_xz = std::max(0, d); }
-void WorldGrid::set_render_distance_y (i32 d) noexcept   { desc_.render_distance_y  = std::max(0, d); }
-void WorldGrid::set_extent_x(i32 h) noexcept             { desc_.extent_x = std::max(1, h); }
-void WorldGrid::set_extent_y(i32 h) noexcept             { desc_.extent_y = std::max(1, h); }
-void WorldGrid::set_extent_z(i32 h) noexcept             { desc_.extent_z = std::max(1, h); }
+void WorldGrid::set_chunk_size(f32 s) noexcept           { desc_.chunk_size = cardinal::max(1e-3f, s); }
+void WorldGrid::set_render_distance_xz(i32 d) noexcept   { desc_.render_distance_xz = cardinal::max(0, d); }
+void WorldGrid::set_render_distance_y (i32 d) noexcept   { desc_.render_distance_y  = cardinal::max(0, d); }
+void WorldGrid::set_extent_x(i32 h) noexcept             { desc_.extent_x = cardinal::max(1, h); }
+void WorldGrid::set_extent_y(i32 h) noexcept             { desc_.extent_y = cardinal::max(1, h); }
+void WorldGrid::set_extent_z(i32 h) noexcept             { desc_.extent_z = cardinal::max(1, h); }
 void WorldGrid::set_extent_uniform(i32 h) noexcept {
     set_extent_x(h); set_extent_y(h); set_extent_z(h);
 }
@@ -35,9 +36,9 @@ void WorldGrid::set_extent_uniform(i32 h) noexcept {
 ChunkCoord WorldGrid::chunk_of(f32 wx, f32 wy, f32 wz) const noexcept {
     const f32 inv = 1.0f / desc_.chunk_size;
     return {
-        static_cast<i32>(std::floor(wx * inv)),
-        static_cast<i32>(std::floor(wy * inv)),
-        static_cast<i32>(std::floor(wz * inv)),
+        static_cast<i32>(cardinal::floor(wx * inv)),
+        static_cast<i32>(cardinal::floor(wy * inv)),
+        static_cast<i32>(cardinal::floor(wz * inv)),
     };
 }
 
@@ -63,7 +64,7 @@ bool WorldGrid::in_world_bounds(ChunkCoord c) const noexcept {
 }
 
 void WorldGrid::compute_visible_set(ChunkCoord cam,
-                                    std::vector<ChunkCoord>& out) const
+                                    cardinal::vector<ChunkCoord>& out) const
 {
     out.clear();
     const i32 rxz = desc_.render_distance_xz;
@@ -123,7 +124,7 @@ bool WorldStreamer::tick(f32 cx, f32 cy, f32 cz) {
             if (on_unload_) on_unload_(c);
         }
     }
-    active_ = std::move(next);
+    active_ = cardinal::move(next);
     return true;
 }
 

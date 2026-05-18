@@ -36,12 +36,9 @@
 
 #include <cardinal/core/math.hpp>
 #include <cardinal/core/spatial.hpp>
-#include <cardinal/core/types.hpp>
-
-#include <functional>
-#include <memory>
-#include <unordered_set>
-#include <vector>
+#include <cardinal/core/types.hpp>        // function/memory
+#include <cardinal/core/utility.hpp>      // cardinal::move
+#include <cardinal/core/containers.hpp>   // unordered_set/vector
 
 namespace cardinal::world {
 
@@ -127,7 +124,7 @@ public:
     // Chunks outside world bounds are filtered out. `out_visible` is cleared
     // before the call.
     void compute_visible_set(ChunkCoord camera_chunk,
-                             std::vector<ChunkCoord>& out_visible) const;
+                             cardinal::vector<ChunkCoord>& out_visible) const;
 
 private:
     WorldGridDesc desc_{};
@@ -139,13 +136,13 @@ private:
 // =============================================================================
 class WorldStreamer {
 public:
-    using OnChunkLoad   = std::function<void(ChunkCoord)>;
-    using OnChunkUnload = std::function<void(ChunkCoord)>;
+    using OnChunkLoad   = cardinal::function<void(ChunkCoord)>;
+    using OnChunkUnload = cardinal::function<void(ChunkCoord)>;
 
     explicit WorldStreamer(WorldGrid& grid) noexcept;
 
-    void set_on_load  (OnChunkLoad cb)   noexcept { on_load_   = std::move(cb); }
-    void set_on_unload(OnChunkUnload cb) noexcept { on_unload_ = std::move(cb); }
+    void set_on_load  (OnChunkLoad cb)   noexcept { on_load_   = cardinal::move(cb); }
+    void set_on_unload(OnChunkUnload cb) noexcept { on_unload_ = cardinal::move(cb); }
 
     // Call once per frame with the camera's full 3D world position.
     // Recomputes the active chunk set; fires `on_load` for new chunks
@@ -174,7 +171,7 @@ private:
     bool                   first_tick_{true};
     bool                   dirty_{false};
     ChunkSet               active_;
-    std::vector<ChunkCoord> visible_scratch_;
+    cardinal::vector<ChunkCoord> visible_scratch_;
 };
 
 }  // namespace cardinal::world
