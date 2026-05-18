@@ -2,9 +2,11 @@
 
 #include <cardinal/core/log.hpp>
 
-#include <algorithm>
-#include <cmath>
-#include <unordered_map>
+#include <cardinal/core/algorithm.hpp>    // cardinal::max/sort/find
+#include <cardinal/core/cmath.hpp>        // cardinal::sqrt
+#include <cardinal/core/containers.hpp>   // cardinal::unordered_map
+#include <cardinal/core/limits.hpp>       // cardinal::numeric_limits
+#include <cardinal/core/utility.hpp>      // cardinal::move
 
 namespace cardinal::partition {
 
@@ -35,8 +37,8 @@ struct WorldPartition::Impl {
         CellState state{CellState::Unloaded};
         u64       last_loaded_ms{0};
     };
-    std::unordered_map<CellId, Entry> cells;
-    std::unordered_map<u32, Viewer>   viewers;
+    cardinal::unordered_map<CellId, Entry> cells;
+    cardinal::unordered_map<u32, Viewer>   viewers;
     OnLoad   on_load{};
     OnUnload on_unload{};
     CellId   next_cell_id{1};
@@ -45,8 +47,8 @@ struct WorldPartition::Impl {
     u64      cells_unloaded_total{0};
 };
 
-std::shared_ptr<WorldPartition> WorldPartition::create(const WorldPartitionDesc& desc) {
-    auto p = std::shared_ptr<WorldPartition>(new WorldPartition());
+cardinal::shared_ptr<WorldPartition> WorldPartition::create(const WorldPartitionDesc& desc) {
+    auto p = cardinal::shared_ptr<WorldPartition>(new WorldPartition());
     if (!p->initialize_(desc)) return nullptr;
     return p;
 }
@@ -113,23 +115,23 @@ void WorldPartition::update_viewer(u32 id, const Viewer& v) {
 }
 usize WorldPartition::viewer_count() const noexcept { return impl_->viewers.size(); }
 
-void WorldPartition::set_on_load  (OnLoad   cb) { impl_->on_load   = std::move(cb); }
-void WorldPartition::set_on_unload(OnUnload cb) { impl_->on_unload = std::move(cb); }
+void WorldPartition::set_on_load  (OnLoad   cb) { impl_->on_load   = cardinal::move(cb); }
+void WorldPartition::set_on_unload(OnUnload cb) { impl_->on_unload = cardinal::move(cb); }
 
 namespace {
 
 f32 closest_dist_to_aabb(const cardinal::scene::Vec3& p, const cardinal::core::geom::AABB& a) {
-    const f32 dx = std::max({a.min.x - p.x, 0.0f, p.x - a.max.x});
-    const f32 dy = std::max({a.min.y - p.y, 0.0f, p.y - a.max.y});
-    const f32 dz = std::max({a.min.z - p.z, 0.0f, p.z - a.max.z});
-    return std::sqrt(dx*dx + dy*dy + dz*dz);
+    const f32 dx = cardinal::max({a.min.x - p.x, 0.0f, p.x - a.max.x});
+    const f32 dy = cardinal::max({a.min.y - p.y, 0.0f, p.y - a.max.y});
+    const f32 dz = cardinal::max({a.min.z - p.z, 0.0f, p.z - a.max.z});
+    return cardinal::sqrt(dx*dx + dy*dy + dz*dz);
 }
 
 }  // namespace
 
 void WorldPartition::tick() {
     // For each cell, decide WANT_LOADED based on every viewer.
-    std::vector<CellId> want_load, want_unload;
+    cardinal::vector<CellId> want_load, want_unload;
     for (auto& [id, e] : impl_->cells) {
         bool wants = false;
         if (e.desc.mode == StreamMode::Always) wants = true;
@@ -155,7 +157,7 @@ void WorldPartition::tick() {
     const u32 cap = impl_->desc.max_resident_cells;
 
     // Sort want_load by priority desc so the most important come first.
-    std::sort(want_load.begin(), want_load.end(),
+    cardinal::sort(want_load.begin(), want_load.end(),
         [this](CellId a, CellId b) {
             return impl_->cells[a].desc.priority > impl_->cells[b].desc.priority;
         });
@@ -164,15 +166,15 @@ void WorldPartition::tick() {
     if (cap > 0 &&
         currently_loaded + want_load.size() > cap + want_unload.size())
     {
-        std::vector<CellId> evictable;
+        cardinal::vector<CellId> evictable;
         for (const auto& [id, e] : impl_->cells) {
             if (e.state == CellState::Loaded &&
                 e.desc.mode != StreamMode::Always &&
-                std::find(want_unload.begin(), want_unload.end(), id) == want_unload.end()) {
+                cardinal::find(want_unload.begin(), want_unload.end(), id) == want_unload.end()) {
                 evictable.push_back(id);
             }
         }
-        std::sort(evictable.begin(), evictable.end(),
+        cardinal::sort(evictable.begin(), evictable.end(),
             [this](CellId a, CellId b) {
                 return impl_->cells[a].desc.priority < impl_->cells[b].desc.priority;
             });
@@ -230,21 +232,21 @@ WorldPartitionStats WorldPartition::stats() const noexcept {
     return s;
 }
 
-std::vector<CellId> WorldPartition::loaded_cells() const {
-    std::vector<CellId> r;
+cardinal::vector<CellId> WorldPartition::loaded_cells() const {
+    cardinal::vector<CellId> r;
     for (const auto& [id, e] : impl_->cells) if (e.state == CellState::Loaded) r.push_back(id);
     return r;
 }
 
-std::vector<WorldPartition::CellRow> WorldPartition::describe_cells() const {
-    std::vector<CellRow> rows;
+cardinal::vector<WorldPartition::CellRow> WorldPartition::describe_cells() const {
+    cardinal::vector<CellRow> rows;
     rows.reserve(impl_->cells.size());
     for (const auto& [id, e] : impl_->cells) {
         CellRow r{};
         r.id    = id;
         r.desc  = &e.desc;
         r.state = e.state;
-        r.closest_viewer_distance = std::numeric_limits<f32>::max();
+        r.closest_viewer_distance = cardinal::numeric_limits<f32>::max();
         r.in_any_view = false;
         for (const auto& [_, v] : impl_->viewers) {
             if (!v.active) continue;
@@ -254,7 +256,7 @@ std::vector<WorldPartition::CellRow> WorldPartition::describe_cells() const {
         }
         rows.push_back(r);
     }
-    std::sort(rows.begin(), rows.end(),
+    cardinal::sort(rows.begin(), rows.end(),
         [](const CellRow& a, const CellRow& b) { return a.id < b.id; });
     return rows;
 }

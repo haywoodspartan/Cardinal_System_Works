@@ -21,16 +21,10 @@
 // spawns / despawns actors, allocates / frees streamed assets, etc.
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
+#include <cardinal/core/types.hpp>        // function/memory/string
+#include <cardinal/core/containers.hpp>   // unordered_map/unordered_set/vector
 #include <cardinal/core/geom.hpp>
 #include <cardinal/scene/math.hpp>
-
-#include <functional>
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
 
 namespace cardinal::partition {
 
@@ -46,7 +40,7 @@ enum class StreamMode : u32 {
 const char* stream_mode_name(StreamMode m) noexcept;
 
 struct CellDesc {
-    std::string         name;             // human-readable
+    cardinal::string         name;             // human-readable
     cardinal::core::geom::AABB bounds{};         // world-space AABB
     StreamMode          mode{StreamMode::Distance};
     f32                 load_radius  {64.0f};   // metres; mode = Distance / DV
@@ -88,7 +82,7 @@ struct WorldPartitionStats {
 
 class WorldPartition {
 public:
-    static std::shared_ptr<WorldPartition> create(const WorldPartitionDesc& desc = {});
+    static cardinal::shared_ptr<WorldPartition> create(const WorldPartitionDesc& desc = {});
     ~WorldPartition();
 
     // ----- Cells -----------------------------------------------------
@@ -106,8 +100,8 @@ public:
     usize    viewer_count() const noexcept;
 
     // ----- Per-frame -------------------------------------------------
-    using OnLoad   = std::function<void(CellId, const CellDesc&)>;
-    using OnUnload = std::function<void(CellId, const CellDesc&)>;
+    using OnLoad   = cardinal::function<void(CellId, const CellDesc&)>;
+    using OnUnload = cardinal::function<void(CellId, const CellDesc&)>;
     void set_on_load  (OnLoad   cb);
     void set_on_unload(OnUnload cb);
 
@@ -120,7 +114,7 @@ public:
 
     // ----- Inspection -------------------------------------------------
     WorldPartitionStats stats() const noexcept;
-    std::vector<CellId> loaded_cells() const;
+    cardinal::vector<CellId> loaded_cells() const;
 
     // For panel rendering.
     struct CellRow {
@@ -130,7 +124,7 @@ public:
         f32             closest_viewer_distance;
         bool            in_any_view;
     };
-    std::vector<CellRow> describe_cells() const;
+    cardinal::vector<CellRow> describe_cells() const;
 
 private:
     WorldPartition() = default;
