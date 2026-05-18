@@ -41,11 +41,10 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
-#include <chrono>
-#include <cstring>
-#include <deque>
-#include <utility>
-#include <vector>
+#include <cardinal/core/chrono.hpp>       // cardinal::chrono
+#include <cardinal/core/cstring.hpp>      // cardinal::memcpy
+#include <cardinal/core/containers.hpp>   // cardinal::deque/vector
+#include <cardinal/core/utility.hpp>      // cardinal::move/pair
 
 namespace cardinal::net {
 
@@ -73,7 +72,7 @@ struct PktHeader {
 static_assert(sizeof(PktHeader) == 12, "PktHeader must be tightly packed");
 
 double now_seconds() {
-    using namespace std::chrono;
+    using namespace cardinal::chrono;
     return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
@@ -146,7 +145,7 @@ public:
         for (auto& p : peers_) send_to_(p, ch, data, size);
     }
 
-    usize poll(std::vector<NetEvent>& out) override {
+    usize poll(cardinal::vector<NetEvent>& out) override {
         if (sock_ == INVALID_SOCKET) return 0;
         usize n = 0;
         char buf[2048];
@@ -158,7 +157,7 @@ public:
             if (got == SOCKET_ERROR) break;          // WOULDBLOCK: drained
             if (got < static_cast<int>(sizeof(PktHeader))) continue;
             PktHeader h{};
-            std::memcpy(&h, buf, sizeof(h));
+            cardinal::memcpy(&h, buf, sizeof(h));
             if (h.protocol != kProtocolId) continue;  // not ours
 
             // Injected link loss: drop the datagram as if it never
@@ -239,7 +238,7 @@ public:
                         if (e.first == h.seq) { have = true; break; }
                     if (!have) {
                         pr->reorder.emplace_back(h.seq,
-                            std::vector<char>(pay, pay + plen));
+                            cardinal::vector<char>(pay, pay + plen));
                     }
                 }
                 break;
@@ -306,7 +305,7 @@ public:
 private:
     struct OutPkt {
         u32               seq{0};
-        std::vector<char> bytes;     // full datagram (header + payload)
+        cardinal::vector<char> bytes;     // full datagram (header + payload)
         double            last_send{0.0};
     };
     struct Peer {
@@ -315,11 +314,11 @@ private:
         // ReliableOrdered outbound: monotonically-assigned seq + the
         // not-yet-acked datagrams (retransmitted on poll()).
         u32                 out_seq{0};
-        std::vector<OutPkt> unacked;
+        cardinal::vector<OutPkt> unacked;
         // ReliableOrdered inbound: next seq to deliver + a reorder
         // buffer for early arrivals. Seqs start at 1 (0 = unreliable).
         u32 in_expected{1};
-        std::vector<std::pair<u32, std::vector<char>>> reorder;
+        cardinal::vector<cardinal::pair<u32, cardinal::vector<char>>> reorder;
     };
 
     bool open_socket_() {
@@ -348,19 +347,19 @@ private:
     void send_to_(Peer& peer, Channel ch, const void* data, u32 size) {
         const u32 seq = (ch == Channel::ReliableOrdered)
                       ? ++peer.out_seq : 0u;
-        std::vector<char> pkt(sizeof(PktHeader) + size);
+        cardinal::vector<char> pkt(sizeof(PktHeader) + size);
         PktHeader h = make_hdr_(PktType::Data, ch, seq);
-        std::memcpy(pkt.data(), &h, sizeof(h));
+        cardinal::memcpy(pkt.data(), &h, sizeof(h));
         if (data != nullptr && size > 0)
-            std::memcpy(pkt.data() + sizeof(h), data, size);
+            cardinal::memcpy(pkt.data() + sizeof(h), data, size);
         raw_send_(peer.addr, pkt.data(), static_cast<int>(pkt.size()));
         // Reliable: retain until Ack'd; retransmitted on poll().
         if (ch == Channel::ReliableOrdered) {
             OutPkt op;
             op.seq       = seq;
-            op.bytes     = std::move(pkt);
+            op.bytes     = cardinal::move(pkt);
             op.last_send = now_seconds();
-            peer.unacked.push_back(std::move(op));
+            peer.unacked.push_back(cardinal::move(op));
         }
     }
 
@@ -406,7 +405,7 @@ private:
         e.kind = k; e.peer = p; e.channel = ch;
         if (data != nullptr && size > 0) {
             e.data.resize(size);
-            std::memcpy(e.data.data(), data, size);
+            cardinal::memcpy(e.data.data(), data, size);
         }
         return e;
     }
@@ -416,7 +415,7 @@ private:
     bool              is_server_{false};
     bool              connected_{false};
     sockaddr_in       server_addr_{};
-    std::vector<Peer> peers_;
+    cardinal::vector<Peer> peers_;
     PeerId            next_peer_{1};
     // Injected link conditions (loss only on UDP — see file header).
     NetConditions     cond_{};

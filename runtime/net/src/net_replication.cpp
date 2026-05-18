@@ -9,7 +9,9 @@
 
 #include <cardinal/net/replication.hpp>
 
-#include <cstring>
+#include <cardinal/core/cstring.hpp>      // cardinal::memcpy
+#include <cardinal/core/utility.hpp>      // cardinal::move
+#include <cardinal/core/containers.hpp>   // cardinal::vector
 
 namespace cardinal::net {
 
@@ -34,14 +36,14 @@ constexpr float kRotRange   = 3.2f;     // signed, > π
 constexpr float kScaleRange = 16.0f;    // unsigned, [0, kScaleRange]
 
 template <class T>
-void put(std::vector<u8>& b, const T& v) {
+void put(cardinal::vector<u8>& b, const T& v) {
     const auto* p = reinterpret_cast<const u8*>(&v);
     b.insert(b.end(), p, p + sizeof(T));
 }
 template <class T>
 bool get(const u8*& p, const u8* end, T& out) {
     if (p + sizeof(T) > end) return false;
-    std::memcpy(&out, p, sizeof(T));
+    cardinal::memcpy(&out, p, sizeof(T));
     p += sizeof(T);
     return true;
 }
@@ -70,7 +72,7 @@ float dec_u16(u16 q, float range) {
 }
 
 // Wire record: u32 id + 3×f32 pos + 3×i16 rot + 3×u16 scale = 28 B.
-void put_state(std::vector<u8>& b, const RepState& s) {
+void put_state(cardinal::vector<u8>& b, const RepState& s) {
     put(b, s.id);
     put(b, s.position.x); put(b, s.position.y); put(b, s.position.z);
     put(b, enc_s16(s.rotation_euler.x, kRotRange));
@@ -102,7 +104,7 @@ bool get_state(const u8*& p, const u8* end, RepState& s) {
 // Fixed-width (the transform is sent even for Despawn) keeps the parser
 // trivial and robust; lifecycle events are rare, the few spare bytes
 // are irrelevant next to the snapshot stream.
-void put_event(std::vector<u8>& b, const RepEvent& ev) {
+void put_event(cardinal::vector<u8>& b, const RepEvent& ev) {
     put(b, static_cast<u8>(ev.kind));
     put(b, ev.id);
     put(b, ev.archetype);
@@ -121,8 +123,8 @@ bool get_event(const u8*& p, const u8* end, RepEvent& ev) {
 
 }  // namespace
 
-void Replicator::server_broadcast(const std::vector<RepState>& states) {
-    std::vector<u8> buf;
+void Replicator::server_broadcast(const cardinal::vector<RepState>& states) {
+    cardinal::vector<u8> buf;
     buf.reserve(10 + states.size() * 28);   // 10 B header + 28 B/entity
     const u32 seq   = ++out_seq_;
     const u16 count = static_cast<u16>(
@@ -137,9 +139,9 @@ void Replicator::server_broadcast(const std::vector<RepState>& states) {
     ++sent_;
 }
 
-void Replicator::server_events(const std::vector<RepEvent>& evs) {
+void Replicator::server_events(const cardinal::vector<RepEvent>& evs) {
     if (evs.empty()) return;                      // nothing to send
-    std::vector<u8> buf;
+    cardinal::vector<u8> buf;
     buf.reserve(6 + evs.size() * 37);             // 6 B header + 37 B/evt
     const u16 count = static_cast<u16>(
         evs.size() > 0xFFFF ? 0xFFFF : evs.size());
@@ -155,7 +157,7 @@ void Replicator::server_events(const std::vector<RepEvent>& evs) {
 }
 
 cardinal::usize Replicator::client_events(
-        const std::vector<NetEvent>& events, std::vector<RepEvent>& out) {
+        const cardinal::vector<NetEvent>& events, cardinal::vector<RepEvent>& out) {
     const cardinal::usize before = out.size();
     for (const auto& e : events) {
         if (e.kind != NetEventKind::Message) continue;
@@ -178,7 +180,7 @@ cardinal::usize Replicator::client_events(
 }
 
 cardinal::usize Replicator::client_ingest(
-        const std::vector<NetEvent>& events, std::vector<RepState>& out) {
+        const cardinal::vector<NetEvent>& events, cardinal::vector<RepState>& out) {
     // Pick the newest valid snapshot across this poll (Unreliable can
     // reorder/duplicate — only the freshest frame matters).
     const NetEvent* best = nullptr;
@@ -188,8 +190,8 @@ cardinal::usize Replicator::client_ingest(
         if (e.data.size() < 10) continue;
         const u8* p = e.data.data();
         u32 magic = 0, seq = 0;
-        std::memcpy(&magic, p, 4);
-        std::memcpy(&seq,   p + 4, 4);
+        cardinal::memcpy(&magic, p, 4);
+        cardinal::memcpy(&seq,   p + 4, 4);
         if (magic != kSnapMagic) continue;          // host's own traffic
         // Strictly newer than the last applied (and the best so far).
         if (seq > best_seq) { best_seq = seq; best = &e; }
@@ -219,7 +221,7 @@ namespace {
 // Decode one snapshot datagram → (seq, states). false if not a valid
 // replication snapshot (foreign traffic / truncated).
 bool decode_snapshot(const NetEvent& e, u32& seq,
-                     std::vector<RepState>& states) {
+                     cardinal::vector<RepState>& states) {
     if (e.kind != NetEventKind::Message || e.data.size() < 10) return false;
     const u8* p   = e.data.data();
     const u8* end = p + e.data.size();
@@ -248,21 +250,21 @@ cardinal::scene::Vec3 lerp3(const cardinal::scene::Vec3& a,
 }  // namespace
 
 cardinal::usize Replicator::decode_into_history_(
-        const std::vector<NetEvent>& events, double now) {
+        const cardinal::vector<NetEvent>& events, double now) {
     cardinal::usize buffered = 0;
     for (const auto& e : events) {
         u32 seq = 0;
-        std::vector<RepState> states;
+        cardinal::vector<RepState> states;
         if (!decode_snapshot(e, seq, states)) continue;
         if (seq <= buf_seq_) continue;        // stale / duplicate
         // Insert keeping history_ ascending by seq.
         Snap snap;
         snap.seq    = seq;
         snap.t      = now;
-        snap.states = std::move(states);
+        snap.states = cardinal::move(states);
         auto it = history_.begin();
         while (it != history_.end() && it->seq < seq) ++it;
-        history_.insert(it, std::move(snap));
+        history_.insert(it, cardinal::move(snap));
         buf_seq_ = seq;
         ++recv_;
         ++buffered;
@@ -273,12 +275,12 @@ cardinal::usize Replicator::decode_into_history_(
 }
 
 cardinal::usize Replicator::client_buffer(
-        const std::vector<NetEvent>& events, double now) {
+        const cardinal::vector<NetEvent>& events, double now) {
     return decode_into_history_(events, now);
 }
 
 cardinal::usize Replicator::client_sample(
-        double render_time, std::vector<RepState>& out) {
+        double render_time, cardinal::vector<RepState>& out) {
     out.clear();
     if (history_.empty()) return 0;
 

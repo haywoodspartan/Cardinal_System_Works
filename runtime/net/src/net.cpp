@@ -23,8 +23,9 @@
 #include <cardinal/net/net.hpp>
 #include <cardinal/core/log.hpp>
 
-#include <cstring>
-#include <deque>
+#include <cardinal/core/cstring.hpp>      // cardinal::memcpy
+#include <cardinal/core/containers.hpp>   // cardinal::deque/vector
+#include <cardinal/core/utility.hpp>      // cardinal::move
 
 namespace cardinal::net {
 
@@ -61,7 +62,7 @@ public:
         // exactly as the legacy loopback. ReliableOrdered keeps its
         // guarantee; only Unreliable models adverse conditions.
         if (!conditions_active() || ch != Channel::Unreliable) {
-            inbox_.push_back(std::move(e));
+            inbox_.push_back(cardinal::move(e));
             return;
         }
         // Unreliable under injected conditions: roll loss, then queue
@@ -71,29 +72,29 @@ public:
         int d = static_cast<int>(cond_.latency_polls) +
                 rng_jitter(cond_.jitter_polls);
         if (d < 0) d = 0;
-        delayed_.push_back(Delayed{std::move(e), static_cast<u32>(d)});
+        delayed_.push_back(Delayed{cardinal::move(e), static_cast<u32>(d)});
     }
 
     void broadcast(Channel ch, const void* data, u32 size) override {
         if (connected_) send(kVirtualPeer, ch, data, size);
     }
 
-    usize poll(std::vector<NetEvent>& out) override {
+    usize poll(cardinal::vector<NetEvent>& out) override {
         const usize before = out.size();
         // Release Unreliable messages whose delay has elapsed; tick the
         // rest down one poll. delayed_ is empty unless conditions are
         // active, so the default path is unchanged.
         if (!delayed_.empty()) {
-            std::vector<Delayed> keep;
+            cardinal::vector<Delayed> keep;
             keep.reserve(delayed_.size());
             for (auto& d : delayed_) {
-                if (d.left == 0) out.push_back(std::move(d.evt));
-                else { --d.left; keep.push_back(std::move(d)); }
+                if (d.left == 0) out.push_back(cardinal::move(d.evt));
+                else { --d.left; keep.push_back(cardinal::move(d)); }
             }
             delayed_.swap(keep);
         }
         while (!inbox_.empty()) {
-            out.push_back(std::move(inbox_.front()));
+            out.push_back(cardinal::move(inbox_.front()));
             inbox_.pop_front();
         }
         return out.size() - before;
@@ -128,7 +129,7 @@ private:
         e.channel = ch;
         if (data != nullptr && size > 0) {
             e.data.resize(size);
-            std::memcpy(e.data.data(), data, size);
+            cardinal::memcpy(e.data.data(), data, size);
         }
         return e;
     }
@@ -157,8 +158,8 @@ private:
         return static_cast<int>(rng_next() % span) - static_cast<int>(j);
     }
 
-    std::deque<NetEvent> inbox_;
-    std::vector<Delayed> delayed_;          // empty unless conditions on
+    cardinal::deque<NetEvent> inbox_;
+    cardinal::vector<Delayed> delayed_;          // empty unless conditions on
     NetConditions        cond_;
     u32                  rng_{0x9E3779B9u};
     u32                  seeded_{0};        // last applied cond_.seed

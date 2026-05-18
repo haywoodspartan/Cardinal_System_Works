@@ -30,8 +30,7 @@
 #include <cardinal/net/net.hpp>          // Transport / NetEvent / Channel
 #include <cardinal/scene/math.hpp>       // scene::Vec3
 #include <cardinal/core/types.hpp>       // foundation vocab
-
-#include <vector>
+#include <cardinal/core/containers.hpp>  // cardinal::vector
 
 namespace cardinal::net {
 
@@ -71,15 +70,15 @@ public:
     // SERVER: serialise `states` into one snapshot and broadcast it on
     // the Unreliable channel to every connected peer. Call once per
     // network tick with the current authoritative states.
-    void server_broadcast(const std::vector<RepState>& states);
+    void server_broadcast(const cardinal::vector<RepState>& states);
 
     // CLIENT: scan polled transport events for replication snapshots,
     // keep only the newest (by seq), decode it into `out`. Returns the
     // number of states written (0 if no fresher snapshot this poll).
     // Non-replication events in `events` are ignored (left for the
     // host's own message handling).
-    cardinal::usize client_ingest(const std::vector<NetEvent>& events,
-                                  std::vector<RepState>& out);
+    cardinal::usize client_ingest(const cardinal::vector<NetEvent>& events,
+                                  cardinal::vector<RepState>& out);
 
     // ---- Client-side interpolation -----------------------------------
     //
@@ -100,10 +99,10 @@ public:
     // interp_delay ≈ 1.5–2 snapshot intervals (e.g. 0.1s at 10–20 Hz).
     // client_buffer/sample and client_ingest are independent paths;
     // pick snap (ingest) OR interpolation (buffer+sample) per use.
-    cardinal::usize client_buffer(const std::vector<NetEvent>& events,
+    cardinal::usize client_buffer(const cardinal::vector<NetEvent>& events,
                                   double now);
     cardinal::usize client_sample(double render_time,
-                                  std::vector<RepState>& out);
+                                  cardinal::vector<RepState>& out);
 
     // ---- Reliable lifecycle events -----------------------------------
     //
@@ -118,9 +117,9 @@ public:
     // a host typically runs client_events + (client_ingest OR
     // client_buffer/sample) each poll. Host policy owns idempotency
     // (re-Spawn an existing id / Despawn an unknown id).
-    void server_events(const std::vector<RepEvent>& evs);
-    cardinal::usize client_events(const std::vector<NetEvent>& events,
-                                  std::vector<RepEvent>& out);
+    void server_events(const cardinal::vector<RepEvent>& evs);
+    cardinal::usize client_events(const cardinal::vector<NetEvent>& events,
+                                  cardinal::vector<RepEvent>& out);
 
     u64 snapshots_sent() const noexcept { return sent_; }
     u64 snapshots_recv() const noexcept { return recv_; }
@@ -139,11 +138,11 @@ private:
     struct Snap {
         u32                   seq{0};
         double                t{0.0};
-        std::vector<RepState> states;
+        cardinal::vector<RepState> states;
     };
     // Decode every replication snapshot in `events` newer than the last
     // buffered seq, append to history (kept sorted by seq, capped).
-    cardinal::usize decode_into_history_(const std::vector<NetEvent>& events,
+    cardinal::usize decode_into_history_(const cardinal::vector<NetEvent>& events,
                                          double now);
 
     Transport& t_;
@@ -157,7 +156,7 @@ private:
     u64 evt_recv_{0};
 
     static constexpr cardinal::usize kHistoryMax = 16;
-    std::vector<Snap> history_;   // ascending seq, ≤ kHistoryMax
+    cardinal::vector<Snap> history_;   // ascending seq, ≤ kHistoryMax
 };
 
 }  // namespace cardinal::net

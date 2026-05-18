@@ -23,9 +23,8 @@
 // this yet, so it is a pure, build-clean, zero-behaviour-change add.
 // =============================================================================
 
-#include <cardinal/core/types.hpp>   // foundation: unique_ptr / u32 / …
-
-#include <vector>
+#include <cardinal/core/types.hpp>        // foundation: unique_ptr / u32 / …
+#include <cardinal/core/containers.hpp>   // cardinal::vector
 
 namespace cardinal::net {
 
@@ -48,7 +47,7 @@ struct NetEvent {
     NetEventKind    kind{NetEventKind::Message};
     PeerId          peer{kInvalidPeer};
     Channel         channel{Channel::Unreliable};
-    std::vector<u8> data;
+    cardinal::vector<u8> data;
 };
 
 // Artificial adverse link conditions for the in-process loopback. A
@@ -102,7 +101,7 @@ public:
 
     // Drain every event since the last poll into `out` (appended).
     // Returns the number appended.
-    virtual usize poll(std::vector<NetEvent>& out)      = 0;
+    virtual usize poll(cardinal::vector<NetEvent>& out)      = 0;
 
     virtual void  disconnect(PeerId peer)               = 0;
     virtual bool  is_server()  const noexcept           = 0;
