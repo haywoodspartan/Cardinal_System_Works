@@ -1,8 +1,10 @@
 #include <cardinal/navmesh/navmesh.hpp>
 
-#include <algorithm>
-#include <cmath>
-#include <unordered_map>
+#include <cardinal/core/algorithm.hpp>    // cardinal::max/reverse/*_heap
+#include <cardinal/core/cmath.hpp>        // cardinal::sqrt
+#include <cardinal/core/containers.hpp>   // cardinal::unordered_map
+#include <cardinal/core/limits.hpp>       // cardinal::numeric_limits
+// cardinal::pair/make_pair/hash arrive via navmesh.hpp + core/types.hpp
 
 namespace cardinal::navmesh {
 
@@ -10,7 +12,7 @@ namespace {
 
 inline f32 vdist(const cardinal::scene::Vec3& a, const cardinal::scene::Vec3& b) {
     const f32 dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
-    return std::sqrt(dx*dx + dy*dy + dz*dz);
+    return cardinal::sqrt(dx*dx + dy*dy + dz*dz);
 }
 
 inline f32 cross_xz(const cardinal::scene::Vec3& a,
@@ -26,7 +28,7 @@ struct EdgeKey {
     bool operator==(const EdgeKey& o) const noexcept { return a == o.a && b == o.b; }
 };
 struct EdgeHash { usize operator()(const EdgeKey& k) const noexcept {
-    return std::hash<u64>{}((static_cast<u64>(k.a) << 32) | k.b);
+    return cardinal::hash<u64>{}((static_cast<u64>(k.a) << 32) | k.b);
 }};
 EdgeKey make_edge(u32 a, u32 b) {
     return (a < b) ? EdgeKey{a, b} : EdgeKey{b, a};
@@ -48,13 +50,13 @@ void Mesh::recompute_centroids() noexcept {
     }
 }
 
-void Mesh::build_from_triangles(const std::vector<cardinal::scene::Vec3>& verts,
-                                const std::vector<u32>& tri_indices)
+void Mesh::build_from_triangles(const cardinal::vector<cardinal::scene::Vec3>& verts,
+                                const cardinal::vector<u32>& tri_indices)
 {
     clear();
     vertices = verts;
     polys.reserve(tri_indices.size() / 3);
-    std::unordered_map<EdgeKey, std::pair<u32, u32>, EdgeHash> edge_to_poly_edge;
+    cardinal::unordered_map<EdgeKey, cardinal::pair<u32, u32>, EdgeHash> edge_to_poly_edge;
     for (usize i = 0; i + 2 < tri_indices.size(); i += 3) {
         Poly p{};
         p.verts = { tri_indices[i], tri_indices[i + 1], tri_indices[i + 2] };
@@ -69,7 +71,7 @@ void Mesh::build_from_triangles(const std::vector<cardinal::scene::Vec3>& verts,
             const EdgeKey k = make_edge(a, b);
             auto it = edge_to_poly_edge.find(k);
             if (it == edge_to_poly_edge.end()) {
-                edge_to_poly_edge.emplace(k, std::make_pair(pi, ei));
+                edge_to_poly_edge.emplace(k, cardinal::make_pair(pi, ei));
             } else {
                 const auto [other_pi, other_ei] = it->second;
                 p.neighbours[ei]                    = other_pi;
@@ -82,7 +84,7 @@ void Mesh::build_from_triangles(const std::vector<cardinal::scene::Vec3>& verts,
 
 PolyId Mesh::nearest_poly(const cardinal::scene::Vec3& p) const noexcept {
     if (polys.empty()) return kInvalidPoly;
-    f32 best = std::numeric_limits<f32>::max();
+    f32 best = cardinal::numeric_limits<f32>::max();
     PolyId best_id = 0;
     for (u32 i = 0; i < polys.size(); ++i) {
         const f32 d = vdist(p, polys[i].centroid);
@@ -96,12 +98,12 @@ PolyId Mesh::nearest_poly(const cardinal::scene::Vec3& p) const noexcept {
 // ---------------------------------------------------------------------------
 void PathQuery::open_push_(PolyId id, f32 fv) {
     open_.emplace_back(fv, id);
-    std::push_heap(open_.begin(), open_.end(),
+    cardinal::push_heap(open_.begin(), open_.end(),
         [](const auto& a, const auto& b){ return a.first > b.first; });
 }
 bool PathQuery::open_pop_(PolyId& out, f32& f) {
     if (open_.empty()) return false;
-    std::pop_heap(open_.begin(), open_.end(),
+    cardinal::pop_heap(open_.begin(), open_.end(),
         [](const auto& a, const auto& b){ return a.first > b.first; });
     f   = open_.back().first;
     out = open_.back().second;
@@ -117,8 +119,8 @@ namespace {
 void funnel_path(const Mesh& mesh,
                  const cardinal::scene::Vec3& start,
                  const cardinal::scene::Vec3& goal,
-                 const std::vector<PolyId>& poly_path,
-                 std::vector<cardinal::scene::Vec3>& out)
+                 const cardinal::vector<PolyId>& poly_path,
+                 cardinal::vector<cardinal::scene::Vec3>& out)
 {
     out.clear();
     out.push_back(start);
@@ -129,7 +131,7 @@ void funnel_path(const Mesh& mesh,
     // For each transition (poly_path[i] -> poly_path[i+1]), find the
     // shared edge and put its left/right endpoints into a portals list.
     struct Portal { cardinal::scene::Vec3 left, right; };
-    std::vector<Portal> portals;
+    cardinal::vector<Portal> portals;
     portals.reserve(poly_path.size());
     for (usize i = 0; i + 1 < poly_path.size(); ++i) {
         const Poly& a = mesh.polys[poly_path[i]];
@@ -205,7 +207,7 @@ void funnel_path(const Mesh& mesh,
 PathStats PathQuery::find_path(const Mesh& mesh,
                                 const cardinal::scene::Vec3& start,
                                 const cardinal::scene::Vec3& goal,
-                                std::vector<cardinal::scene::Vec3>& out_waypoints)
+                                cardinal::vector<cardinal::scene::Vec3>& out_waypoints)
 {
     PathStats st{};
     out_waypoints.clear();
@@ -216,8 +218,8 @@ PathStats PathQuery::find_path(const Mesh& mesh,
     if (start_p == kInvalidPoly || goal_p == kInvalidPoly) return st;
 
     const u32 N = static_cast<u32>(mesh.polys.size());
-    g_.assign(N, std::numeric_limits<f32>::max());
-    f_.assign(N, std::numeric_limits<f32>::max());
+    g_.assign(N, cardinal::numeric_limits<f32>::max());
+    f_.assign(N, cardinal::numeric_limits<f32>::max());
     parent_.assign(N, kInvalidPoly);
     closed_.assign(N, false);
     open_.clear();
@@ -232,13 +234,13 @@ PathStats PathQuery::find_path(const Mesh& mesh,
         if (closed_[cur]) continue;
         closed_[cur] = true;
         ++st.poly_visited;
-        st.open_set_max = std::max(st.open_set_max, static_cast<u32>(open_.size()));
+        st.open_set_max = cardinal::max(st.open_set_max, static_cast<u32>(open_.size()));
         if (cur == goal_p) {
             // Reconstruct polygon path.
-            std::vector<PolyId> rev;
+            cardinal::vector<PolyId> rev;
             rev.push_back(cur);
             while (parent_[rev.back()] != kInvalidPoly) rev.push_back(parent_[rev.back()]);
-            std::reverse(rev.begin(), rev.end());
+            cardinal::reverse(rev.begin(), rev.end());
             funnel_path(mesh, start, goal, rev, out_waypoints);
             st.found          = true;
             st.poly_path_cost = g_[cur];

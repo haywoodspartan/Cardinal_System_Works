@@ -16,10 +16,9 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
+#include <cardinal/core/containers.hpp>   // cardinal::array, cardinal::vector
+#include <cardinal/core/utility.hpp>      // cardinal::pair
 #include <cardinal/scene/math.hpp>
-
-#include <array>
-#include <vector>
 
 namespace cardinal::navmesh {
 
@@ -27,14 +26,14 @@ using PolyId = u32;
 inline constexpr PolyId kInvalidPoly = 0xFFFFFFFFu;
 
 struct Poly {
-    std::array<u32,    3> verts {0, 0, 0};
-    std::array<PolyId, 3> neighbours{kInvalidPoly, kInvalidPoly, kInvalidPoly};
+    cardinal::array<u32,    3> verts {0, 0, 0};
+    cardinal::array<PolyId, 3> neighbours{kInvalidPoly, kInvalidPoly, kInvalidPoly};
     cardinal::scene::Vec3 centroid{0,0,0};
 };
 
 struct Mesh {
-    std::vector<cardinal::scene::Vec3> vertices;
-    std::vector<Poly>                  polys;
+    cardinal::vector<cardinal::scene::Vec3> vertices;
+    cardinal::vector<Poly>                  polys;
 
     void clear() noexcept { vertices.clear(); polys.clear(); }
     bool empty() const noexcept { return polys.empty(); }
@@ -42,8 +41,8 @@ struct Mesh {
 
     // Build a mesh from a triangle soup. Auto-detects edge sharing to
     // populate `neighbours`. O(N log N) — fine for the editor.
-    void build_from_triangles(const std::vector<cardinal::scene::Vec3>& verts,
-                              const std::vector<u32>& tri_indices);
+    void build_from_triangles(const cardinal::vector<cardinal::scene::Vec3>& verts,
+                              const cardinal::vector<u32>& tri_indices);
 
     // World-space point → polygon containing it (or nearest, if not exact).
     // Returns kInvalidPoly when the mesh is empty.
@@ -68,15 +67,15 @@ public:
     PathStats find_path(const Mesh& mesh,
                         const cardinal::scene::Vec3& start,
                         const cardinal::scene::Vec3& goal,
-                        std::vector<cardinal::scene::Vec3>& out_waypoints);
+                        cardinal::vector<cardinal::scene::Vec3>& out_waypoints);
 
 private:
     // Scratch.
-    std::vector<f32>    g_;
-    std::vector<f32>    f_;
-    std::vector<PolyId> parent_;
-    std::vector<bool>   closed_;
-    std::vector<std::pair<f32, PolyId>> open_;
+    cardinal::vector<f32>    g_;
+    cardinal::vector<f32>    f_;
+    cardinal::vector<PolyId> parent_;
+    cardinal::vector<bool>   closed_;
+    cardinal::vector<cardinal::pair<f32, PolyId>> open_;
 
     void open_push_(PolyId id, f32 fv);
     bool open_pop_(PolyId& out, f32& f);
