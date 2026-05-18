@@ -20,8 +20,8 @@
 
 #include <cardinal/vt/types.hpp>
 
-#include <atomic>
-#include <vector>
+#include <cardinal/core/atomic.hpp>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::vt {
 
@@ -56,8 +56,8 @@ public:
     u32 width_tiles (u32 mip) const noexcept;
     u32 height_tiles(u32 mip) const noexcept;
     u32 total_tiles () const noexcept;
-    u32 resident_count() const noexcept { return resident_count_.load(std::memory_order_relaxed); }
-    u32 pending_count () const noexcept { return pending_count_.load(std::memory_order_relaxed);  }
+    u32 resident_count() const noexcept { return resident_count_.load(cardinal::memory_order_relaxed); }
+    u32 pending_count () const noexcept { return pending_count_.load(cardinal::memory_order_relaxed);  }
 
 private:
     // Pack {status, slot} into one u32: high 4 bits status, low 28 bits slot.
@@ -76,9 +76,9 @@ private:
 
     PageTableDesc                              desc_{};
     // One entries vector per mip — built lazily on first write to that mip.
-    std::vector<std::vector<std::atomic<u32>>> entries_per_mip_;
-    std::atomic<u32>                           resident_count_{0};
-    std::atomic<u32>                           pending_count_{0};
+    cardinal::vector<cardinal::vector<cardinal::atomic<u32>>> entries_per_mip_;
+    cardinal::atomic<u32>                           resident_count_{0};
+    cardinal::atomic<u32>                           pending_count_{0};
 };
 
 }  // namespace cardinal::vt

@@ -1,7 +1,8 @@
 #include <cardinal/vt/tile_cache.hpp>
 
-#include <algorithm>
-#include <cstring>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/thread.hpp>
 
 namespace cardinal::vt {
 
@@ -58,7 +59,7 @@ PhysicalSlot TileCache::pick_eviction_victim(u64 now_ms) const noexcept {
 
 PhysicalSlot TileCache::insert(TileKey key, const u8* bytes, usize len, u64 now_ms) {
     if (!key.valid() || bytes == nullptr || len == 0) return kSlotEmpty;
-    inserts_.fetch_add(1, std::memory_order_relaxed);
+    inserts_.fetch_add(1, cardinal::memory_order_relaxed);
 
     // Hash only when dedup is enabled. The 64 KiB hash was almost pure
     // overhead with the procedural decoder (every tile unique).
@@ -67,7 +68,7 @@ PhysicalSlot TileCache::insert(TileKey key, const u8* bytes, usize len, u64 now_
     // ----- Critical section: pick slot under the lock --------------------
     PhysicalSlot dest;
     {
-        std::lock_guard<std::mutex> lg(mtx_);
+        cardinal::lock_guard<cardinal::mutex> lg(mtx_);
 
         // Already resident under this key? Just bump LRU.
         if (auto it = by_key_.find(key); it != by_key_.end()) {
@@ -82,10 +83,10 @@ PhysicalSlot TileCache::insert(TileKey key, const u8* bytes, usize len, u64 now_
                 // memcmp under the lock is unfortunate but the dedup-rare
                 // case we're optimising for is "lots of unique content"
                 // where this branch is never taken anyway.
-                if (std::memcmp(other.bytes.data(), bytes, len) == 0) {
+                if (cardinal::memcmp(other.bytes.data(), bytes, len) == 0) {
                     by_key_[key]      = it->second;
                     other.last_use_ms = now_ms;
-                    dedup_hits_.fetch_add(1, std::memory_order_relaxed);
+                    dedup_hits_.fetch_add(1, cardinal::memory_order_relaxed);
                     return it->second;
                 }
             }
@@ -105,7 +106,7 @@ PhysicalSlot TileCache::insert(TileKey key, const u8* bytes, usize len, u64 now_
             for (auto it = by_key_.begin(); it != by_key_.end(); ) {
                 if (it->second == dest) it = by_key_.erase(it); else ++it;
             }
-            evictions_.fetch_add(1, std::memory_order_relaxed);
+            evictions_.fetch_add(1, cardinal::memory_order_relaxed);
         }
 
         // Reserve the slot (publish key) BEFORE we drop the lock. Other
@@ -126,36 +127,36 @@ PhysicalSlot TileCache::insert(TileKey key, const u8* bytes, usize len, u64 now_
     // continue inserting/looking up in parallel during this copy.
     Slot& s = slots_[dest];
     if (s.bytes.size() != len) s.bytes.resize(len);
-    std::memcpy(s.bytes.data(), bytes, len);
+    cardinal::memcpy(s.bytes.data(), bytes, len);
 
     // Drop our pin so the slot becomes evictable again.
     {
-        std::lock_guard<std::mutex> lg(mtx_);
+        cardinal::lock_guard<cardinal::mutex> lg(mtx_);
         if (s.ref_count > 0) --s.ref_count;
     }
     return dest;
 }
 
 PhysicalSlot TileCache::lookup(TileKey key, u64 now_ms) noexcept {
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     auto it = by_key_.find(key);
     if (it == by_key_.end()) {
-        misses_.fetch_add(1, std::memory_order_relaxed);
+        misses_.fetch_add(1, cardinal::memory_order_relaxed);
         return kSlotEmpty;
     }
     slots_[it->second].last_use_ms = now_ms;
-    hits_.fetch_add(1, std::memory_order_relaxed);
+    hits_.fetch_add(1, cardinal::memory_order_relaxed);
     return it->second;
 }
 
 PhysicalSlot TileCache::peek(TileKey key) const noexcept {
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     auto it = by_key_.find(key);
     return (it == by_key_.end()) ? kSlotEmpty : it->second;
 }
 
 u32 TileCache::evict_lru(u32 max_to_free, u64 now_ms) {
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     u32 freed = 0;
     while (freed < max_to_free) {
         PhysicalSlot v = pick_eviction_victim(now_ms);
@@ -173,13 +174,13 @@ u32 TileCache::evict_lru(u32 max_to_free, u64 now_ms) {
         victim.ref_count   = 0;
         release_to_free_stack(v);
         ++freed;
-        evictions_.fetch_add(1, std::memory_order_relaxed);
+        evictions_.fetch_add(1, cardinal::memory_order_relaxed);
     }
     return freed;
 }
 
 void TileCache::resize(u32 new_slot_count) {
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     if (new_slot_count == slots_.size()) return;
     if (new_slot_count > slots_.size()) {
         const u32 old_size = static_cast<u32>(slots_.size());
@@ -193,7 +194,7 @@ void TileCache::resize(u32 new_slot_count) {
     // Shrink — evict every slot at index >= new_slot_count, and drop any
     // free-stack entries past the new size.
     free_slots_.erase(
-        std::remove_if(free_slots_.begin(), free_slots_.end(),
+        cardinal::remove_if(free_slots_.begin(), free_slots_.end(),
             [&](PhysicalSlot s){ return s >= new_slot_count; }),
         free_slots_.end());
     for (u32 i = new_slot_count; i < slots_.size(); ++i) {
@@ -203,13 +204,13 @@ void TileCache::resize(u32 new_slot_count) {
         for (auto it = by_key_.begin(); it != by_key_.end(); ) {
             if (it->second == i) it = by_key_.erase(it); else ++it;
         }
-        evictions_.fetch_add(1, std::memory_order_relaxed);
+        evictions_.fetch_add(1, cardinal::memory_order_relaxed);
     }
     slots_.resize(new_slot_count);
 }
 
 void TileCache::clear() noexcept {
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     for (auto& s : slots_) {
         // Keep bytes capacity (see evict_lru rationale).
         s.key         = kInvalidTileKey;
@@ -230,36 +231,36 @@ CacheStats TileCache::stats() const noexcept {
     CacheStats s{};
     s.capacity   = static_cast<u32>(slots_.size());
     {
-        std::lock_guard<std::mutex> lg(mtx_);
+        cardinal::lock_guard<cardinal::mutex> lg(mtx_);
         for (const auto& slot : slots_) if (slot.key.valid()) ++s.resident;
     }
     s.free_slots = s.capacity - s.resident;
-    s.hits       = hits_       .load(std::memory_order_relaxed);
-    s.misses     = misses_     .load(std::memory_order_relaxed);
-    s.evictions  = evictions_  .load(std::memory_order_relaxed);
-    s.dedup_hits = dedup_hits_ .load(std::memory_order_relaxed);
-    s.inserts    = inserts_    .load(std::memory_order_relaxed);
+    s.hits       = hits_       .load(cardinal::memory_order_relaxed);
+    s.misses     = misses_     .load(cardinal::memory_order_relaxed);
+    s.evictions  = evictions_  .load(cardinal::memory_order_relaxed);
+    s.dedup_hits = dedup_hits_ .load(cardinal::memory_order_relaxed);
+    s.inserts    = inserts_    .load(cardinal::memory_order_relaxed);
     return s;
 }
 
 const u8* TileCache::slot_bytes(PhysicalSlot s) const noexcept {
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     if (s >= slots_.size()) return nullptr;
     if (!slots_[s].key.valid()) return nullptr;
     return slots_[s].bytes.data();
 }
 
 TileKey TileCache::slot_key(PhysicalSlot s) const noexcept {
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     if (s >= slots_.size()) return kInvalidTileKey;
     return slots_[s].key;
 }
 
 void TileCache::for_each_resident(
-    const std::function<void(PhysicalSlot, TileKey, u64)>& fn) const
+    const cardinal::function<void(PhysicalSlot, TileKey, u64)>& fn) const
 {
     if (!fn) return;
-    std::lock_guard<std::mutex> lg(mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     for (u32 i = 0; i < slots_.size(); ++i) {
         const Slot& s = slots_[i];
         if (s.key.valid()) fn(i, s.key, s.last_use_ms);

@@ -20,10 +20,8 @@
 
 #include <cardinal/vt/types.hpp>
 
-#include <functional>
-#include <memory>
-#include <string>
-#include <vector>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::vt {
 
@@ -32,7 +30,7 @@ public:
     virtual ~Decoder() = default;
 
     // Returns kTileBytesRGBA bytes on success, empty vector on failure.
-    virtual std::vector<u8> decode(TileKey key) = 0;
+    virtual cardinal::vector<u8> decode(TileKey key) = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -43,7 +41,7 @@ public:
 class ProceduralDecoder final : public Decoder {
 public:
     explicit ProceduralDecoder(u32 seed = 1337u) noexcept : seed_(seed) {}
-    std::vector<u8> decode(TileKey key) override;
+    cardinal::vector<u8> decode(TileKey key) override;
 private:
     u32 seed_;
 };
@@ -57,9 +55,9 @@ private:
 // ---------------------------------------------------------------------------
 class FileDecoder final : public Decoder {
 public:
-    using PathResolver = std::function<std::string(TileKey)>;
-    explicit FileDecoder(PathResolver resolver) : resolver_(std::move(resolver)) {}
-    std::vector<u8> decode(TileKey key) override;
+    using PathResolver = cardinal::function<cardinal::string(TileKey)>;
+    explicit FileDecoder(PathResolver resolver) : resolver_(cardinal::move(resolver)) {}
+    cardinal::vector<u8> decode(TileKey key) override;
 private:
     PathResolver resolver_;
 };

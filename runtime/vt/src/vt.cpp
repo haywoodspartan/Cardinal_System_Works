@@ -4,22 +4,24 @@
 #include <cardinal/core/budget.hpp>
 #include <cardinal/core/log.hpp>
 
-#include <algorithm>
-#include <atomic>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/atomic.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/thread.hpp>
 
 namespace cardinal::vt {
 
 // ---------------------------------------------------------------------------
 // VirtualTexture
 // ---------------------------------------------------------------------------
-std::shared_ptr<VirtualTexture> VirtualTexture::create(const VirtualTextureDesc& desc) {
-    auto vt = std::shared_ptr<VirtualTexture>(new VirtualTexture());
+cardinal::shared_ptr<VirtualTexture> VirtualTexture::create(const VirtualTextureDesc& desc) {
+    auto vt = cardinal::shared_ptr<VirtualTexture>(new VirtualTexture());
     vt->desc_ = desc;
     PageTableDesc ptd{};
     ptd.width_tiles  = desc.width_tiles;
     ptd.height_tiles = desc.height_tiles;
     ptd.mip_count    = desc.mip_count;
-    vt->pt_ = std::make_unique<PageTable>(ptd);
+    vt->pt_ = cardinal::make_unique<PageTable>(ptd);
     return vt;
 }
 
@@ -47,8 +49,8 @@ TileLookup VirtualTexture::lookup(u32 mip, u32 y, u32 x) const {
 // ---------------------------------------------------------------------------
 // System
 // ---------------------------------------------------------------------------
-std::shared_ptr<System> System::create(const SystemDesc& desc) {
-    auto s = std::shared_ptr<System>(new System());
+cardinal::shared_ptr<System> System::create(const SystemDesc& desc) {
+    auto s = cardinal::shared_ptr<System>(new System());
     if (!s->initialize_(desc)) return nullptr;
     return s;
 }
@@ -56,14 +58,14 @@ std::shared_ptr<System> System::create(const SystemDesc& desc) {
 bool System::initialize_(const SystemDesc& desc) {
     desc_ = desc;
     if (desc_.pool_slots == 0) desc_.pool_slots = 1024;
-    cache_ = std::make_unique<TileCache>(desc_.pool_slots);
+    cache_ = cardinal::make_unique<TileCache>(desc_.pool_slots);
 
     // Lock-free MPSC ring. Sized to a power of two so the head/tail wrap
     // is a cheap mask, but we don't strictly require it (modulo works too).
     if (desc_.request_ring_size == 0) desc_.request_ring_size = 8192;
-    ring_ = std::make_unique<Ring>();
-    ring_->slots = std::vector<std::atomic<u64>>(desc_.request_ring_size);
-    for (auto& s : ring_->slots) s.store(static_cast<u64>(-1), std::memory_order_relaxed);
+    ring_ = cardinal::make_unique<Ring>();
+    ring_->slots = cardinal::vector<cardinal::atomic<u64>>(desc_.request_ring_size);
+    for (auto& s : ring_->slots) s.store(static_cast<u64>(-1), cardinal::memory_order_relaxed);
 
     if (desc_.register_with_budget_broker) {
         // Register as a GPU subsystem — the broker doesn't yet wire callbacks
@@ -96,40 +98,40 @@ System::~System() {
             : 0.0);
 }
 
-void System::register_vt(const std::shared_ptr<VirtualTexture>& vt) {
+void System::register_vt(const cardinal::shared_ptr<VirtualTexture>& vt) {
     if (vt == nullptr) return;
-    std::lock_guard<std::mutex> lg(vts_mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(vts_mtx_);
     if (vt->desc().id >= vts_.size()) vts_.resize(vt->desc().id + 1u);
     vts_[vt->desc().id] = vt;
     vt->attach(this);
 }
 
 void System::unregister_vt(VtId id) {
-    std::lock_guard<std::mutex> lg(vts_mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(vts_mtx_);
     if (id < vts_.size()) vts_[id].reset();
 }
 
-std::shared_ptr<VirtualTexture> System::get_vt(VtId id) const {
-    std::lock_guard<std::mutex> lg(vts_mtx_);
+cardinal::shared_ptr<VirtualTexture> System::get_vt(VtId id) const {
+    cardinal::lock_guard<cardinal::mutex> lg(vts_mtx_);
     if (id >= vts_.size()) return nullptr;
     return vts_[id].lock();
 }
 
 bool System::enqueue_request(TileKey key) {
     if (!key.valid()) return false;
-    stat_seen_.fetch_add(1, std::memory_order_relaxed);
+    stat_seen_.fetch_add(1, cardinal::memory_order_relaxed);
 
     // MPSC ring push: atomic fetch_add on head; CAS the slot from sentinel
     // to the key. If the slot is non-sentinel the consumer is behind by a
     // full lap → drop. Bounded-buffer policy (drop, don't block).
     const u64 cap = ring_->slots.size();
-    const u64 pos = ring_->head.fetch_add(1, std::memory_order_acq_rel);
+    const u64 pos = ring_->head.fetch_add(1, cardinal::memory_order_acq_rel);
     auto& slot = ring_->slots[pos % cap];
     u64 expected = static_cast<u64>(-1);
     if (!slot.compare_exchange_strong(expected, key.raw,
-            std::memory_order_acq_rel, std::memory_order_acquire))
+            cardinal::memory_order_acq_rel, cardinal::memory_order_acquire))
     {
-        stat_dropped_.fetch_add(1, std::memory_order_relaxed);
+        stat_dropped_.fetch_add(1, cardinal::memory_order_relaxed);
         return false;
     }
     return true;
@@ -144,7 +146,7 @@ void System::process_request_(TileKey key, u64 now_ms) {
     const TileLookup prelook = vt->page_table().lookup(key.mip(), key.y(), key.x());
     if (prelook.status == TileStatus::Resident) return;
 
-    std::vector<u8> bytes = vt->desc().decoder->decode(key);
+    cardinal::vector<u8> bytes = vt->desc().decoder->decode(key);
     if (bytes.empty()) {
         vt->page_table().mark_failed(key.mip(), key.y(), key.x());
         cardinal::log::warnf("vt/system",
@@ -159,7 +161,7 @@ void System::process_request_(TileKey key, u64 now_ms) {
         return;
     }
     vt->page_table().mark_resident(key.mip(), key.y(), key.x(), slot);
-    stat_processed_.fetch_add(1, std::memory_order_relaxed);
+    stat_processed_.fetch_add(1, cardinal::memory_order_relaxed);
 }
 
 void System::prefetch_(TileKey key) {
@@ -178,7 +180,7 @@ void System::prefetch_(TileKey key) {
         const TileLookup lk = vt->page_table().lookup(k.mip(), k.y(), k.x());
         if (lk.status == TileStatus::Resident || lk.status == TileStatus::Pending) return;
         vt->page_table().mark_pending(k.mip(), k.y(), k.x());
-        if (enqueue_request(k)) stat_prefetch_.fetch_add(1, std::memory_order_relaxed);
+        if (enqueue_request(k)) stat_prefetch_.fetch_add(1, cardinal::memory_order_relaxed);
     };
 
     // 4-neighbour at the same mip
@@ -204,18 +206,18 @@ void System::tick(u64 now_ms) {
     // 32/tick keeps the streamer responsive without dominating the frame.
     constexpr u64 kMaxBatchPerTick = 32;
     const u64 cap = ring_->slots.size();
-    std::vector<TileKey> batch;
+    cardinal::vector<TileKey> batch;
     batch.reserve(kMaxBatchPerTick);
 
     while (true) {
-        const u64 t = ring_->tail.load(std::memory_order_acquire);
-        const u64 h = ring_->head.load(std::memory_order_acquire);
+        const u64 t = ring_->tail.load(cardinal::memory_order_acquire);
+        const u64 h = ring_->head.load(cardinal::memory_order_acquire);
         if (t >= h) break;
         auto& slot = ring_->slots[t % cap];
-        u64 raw = slot.load(std::memory_order_acquire);
+        u64 raw = slot.load(cardinal::memory_order_acquire);
         if (raw == static_cast<u64>(-1)) break;        // producer hasn't filled yet
-        slot.store(static_cast<u64>(-1), std::memory_order_release);
-        ring_->tail.store(t + 1, std::memory_order_release);
+        slot.store(static_cast<u64>(-1), cardinal::memory_order_release);
+        ring_->tail.store(t + 1, cardinal::memory_order_release);
         batch.push_back(TileKey{}); batch.back().raw = raw;
         if (batch.size() >= kMaxBatchPerTick) break;
     }
@@ -235,7 +237,7 @@ void System::tick(u64 now_ms) {
 
 void System::purge() {
     cache_->clear();
-    std::lock_guard<std::mutex> lg(vts_mtx_);
+    cardinal::lock_guard<cardinal::mutex> lg(vts_mtx_);
     for (auto& w : vts_) {
         auto vt = w.lock();
         if (vt == nullptr) continue;
@@ -256,12 +258,12 @@ void System::purge() {
 SystemStats System::stats() const noexcept {
     SystemStats s{};
     s.cache              = cache_->stats();
-    s.requests_seen      = stat_seen_.load(std::memory_order_relaxed);
-    s.requests_processed = stat_processed_.load(std::memory_order_relaxed);
-    s.requests_dropped   = stat_dropped_.load(std::memory_order_relaxed);
-    s.prefetch_added     = stat_prefetch_.load(std::memory_order_relaxed);
+    s.requests_seen      = stat_seen_.load(cardinal::memory_order_relaxed);
+    s.requests_processed = stat_processed_.load(cardinal::memory_order_relaxed);
+    s.requests_dropped   = stat_dropped_.load(cardinal::memory_order_relaxed);
+    s.prefetch_added     = stat_prefetch_.load(cardinal::memory_order_relaxed);
     {
-        std::lock_guard<std::mutex> lg(vts_mtx_);
+        cardinal::lock_guard<cardinal::mutex> lg(vts_mtx_);
         for (const auto& w : vts_) if (w.lock()) ++s.vt_count;
     }
     return s;

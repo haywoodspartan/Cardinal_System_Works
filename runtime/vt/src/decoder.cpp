@@ -1,8 +1,8 @@
 #include <cardinal/vt/decoder.hpp>
 
-#include <cmath>
-#include <cstdio>
-#include <cstring>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cmath.hpp>
+#include <cardinal/core/cstdio.hpp>
 
 namespace cardinal::vt {
 
@@ -24,7 +24,7 @@ inline u32 hsv_to_rgba(float h, float s, float v) noexcept {
         const u8 g = static_cast<u8>(v * 255.0f);
         return 0xFF000000u | (g << 16) | (g << 8) | g;
     }
-    h = h - std::floor(h);
+    h = h - cardinal::floor(h);
     h *= 6.0f;
     const int i = static_cast<int>(h);
     const float f = h - i;
@@ -48,8 +48,8 @@ inline u32 hsv_to_rgba(float h, float s, float v) noexcept {
 
 }  // namespace
 
-std::vector<u8> ProceduralDecoder::decode(TileKey key) {
-    std::vector<u8> out(kTileBytesRGBA);
+cardinal::vector<u8> ProceduralDecoder::decode(TileKey key) {
+    cardinal::vector<u8> out(kTileBytesRGBA);
     if (!key.valid()) return out;
 
     // Per-tile hue based on (vt, mip, x, y).
@@ -58,9 +58,9 @@ std::vector<u8> ProceduralDecoder::decode(TileKey key) {
     const float hue = static_cast<float>(tile_seed & 0xFFFFu) / 65535.0f;
     const float sat = 0.55f - static_cast<float>(key.mip()) * 0.04f;
     const float val = 0.95f;
-    const u32   base_rgba = hsv_to_rgba(hue, std::max(0.10f, sat), val);
+    const u32   base_rgba = hsv_to_rgba(hue, cardinal::max(0.10f, sat), val);
     const u32   alt_rgba  = hsv_to_rgba(hue,
-        std::max(0.10f, sat * 0.5f), std::min(1.0f, val + 0.05f));
+        cardinal::max(0.10f, sat * 0.5f), cardinal::min(1.0f, val + 0.05f));
 
     // Checker pattern + a subtle border so the user can see tile edges.
     auto* px = reinterpret_cast<u32*>(out.data());
@@ -77,17 +77,17 @@ std::vector<u8> ProceduralDecoder::decode(TileKey key) {
     return out;
 }
 
-std::vector<u8> FileDecoder::decode(TileKey key) {
+cardinal::vector<u8> FileDecoder::decode(TileKey key) {
     if (!resolver_) return {};
-    const std::string path = resolver_(key);
+    const cardinal::string path = resolver_(key);
     if (path.empty()) return {};
 
-    FILE* f = std::fopen(path.c_str(), "rb");
+    FILE* f = cardinal::fopen(path.c_str(), "rb");
     if (f == nullptr) return {};
 
-    std::vector<u8> out(kTileBytesRGBA);
-    const usize n = std::fread(out.data(), 1, out.size(), f);
-    std::fclose(f);
+    cardinal::vector<u8> out(kTileBytesRGBA);
+    const usize n = cardinal::fread(out.data(), 1, out.size(), f);
+    cardinal::fclose(f);
     if (n != out.size()) {
         out.clear();   // short read or missing — surface as decode failure
     }

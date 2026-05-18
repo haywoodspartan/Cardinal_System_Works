@@ -3,7 +3,7 @@
 // =============================================================================
 // Cardinal — physical tile pool + LRU cache.
 //
-// The pool is a flat std::vector<Slot> of fixed size — never grows once
+// The pool is a flat cardinal::vector<Slot> of fixed size — never grows once
 // configured. Each slot holds:
 //   - the bytes of one decoded tile (kTileBytesRGBA)
 //   - the TileKey it represents (or kInvalidTileKey when free)
@@ -23,10 +23,9 @@
 
 #include <cardinal/vt/types.hpp>
 
-#include <atomic>
-#include <mutex>
-#include <unordered_map>
-#include <vector>
+#include <cardinal/core/atomic.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/thread.hpp>
 
 namespace cardinal::vt {
 
@@ -95,11 +94,11 @@ public:
     TileKey   slot_key(PhysicalSlot s) const noexcept;
 
     // Iterate every resident slot. Cheap; for stats / panel only.
-    void for_each_resident(const std::function<void(PhysicalSlot, TileKey, u64 last_use_ms)>& fn) const;
+    void for_each_resident(const cardinal::function<void(PhysicalSlot, TileKey, u64 last_use_ms)>& fn) const;
 
 private:
     struct Slot {
-        std::vector<u8> bytes;       // size kTileBytesRGBA when resident
+        cardinal::vector<u8> bytes;       // size kTileBytesRGBA when resident
         TileKey         key{kInvalidTileKey};
         TileHash        hash{0};
         u64             last_use_ms{0};
@@ -111,25 +110,25 @@ private:
     PhysicalSlot take_free_slot() noexcept;
     void         release_to_free_stack(PhysicalSlot s) noexcept;
 
-    mutable std::mutex                       mtx_;
-    std::vector<Slot>                        slots_;
+    mutable cardinal::mutex                       mtx_;
+    cardinal::vector<Slot>                        slots_;
     // Key -> slot index for O(1) lookup. Sized at slot_count().
-    std::unordered_map<TileKey, PhysicalSlot> by_key_;
+    cardinal::unordered_map<TileKey, PhysicalSlot> by_key_;
     // Hash -> slot index for dedup. May map to a slot whose hash matches
     // — caller verifies via memcmp. Only populated when dedup_enabled_.
-    std::unordered_map<TileHash, PhysicalSlot> by_hash_;
+    cardinal::unordered_map<TileHash, PhysicalSlot> by_hash_;
     // LIFO of currently-empty slot indices. Push on construction (every
     // slot starts free), eviction, clear; pop on insert. Replaces an
     // O(N) linear scan in find_free_slot — at 1024 slots that scan
     // dominated insert latency under load.
-    std::vector<PhysicalSlot>                free_slots_;
+    cardinal::vector<PhysicalSlot>                free_slots_;
     bool                                     dedup_enabled_{false};
 
-    std::atomic<u64> hits_       {0};
-    std::atomic<u64> misses_     {0};
-    std::atomic<u64> evictions_  {0};
-    std::atomic<u64> dedup_hits_ {0};
-    std::atomic<u64> inserts_    {0};
+    cardinal::atomic<u64> hits_       {0};
+    cardinal::atomic<u64> misses_     {0};
+    cardinal::atomic<u64> evictions_  {0};
+    cardinal::atomic<u64> dedup_hits_ {0};
+    cardinal::atomic<u64> inserts_    {0};
 };
 
 }  // namespace cardinal::vt

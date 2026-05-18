@@ -22,9 +22,8 @@
 // (atomic load/store / CAS on 64-bit platforms).
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
-
-#include <functional>
+#include <cardinal/core/types.hpp>   // MASTER typedef header — also brings
+                                     // <functional> for the hash<> below
 
 namespace cardinal::vt {
 
@@ -80,7 +79,9 @@ inline constexpr TileKey kInvalidTileKey{};
 
 }  // namespace cardinal::vt
 
-// std::hash specialisation so TileKey works in unordered containers.
+// hash<> specialisation in namespace std (the one sanctioned use of namespace
+// std — there is no other mechanism to make a custom key hashable) so TileKey
+// works in cardinal::unordered_map / unordered_set.
 namespace std {
 template <> struct hash<cardinal::vt::TileKey> {
     size_t operator()(const cardinal::vt::TileKey& k) const noexcept {

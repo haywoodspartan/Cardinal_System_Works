@@ -22,9 +22,9 @@
 #include <cardinal/vt/tile_cache.hpp>
 #include <cardinal/vt/types.hpp>
 
-#include <atomic>
-#include <memory>
-#include <vector>
+#include <cardinal/core/atomic.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/thread.hpp>
 
 namespace cardinal::vt {
 
@@ -43,12 +43,12 @@ struct VirtualTextureDesc {
     u32            width_tiles {1};       // tiles along X at mip 0
     u32            height_tiles{1};
     u32            mip_count   {1};
-    std::shared_ptr<Decoder> decoder;
+    cardinal::shared_ptr<Decoder> decoder;
 };
 
 class VirtualTexture {
 public:
-    static std::shared_ptr<VirtualTexture> create(const VirtualTextureDesc& desc);
+    static cardinal::shared_ptr<VirtualTexture> create(const VirtualTextureDesc& desc);
 
     // Enqueue a tile request (no-op if already Pending or Resident).
     // Safe to call from any thread; the queue is lock-free MPSC.
@@ -68,7 +68,7 @@ public:
 
 private:
     VirtualTextureDesc        desc_{};
-    std::unique_ptr<PageTable> pt_;
+    cardinal::unique_ptr<PageTable> pt_;
     System*                    system_{nullptr};
 };
 
@@ -94,7 +94,7 @@ struct SystemStats {
 
 class System {
 public:
-    static std::shared_ptr<System> create(const SystemDesc& desc = {});
+    static cardinal::shared_ptr<System> create(const SystemDesc& desc = {});
     ~System();
 
     System(const System&) = delete;
@@ -103,9 +103,9 @@ public:
     // Register a VT for tracking. Idempotent — re-registering with the same
     // id replaces the previous entry. The system holds a weak_ptr, so the
     // integrator owns the VT's lifetime.
-    void register_vt  (const std::shared_ptr<VirtualTexture>& vt);
+    void register_vt  (const cardinal::shared_ptr<VirtualTexture>& vt);
     void unregister_vt(VtId id);
-    std::shared_ptr<VirtualTexture> get_vt(VtId id) const;
+    cardinal::shared_ptr<VirtualTexture> get_vt(VtId id) const;
 
     // Push a tile into the decode queue. Producer side; lock-free.
     // Returns false on ring overflow (stat-tracked).
@@ -140,25 +140,25 @@ private:
     void prefetch_(TileKey key);
 
     SystemDesc                                desc_{};
-    std::unique_ptr<TileCache>                cache_;
+    cardinal::unique_ptr<TileCache>                cache_;
     // VT registry. Slot index = VtId. Holds weak_ptrs so we don't keep VTs
     // alive past the integrator's release.
-    mutable std::mutex                         vts_mtx_;
-    std::vector<std::weak_ptr<VirtualTexture>> vts_;
+    mutable cardinal::mutex                         vts_mtx_;
+    cardinal::vector<cardinal::weak_ptr<VirtualTexture>> vts_;
 
     // Lock-free MPSC ring of pending requests. Written by request(); drained
     // by tick(). Sized to desc_.request_ring_size.
     struct Ring {
-        std::vector<std::atomic<u64>> slots;
-        std::atomic<u64>              head{0};   // producer position
-        std::atomic<u64>              tail{0};   // consumer position
+        cardinal::vector<cardinal::atomic<u64>> slots;
+        cardinal::atomic<u64>              head{0};   // producer position
+        cardinal::atomic<u64>              tail{0};   // consumer position
     };
-    std::unique_ptr<Ring>                      ring_;
+    cardinal::unique_ptr<Ring>                      ring_;
 
-    std::atomic<u64> stat_seen_     {0};
-    std::atomic<u64> stat_processed_{0};
-    std::atomic<u64> stat_dropped_  {0};
-    std::atomic<u64> stat_prefetch_ {0};
+    cardinal::atomic<u64> stat_seen_     {0};
+    cardinal::atomic<u64> stat_processed_{0};
+    cardinal::atomic<u64> stat_dropped_  {0};
+    cardinal::atomic<u64> stat_prefetch_ {0};
 
     // budget broker subscription id (set when register_with_budget_broker)
     u32 budget_sub_id_{0};
