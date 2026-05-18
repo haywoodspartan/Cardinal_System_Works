@@ -4,18 +4,16 @@
 #include <cardinal/core/log.hpp>
 #include <cardinal/rhi/rhi.hpp>
 
-#include <atomic>
-#include <chrono>
-#include <cstdio>
-#include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <memory>
-#include <mutex>
-#include <unordered_map>
-#include <unordered_set>
+#include <cardinal/core/atomic.hpp>
+#include <cardinal/core/chrono.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/filesystem.hpp>
+#include <cardinal/core/fstream.hpp>
+#include <cardinal/core/thread.hpp>
+#include <cardinal/core/utility.hpp>
 
-namespace fs = std::filesystem;
+namespace fs = cardinal::fs;
 
 namespace cardinal::shader {
 
@@ -48,24 +46,24 @@ u64 hash_request(const CompileRequest& r) noexcept {
     return h;
 }
 
-bool read_all(const std::string& path, std::vector<u8>& out) {
-    std::ifstream f(path, std::ios::binary);
+bool read_all(const cardinal::string& path, cardinal::vector<u8>& out) {
+    cardinal::ifstream f(path, cardinal::ios::binary);
     if (!f) return false;
-    f.seekg(0, std::ios::end);
+    f.seekg(0, cardinal::ios::end);
     const auto n = f.tellg();
-    f.seekg(0, std::ios::beg);
+    f.seekg(0, cardinal::ios::beg);
     out.resize(static_cast<usize>(n));
     f.read(reinterpret_cast<char*>(out.data()), n);
     return true;
 }
 
-bool write_all(const std::string& path, const std::vector<u8>& bytes) {
-    std::error_code ec;
+bool write_all(const cardinal::string& path, const cardinal::vector<u8>& bytes) {
+    cardinal::error_code ec;
     fs::create_directories(fs::path(path).parent_path(), ec);
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    cardinal::ofstream f(path, cardinal::ios::binary | cardinal::ios::trunc);
     if (!f) return false;
     f.write(reinterpret_cast<const char*>(bytes.data()),
-            static_cast<std::streamsize>(bytes.size()));
+            static_cast<cardinal::streamsize>(bytes.size()));
     return true;
 }
 
@@ -85,50 +83,50 @@ cardinal::rhi::ShaderStage to_rhi_stage(Stage s) noexcept {
 // ---------------------------------------------------------------------------
 struct Compiler::Impl {
     cardinal::rhi::Device* device{nullptr};
-    std::string            cache_dir;
-    std::mutex             mtx;
+    cardinal::string            cache_dir;
+    cardinal::mutex             mtx;
     // In-memory bytecode cache keyed by hash.
-    std::unordered_map<u64, std::vector<u8>> mem_cache;
-    std::atomic<u64>       compiles_total{0};
-    std::atomic<u64>       cache_hits    {0};
-    std::atomic<u64>       hot_reloads   {0};
+    cardinal::unordered_map<u64, cardinal::vector<u8>> mem_cache;
+    cardinal::atomic<u64>       compiles_total{0};
+    cardinal::atomic<u64>       cache_hits    {0};
+    cardinal::atomic<u64>       hot_reloads   {0};
 
     struct Watch {
         WatchHandle id;
-        std::string source_path;
-        std::string entry_point;
+        cardinal::string source_path;
+        cardinal::string entry_point;
         Stage stage;
-        std::vector<std::string> defines;
+        cardinal::vector<cardinal::string> defines;
         OnChange on_change;
         u64 mtime_ns{0};
     };
-    std::unordered_map<WatchHandle, Watch> watches;
+    cardinal::unordered_map<WatchHandle, Watch> watches;
     WatchHandle next_id{1};
 
     // Event-driven mode — when active, file_watcher_ owns a worker thread
     // that pushes changed paths into dirty_paths_. tick() walks just the
     // dirty set (under the same mutex as watches) and recompiles
     // matching watches, then clears the set. The mtime poll is skipped.
-    std::unique_ptr<cardinal::core::FileWatcher> file_watcher;
-    std::unordered_set<std::string>              dirty_paths;
-    std::string                                  watch_root;
+    cardinal::unique_ptr<cardinal::core::FileWatcher> file_watcher;
+    cardinal::unordered_set<cardinal::string>              dirty_paths;
+    cardinal::string                                  watch_root;
 };
 
-std::shared_ptr<Compiler> Compiler::create(cardinal::rhi::Device& device,
-                                           std::string cache_dir)
+cardinal::shared_ptr<Compiler> Compiler::create(cardinal::rhi::Device& device,
+                                           cardinal::string cache_dir)
 {
-    auto c = std::shared_ptr<Compiler>(new Compiler());
-    if (!c->initialize_(device, std::move(cache_dir))) return nullptr;
+    auto c = cardinal::shared_ptr<Compiler>(new Compiler());
+    if (!c->initialize_(device, cardinal::move(cache_dir))) return nullptr;
     return c;
 }
 
 Compiler::~Compiler() { delete impl_; }
 
-bool Compiler::initialize_(cardinal::rhi::Device& device, std::string cache_dir) {
+bool Compiler::initialize_(cardinal::rhi::Device& device, cardinal::string cache_dir) {
     impl_ = new Impl{};
     impl_->device    = &device;
-    impl_->cache_dir = std::move(cache_dir);
-    std::error_code ec;
+    impl_->cache_dir = cardinal::move(cache_dir);
+    cardinal::error_code ec;
     fs::create_directories(impl_->cache_dir, ec);
     cardinal::log::infof("shader",
         "compiler online — cache=%s", impl_->cache_dir.c_str());
@@ -136,7 +134,7 @@ bool Compiler::initialize_(cardinal::rhi::Device& device, std::string cache_dir)
 }
 
 CompileResult Compiler::compile(const CompileRequest& req) {
-    using clock = std::chrono::high_resolution_clock;
+    using clock = cardinal::chrono::high_resolution_clock;
     const auto t0 = clock::now();
 
     CompileResult cr{};
@@ -144,46 +142,46 @@ CompileResult Compiler::compile(const CompileRequest& req) {
 
     // 1) In-memory cache hit?
     {
-        std::lock_guard<std::mutex> lg(impl_->mtx);
+        cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
         auto it = impl_->mem_cache.find(cr.cache_key);
         if (it != impl_->mem_cache.end()) {
             cr.ok = true;
             cr.bytecode = it->second;
             cr.served_from_cache = true;
-            cr.compile_seconds = std::chrono::duration<double>(clock::now() - t0).count();
-            impl_->cache_hits.fetch_add(1, std::memory_order_relaxed);
+            cr.compile_seconds = cardinal::chrono::duration<double>(clock::now() - t0).count();
+            impl_->cache_hits.fetch_add(1, cardinal::memory_order_relaxed);
             return cr;
         }
     }
 
     // 2) On-disk cache hit?
     char hex[32];
-    std::snprintf(hex, sizeof(hex), "%016llx.bin",
+    cardinal::snprintf(hex, sizeof(hex), "%016llx.bin",
                   static_cast<unsigned long long>(cr.cache_key));
-    const std::string cache_path = impl_->cache_dir + "/" + hex;
+    const cardinal::string cache_path = impl_->cache_dir + "/" + hex;
     {
-        std::vector<u8> bytes;
+        cardinal::vector<u8> bytes;
         if (read_all(cache_path, bytes) && !bytes.empty()) {
             cr.ok = true;
-            cr.bytecode = std::move(bytes);
+            cr.bytecode = cardinal::move(bytes);
             cr.served_from_cache = true;
-            cr.compile_seconds = std::chrono::duration<double>(clock::now() - t0).count();
-            std::lock_guard<std::mutex> lg(impl_->mtx);
+            cr.compile_seconds = cardinal::chrono::duration<double>(clock::now() - t0).count();
+            cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
             impl_->mem_cache[cr.cache_key] = cr.bytecode;
-            impl_->cache_hits.fetch_add(1, std::memory_order_relaxed);
+            impl_->cache_hits.fetch_add(1, cardinal::memory_order_relaxed);
             return cr;
         }
     }
 
     // 3) Real compile via RHI.
-    std::string text = req.source_text;
+    cardinal::string text = req.source_text;
     // Prepend defines as `#define X` lines so the compiler honours them
     // even if it doesn't take a defines list directly.
     if (!req.defines.empty()) {
-        std::string prefix;
+        cardinal::string prefix;
         for (const auto& d : req.defines) {
             const auto eq = d.find('=');
-            if (eq == std::string::npos) {
+            if (eq == cardinal::string::npos) {
                 prefix += "#define " + d + "\n";
             } else {
                 prefix += "#define " + d.substr(0, eq) + " " + d.substr(eq + 1) + "\n";
@@ -198,27 +196,27 @@ CompileResult Compiler::compile(const CompileRequest& req) {
     if (!blob.ok()) {
         cr.ok = false;
         cr.diagnostics = "RHI compile_shader failed";
-        impl_->compiles_total.fetch_add(1, std::memory_order_relaxed);
+        impl_->compiles_total.fetch_add(1, cardinal::memory_order_relaxed);
         return cr;
     }
     cr.ok = true;
-    cr.bytecode = std::move(blob.bytes);
-    cr.compile_seconds = std::chrono::duration<double>(clock::now() - t0).count();
-    impl_->compiles_total.fetch_add(1, std::memory_order_relaxed);
+    cr.bytecode = cardinal::move(blob.bytes);
+    cr.compile_seconds = cardinal::chrono::duration<double>(clock::now() - t0).count();
+    impl_->compiles_total.fetch_add(1, cardinal::memory_order_relaxed);
 
     write_all(cache_path, cr.bytecode);
     {
-        std::lock_guard<std::mutex> lg(impl_->mtx);
+        cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
         impl_->mem_cache[cr.cache_key] = cr.bytecode;
     }
     return cr;
 }
 
-std::vector<CompileResult> Compiler::compile_variants(
+cardinal::vector<CompileResult> Compiler::compile_variants(
     const CompileRequest& base,
-    const std::vector<std::vector<std::string>>& variant_defines)
+    const cardinal::vector<cardinal::vector<cardinal::string>>& variant_defines)
 {
-    std::vector<CompileResult> out;
+    cardinal::vector<CompileResult> out;
     out.reserve(variant_defines.size());
     for (const auto& vd : variant_defines) {
         CompileRequest r = base;
@@ -228,38 +226,38 @@ std::vector<CompileResult> Compiler::compile_variants(
     return out;
 }
 
-Compiler::WatchHandle Compiler::watch(const std::string& source_path,
-                                      const std::string& entry_point,
+Compiler::WatchHandle Compiler::watch(const cardinal::string& source_path,
+                                      const cardinal::string& entry_point,
                                       Stage stage,
-                                      const std::vector<std::string>& defines,
+                                      const cardinal::vector<cardinal::string>& defines,
                                       OnChange on_change)
 {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     Impl::Watch w{};
     w.id          = impl_->next_id++;
     w.source_path = source_path;
     w.entry_point = entry_point;
     w.stage       = stage;
     w.defines     = defines;
-    w.on_change   = std::move(on_change);
-    std::error_code ec;
+    w.on_change   = cardinal::move(on_change);
+    cardinal::error_code ec;
     auto t = fs::last_write_time(source_path, ec);
     w.mtime_ns = ec ? 0 :
-        static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        static_cast<u64>(cardinal::chrono::duration_cast<cardinal::chrono::nanoseconds>(
             t.time_since_epoch()).count());
-    impl_->watches.emplace(w.id, std::move(w));
+    impl_->watches.emplace(w.id, cardinal::move(w));
     return impl_->watches.size() ? (impl_->next_id - 1) : 0;
 }
 
 void Compiler::unwatch(WatchHandle h) {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     impl_->watches.erase(h);
 }
 
 void Compiler::tick() {
-    std::vector<Impl::Watch> changed;
+    cardinal::vector<Impl::Watch> changed;
     {
-        std::lock_guard<std::mutex> lg(impl_->mtx);
+        cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
 
         if (impl_->file_watcher != nullptr) {
             // Event-driven path: only walk paths the FileWatcher has
@@ -288,10 +286,10 @@ void Compiler::tick() {
         } else {
             // Legacy poll path: stat() every watched file each tick.
             for (auto& [id, w] : impl_->watches) {
-                std::error_code ec;
+                cardinal::error_code ec;
                 auto t = fs::last_write_time(w.source_path, ec);
                 const u64 cur = ec ? 0 :
-                    static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    static_cast<u64>(cardinal::chrono::duration_cast<cardinal::chrono::nanoseconds>(
                         t.time_since_epoch()).count());
                 if (cur != w.mtime_ns) {
                     w.mtime_ns = cur;
@@ -301,7 +299,7 @@ void Compiler::tick() {
         }
     }
     for (auto& w : changed) {
-        std::vector<u8> bytes;
+        cardinal::vector<u8> bytes;
         if (!read_all(w.source_path, bytes)) continue;
         CompileRequest r{};
         r.source_path = w.source_path;
@@ -313,16 +311,16 @@ void Compiler::tick() {
         // the stale blob.
         const u64 key = hash_request(r);
         {
-            std::lock_guard<std::mutex> lg(impl_->mtx);
+            cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
             impl_->mem_cache.erase(key);
         }
         auto cr = compile(r);
-        impl_->hot_reloads.fetch_add(1, std::memory_order_relaxed);
+        impl_->hot_reloads.fetch_add(1, cardinal::memory_order_relaxed);
         if (w.on_change) w.on_change(cr);
     }
 }
 
-bool Compiler::start_event_driven_watch(const std::string& root) {
+bool Compiler::start_event_driven_watch(const cardinal::string& root) {
     // Stop any prior watcher first — we only own one root at a time.
     stop_event_driven_watch();
 
@@ -334,7 +332,7 @@ bool Compiler::start_event_driven_watch(const std::string& root) {
         root, /*recursive*/ true,
         [this](const cardinal::core::FileEvent& e) {
             if (e.kind == cardinal::core::FileEventKind::Removed) return;
-            std::lock_guard<std::mutex> lg(impl_->mtx);
+            cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
             impl_->dirty_paths.insert(e.path);
         });
 
@@ -346,8 +344,8 @@ bool Compiler::start_event_driven_watch(const std::string& root) {
     }
 
     {
-        std::lock_guard<std::mutex> lg(impl_->mtx);
-        impl_->file_watcher = std::move(watcher);
+        cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
+        impl_->file_watcher = cardinal::move(watcher);
         impl_->watch_root   = root;
     }
     cardinal::log::infof("shader",
@@ -356,10 +354,10 @@ bool Compiler::start_event_driven_watch(const std::string& root) {
 }
 
 void Compiler::stop_event_driven_watch() {
-    std::unique_ptr<cardinal::core::FileWatcher> doomed;
+    cardinal::unique_ptr<cardinal::core::FileWatcher> doomed;
     {
-        std::lock_guard<std::mutex> lg(impl_->mtx);
-        doomed = std::move(impl_->file_watcher);
+        cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
+        doomed = cardinal::move(impl_->file_watcher);
         impl_->dirty_paths.clear();
         impl_->watch_root.clear();
     }
@@ -368,19 +366,19 @@ void Compiler::stop_event_driven_watch() {
 }
 
 bool Compiler::event_driven_watch_active() const noexcept {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     return impl_->file_watcher != nullptr;
 }
 
 Compiler::Stats Compiler::stats() const noexcept {
     Stats s{};
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     s.cached_blobs   = static_cast<u32>(impl_->mem_cache.size());
     for (const auto& [_, b] : impl_->mem_cache) s.cache_bytes += b.size();
-    s.compiles_total = impl_->compiles_total.load(std::memory_order_relaxed);
-    s.cache_hits     = impl_->cache_hits.load(std::memory_order_relaxed);
+    s.compiles_total = impl_->compiles_total.load(cardinal::memory_order_relaxed);
+    s.cache_hits     = impl_->cache_hits.load(cardinal::memory_order_relaxed);
     s.watched_files  = static_cast<u32>(impl_->watches.size());
-    s.hot_reloads    = impl_->hot_reloads.load(std::memory_order_relaxed);
+    s.hot_reloads    = impl_->hot_reloads.load(cardinal::memory_order_relaxed);
     return s;
 }
 
