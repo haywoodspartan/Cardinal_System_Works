@@ -1,7 +1,8 @@
 #include <cardinal/ai/ai.hpp>
 
-#include <algorithm>
-#include <cmath>
+#include <cardinal/core/algorithm.hpp>   // cardinal::sort/remove_if
+#include <cardinal/core/cmath.hpp>       // cardinal::sqrt
+// cardinal::get_if/variant/move arrive via ai.hpp (core/utility.hpp)
 
 namespace cardinal::ai {
 
@@ -19,34 +20,34 @@ const char* status_name(Status s) noexcept {
 // ---------------------------------------------------------------------------
 namespace {
 template <class T>
-T get_or(const std::unordered_map<std::string, BlackboardValue>& m,
-         const std::string& k, T def)
+T get_or(const cardinal::unordered_map<cardinal::string, BlackboardValue>& m,
+         const cardinal::string& k, T def)
 {
     auto it = m.find(k);
     if (it == m.end()) return def;
-    if (auto* v = std::get_if<T>(&it->second)) return *v;
+    if (auto* v = cardinal::get_if<T>(&it->second)) return *v;
     return def;
 }
 }
 
-float Blackboard::get_float(const std::string& k, float v) const            { return get_or(values_, k, v); }
-int   Blackboard::get_int  (const std::string& k, int v) const              { return get_or(values_, k, v); }
-bool  Blackboard::get_bool (const std::string& k, bool v) const             { return get_or(values_, k, v); }
-cardinal::scene::Vec3 Blackboard::get_vec3(const std::string& k, cardinal::scene::Vec3 d) const {
+float Blackboard::get_float(const cardinal::string& k, float v) const            { return get_or(values_, k, v); }
+int   Blackboard::get_int  (const cardinal::string& k, int v) const              { return get_or(values_, k, v); }
+bool  Blackboard::get_bool (const cardinal::string& k, bool v) const             { return get_or(values_, k, v); }
+cardinal::scene::Vec3 Blackboard::get_vec3(const cardinal::string& k, cardinal::scene::Vec3 d) const {
     return get_or(values_, k, d);
 }
-std::string Blackboard::get_string(const std::string& k, const std::string& d) const {
+cardinal::string Blackboard::get_string(const cardinal::string& k, const cardinal::string& d) const {
     return get_or(values_, k, d);
 }
 
-std::vector<std::string> Blackboard::keys() const {
-    std::vector<std::string> r;
+cardinal::vector<cardinal::string> Blackboard::keys() const {
+    cardinal::vector<cardinal::string> r;
     r.reserve(values_.size());
     for (const auto& [k, _] : values_) r.push_back(k);
-    std::sort(r.begin(), r.end());
+    cardinal::sort(r.begin(), r.end());
     return r;
 }
-const BlackboardValue* Blackboard::value(const std::string& k) const {
+const BlackboardValue* Blackboard::value(const cardinal::string& k) const {
     auto it = values_.find(k);
     return it == values_.end() ? nullptr : &it->second;
 }
@@ -102,7 +103,7 @@ Status SetBlackboardFloat::tick(Blackboard& bb, float /*dt*/) {
 // ---------------------------------------------------------------------------
 SensorId PerceptionWorld::add_sensor(const SensorDesc& d) {
     SensorEntry e{}; e.id = next_sensor_++; e.d = d; e.alive = true;
-    sensors_.push_back(std::move(e));
+    sensors_.push_back(cardinal::move(e));
     return sensors_.back().id;
 }
 void PerceptionWorld::update_sensor(SensorId id, const SensorDesc& d) {
@@ -114,7 +115,7 @@ void PerceptionWorld::remove_sensor(SensorId id) {
 
 StimulusId PerceptionWorld::add_stimulus(const StimulusDesc& d) {
     StimulusEntry e{}; e.id = next_stimulus_++; e.d = d; e.age = 0.0f; e.alive = true;
-    stimuli_.push_back(std::move(e));
+    stimuli_.push_back(cardinal::move(e));
     return stimuli_.back().id;
 }
 void PerceptionWorld::remove_stimulus(StimulusId id) {
@@ -139,7 +140,7 @@ void PerceptionWorld::tick(float dt) {
             const auto& sp = sensor.d.position;
             const auto& tp = stim.d.position;
             const f32 dx = tp.x - sp.x, dy = tp.y - sp.y, dz = tp.z - sp.z;
-            const f32 dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+            const f32 dist = cardinal::sqrt(dx*dx + dy*dy + dz*dz);
             if (stim.d.kind == StimulusKind::Sight) {
                 if (!sensor.d.sight_enabled) continue;
                 if (dist > sensor.d.sight_radius) continue;
@@ -163,9 +164,9 @@ void PerceptionWorld::tick(float dt) {
         }
     }
     // Compact dead.
-    sensors_.erase(std::remove_if(sensors_.begin(), sensors_.end(),
+    sensors_.erase(cardinal::remove_if(sensors_.begin(), sensors_.end(),
         [](const SensorEntry& s){ return !s.alive; }), sensors_.end());
-    stimuli_.erase(std::remove_if(stimuli_.begin(), stimuli_.end(),
+    stimuli_.erase(cardinal::remove_if(stimuli_.begin(), stimuli_.end(),
         [](const StimulusEntry& s){ return !s.alive; }), stimuli_.end());
 }
 
