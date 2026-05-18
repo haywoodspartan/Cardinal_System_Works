@@ -5,9 +5,9 @@
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/platform.hpp>
 
-#include <cstdio>
-#include <cstring>
-#include <mutex>
+#include <cardinal/core/cstdio.hpp>    // cardinal::snprintf
+#include <cardinal/core/cstring.hpp>   // cardinal::strncpy/strncat/strlen
+#include <cardinal/core/thread.hpp>    // cardinal::mutex/lock_guard
 
 #if CARDINAL_PLATFORM_WINDOWS
 
@@ -19,9 +19,9 @@ namespace cardinal::trace {
 
 namespace {
 
-std::mutex& dbghelp_mutex() {
+cardinal::mutex& dbghelp_mutex() {
     // DbgHelp is single-threaded; serialise every call.
-    static std::mutex m;
+    static cardinal::mutex m;
     return m;
 }
 
@@ -43,7 +43,7 @@ void resolve_one(u64 addr, StackFrame& out) {
     if (!ensure_sym_initialised()) return;
 
     HANDLE proc = GetCurrentProcess();
-    std::lock_guard lk(dbghelp_mutex());
+    cardinal::lock_guard lk(dbghelp_mutex());
 
     // Symbol name + offset.
     char buf[sizeof(SYMBOL_INFO) + 256]{};
@@ -55,13 +55,13 @@ void resolve_one(u64 addr, StackFrame& out) {
         out.symbol = sym->Name;
         if (displacement) {
             char off[32];
-            std::snprintf(off, sizeof(off), "+0x%llx",
+            cardinal::snprintf(off, sizeof(off), "+0x%llx",
                 static_cast<unsigned long long>(displacement));
             out.symbol += off;
         }
     } else {
         char hex[32];
-        std::snprintf(hex, sizeof(hex), "0x%llx", static_cast<unsigned long long>(addr));
+        cardinal::snprintf(hex, sizeof(hex), "0x%llx", static_cast<unsigned long long>(addr));
         out.symbol = hex;
     }
 
@@ -85,8 +85,8 @@ void resolve_one(u64 addr, StackFrame& out) {
 
 }  // namespace
 
-std::vector<StackFrame> capture(u32 skip, u32 max_depth) {
-    std::vector<StackFrame> frames;
+cardinal::vector<StackFrame> capture(u32 skip, u32 max_depth) {
+    cardinal::vector<StackFrame> frames;
     if (max_depth == 0) return frames;
     if (max_depth > 256) max_depth = 256;
 
@@ -99,8 +99,8 @@ std::vector<StackFrame> capture(u32 skip, u32 max_depth) {
     return frames;
 }
 
-std::vector<StackFrame> capture_thread(void* native_thread_handle, u32 max_depth) {
-    std::vector<StackFrame> frames;
+cardinal::vector<StackFrame> capture_thread(void* native_thread_handle, u32 max_depth) {
+    cardinal::vector<StackFrame> frames;
     if (max_depth > 256) max_depth = 256;
     if (native_thread_handle == nullptr) return capture(0, max_depth);
 
@@ -120,7 +120,7 @@ std::vector<StackFrame> capture_thread(void* native_thread_handle, u32 max_depth
     }
 
     if (!ensure_sym_initialised()) { ResumeThread(thread); return frames; }
-    std::lock_guard lk(dbghelp_mutex());
+    cardinal::lock_guard lk(dbghelp_mutex());
 
     STACKFRAME64 sf{};
     DWORD machine = 0;
@@ -147,9 +147,9 @@ std::vector<StackFrame> capture_thread(void* native_thread_handle, u32 max_depth
     return frames;
 }
 
-std::string format(const StackFrame& f) {
+cardinal::string format(const StackFrame& f) {
     char buf[1024];
-    std::snprintf(buf, sizeof(buf), "0x%016llx  %s!%s%s%s%s%u",
+    cardinal::snprintf(buf, sizeof(buf), "0x%016llx  %s!%s%s%s%s%u",
         static_cast<unsigned long long>(f.address),
         f.module.empty()  ? "?" : f.module.c_str(),
         f.symbol.empty()  ? "?" : f.symbol.c_str(),
@@ -157,14 +157,14 @@ std::string format(const StackFrame& f) {
         f.file.empty() ? "" : f.file.c_str(),
         f.file.empty() ? "" : ":",
         f.line);
-    if (!f.file.empty()) std::strncat(buf, ")", sizeof(buf) - std::strlen(buf) - 1);
+    if (!f.file.empty()) cardinal::strncat(buf, ")", sizeof(buf) - cardinal::strlen(buf) - 1);
     return buf;
 }
 
-std::string format_full(const std::vector<StackFrame>& frames, const char* indent) {
-    std::string out;
+cardinal::string format_full(const cardinal::vector<StackFrame>& frames, const char* indent) {
+    cardinal::string out;
     for (size_t i = 0; i < frames.size(); ++i) {
-        char idx[16]; std::snprintf(idx, sizeof(idx), "%2zu  ", i);
+        char idx[16]; cardinal::snprintf(idx, sizeof(idx), "%2zu  ", i);
         if (indent) out += indent;
         out += idx;
         out += format(frames[i]);
@@ -178,10 +178,10 @@ std::string format_full(const std::vector<StackFrame>& frames, const char* inden
 #else  // POSIX — stub for now
 
 namespace cardinal::trace {
-std::vector<StackFrame> capture(u32, u32)              { return {}; }
-std::vector<StackFrame> capture_thread(void*, u32)     { return {}; }
-std::string format(const StackFrame&)                  { return ""; }
-std::string format_full(const std::vector<StackFrame>&, const char*) { return ""; }
+cardinal::vector<StackFrame> capture(u32, u32)              { return {}; }
+cardinal::vector<StackFrame> capture_thread(void*, u32)     { return {}; }
+cardinal::string format(const StackFrame&)                  { return ""; }
+cardinal::string format_full(const cardinal::vector<StackFrame>&, const char*) { return ""; }
 }
 
 #endif

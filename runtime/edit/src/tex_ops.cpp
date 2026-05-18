@@ -1,8 +1,8 @@
 #include <cardinal/edit/tex_ops.hpp>
 
-#include <algorithm>
-#include <cmath>
-#include <cstring>
+#include <cardinal/core/algorithm.hpp>   // cardinal::min/max/clamp
+#include <cardinal/core/cmath.hpp>       // cardinal::floor/pow
+#include <cardinal/core/cstring.hpp>     // cardinal::strlen
 
 namespace cardinal::edit::tex_ops {
 
@@ -31,8 +31,8 @@ inline float hash_f(u32 x, u32 y, u32 seed) noexcept {
 float smoothstep(float t) noexcept { return t * t * (3.0f - 2.0f * t); }
 
 float value_noise_2d(float x, float y, u32 seed) noexcept {
-    const i32 xi = static_cast<i32>(std::floor(x));
-    const i32 yi = static_cast<i32>(std::floor(y));
+    const i32 xi = static_cast<i32>(cardinal::floor(x));
+    const i32 yi = static_cast<i32>(cardinal::floor(y));
     const float xf = x - xi;
     const float yf = y - yi;
     const float a = hash_f(static_cast<u32>(xi)  , static_cast<u32>(yi)  , seed);
@@ -47,18 +47,18 @@ float value_noise_2d(float x, float y, u32 seed) noexcept {
 
 }  // namespace
 
-std::vector<u8> solid(u32 w, u32 h, Color c) {
-    std::vector<u8> out(static_cast<usize>(w) * h * 4);
+cardinal::vector<u8> solid(u32 w, u32 h, Color c) {
+    cardinal::vector<u8> out(static_cast<usize>(w) * h * 4);
     for (usize i = 0; i < out.size(); i += 4) {
         out[i+0] = c.r; out[i+1] = c.g; out[i+2] = c.b; out[i+3] = c.a;
     }
     return out;
 }
 
-std::vector<u8> checker(u32 w, u32 h, u32 cells_x, u32 cells_y, Color a, Color b) {
+cardinal::vector<u8> checker(u32 w, u32 h, u32 cells_x, u32 cells_y, Color a, Color b) {
     if (cells_x == 0) cells_x = 1;
     if (cells_y == 0) cells_y = 1;
-    std::vector<u8> out(static_cast<usize>(w) * h * 4);
+    cardinal::vector<u8> out(static_cast<usize>(w) * h * 4);
     for (u32 y = 0; y < h; ++y) {
         const u32 cy = (y * cells_y) / h;
         for (u32 x = 0; x < w; ++x) {
@@ -70,15 +70,15 @@ std::vector<u8> checker(u32 w, u32 h, u32 cells_x, u32 cells_y, Color a, Color b
     return out;
 }
 
-std::vector<u8> gradient_linear(u32 w, u32 h, Color a, Color b, Axis axis) {
-    std::vector<u8> out(static_cast<usize>(w) * h * 4);
+cardinal::vector<u8> gradient_linear(u32 w, u32 h, Color a, Color b, Axis axis) {
+    cardinal::vector<u8> out(static_cast<usize>(w) * h * 4);
     for (u32 y = 0; y < h; ++y) {
         for (u32 x = 0; x < w; ++x) {
             float t = 0.0f;
             switch (axis) {
                 case Axis::X:        t = w > 1 ? static_cast<float>(x) / (w-1) : 0.0f; break;
                 case Axis::Y:        t = h > 1 ? static_cast<float>(y) / (h-1) : 0.0f; break;
-                case Axis::Diagonal: t = ((float)x + y) / std::max(1u, (w + h - 2u)); break;
+                case Axis::Diagonal: t = ((float)x + y) / cardinal::max(1u, (w + h - 2u)); break;
             }
             const u8 r = fclamp_u8((1.0f-t) * a.r + t * b.r);
             const u8 g = fclamp_u8((1.0f-t) * a.g + t * b.g);
@@ -90,15 +90,15 @@ std::vector<u8> gradient_linear(u32 w, u32 h, Color a, Color b, Axis axis) {
     return out;
 }
 
-std::vector<u8> noise_value(u32 w, u32 h, u32 seed, float scale, float contrast) {
-    std::vector<u8> out(static_cast<usize>(w) * h * 4);
+cardinal::vector<u8> noise_value(u32 w, u32 h, u32 seed, float scale, float contrast) {
+    cardinal::vector<u8> out(static_cast<usize>(w) * h * 4);
     if (scale <= 0.0f) scale = 1.0f;
     for (u32 y = 0; y < h; ++y) {
         for (u32 x = 0; x < w; ++x) {
             const float fx = static_cast<float>(x) / w * scale;
             const float fy = static_cast<float>(y) / h * scale;
             float n = value_noise_2d(fx, fy, seed);
-            n = std::clamp(0.5f + (n - 0.5f) * contrast, 0.0f, 1.0f);
+            n = cardinal::clamp(0.5f + (n - 0.5f) * contrast, 0.0f, 1.0f);
             const u8 v = static_cast<u8>(n * 255.0f);
             put_px(out, w, x, y, Color{v,v,v,255});
         }
@@ -106,11 +106,11 @@ std::vector<u8> noise_value(u32 w, u32 h, u32 seed, float scale, float contrast)
     return out;
 }
 
-std::vector<u8> noise_fractal(u32 w, u32 h, u32 seed, float base_scale,
+cardinal::vector<u8> noise_fractal(u32 w, u32 h, u32 seed, float base_scale,
                               u32 octaves, float persistence)
 {
     if (octaves == 0) octaves = 1;
-    std::vector<u8> out(static_cast<usize>(w) * h * 4);
+    cardinal::vector<u8> out(static_cast<usize>(w) * h * 4);
     if (base_scale <= 0.0f) base_scale = 1.0f;
     for (u32 y = 0; y < h; ++y) {
         for (u32 x = 0; x < w; ++x) {
@@ -123,7 +123,7 @@ std::vector<u8> noise_fractal(u32 w, u32 h, u32 seed, float base_scale,
                 amp  *= persistence;
                 freq *= 2.0f;
             }
-            const float n = sum / std::max(1e-6f, norm);
+            const float n = sum / cardinal::max(1e-6f, norm);
             const u8 v = fclamp_u8(n * 255.0f);
             put_px(out, w, x, y, Color{v,v,v,255});
         }
@@ -131,10 +131,10 @@ std::vector<u8> noise_fractal(u32 w, u32 h, u32 seed, float base_scale,
     return out;
 }
 
-std::vector<u8> voronoi_cells(u32 w, u32 h, u32 seed, u32 site_count) {
+cardinal::vector<u8> voronoi_cells(u32 w, u32 h, u32 seed, u32 site_count) {
     if (site_count == 0) site_count = 1;
-    std::vector<float> sx(site_count), sy(site_count);
-    std::vector<Color> sc(site_count);
+    cardinal::vector<float> sx(site_count), sy(site_count);
+    cardinal::vector<Color> sc(site_count);
     for (u32 i = 0; i < site_count; ++i) {
         sx[i] = hash_f(i, 1, seed) * w;
         sy[i] = hash_f(i, 2, seed) * h;
@@ -143,7 +143,7 @@ std::vector<u8> voronoi_cells(u32 w, u32 h, u32 seed, u32 site_count) {
             static_cast<u8>(hash_f(i, 4, seed) * 255.0f),
             static_cast<u8>(hash_f(i, 5, seed) * 255.0f), 255 };
     }
-    std::vector<u8> out(static_cast<usize>(w) * h * 4);
+    cardinal::vector<u8> out(static_cast<usize>(w) * h * 4);
     for (u32 y = 0; y < h; ++y) {
         for (u32 x = 0; x < w; ++x) {
             float best = 1e30f;
@@ -160,7 +160,7 @@ std::vector<u8> voronoi_cells(u32 w, u32 h, u32 seed, u32 site_count) {
     return out;
 }
 
-void to_grayscale(std::vector<u8>& img, u32 w, u32 h) {
+void to_grayscale(cardinal::vector<u8>& img, u32 w, u32 h) {
     for (u32 y = 0; y < h; ++y) for (u32 x = 0; x < w; ++x) {
         const Color c = get_px(img, w, x, y);
         const u8 v = static_cast<u8>(0.299f*c.r + 0.587f*c.g + 0.114f*c.b);
@@ -168,7 +168,7 @@ void to_grayscale(std::vector<u8>& img, u32 w, u32 h) {
     }
 }
 
-void invert(std::vector<u8>& img, u32 w, u32 h) {
+void invert(cardinal::vector<u8>& img, u32 w, u32 h) {
     for (u32 y = 0; y < h; ++y) for (u32 x = 0; x < w; ++x) {
         const Color c = get_px(img, w, x, y);
         put_px(img, w, x, y, Color{
@@ -178,7 +178,7 @@ void invert(std::vector<u8>& img, u32 w, u32 h) {
     }
 }
 
-void levels(std::vector<u8>& img, u32 w, u32 h,
+void levels(cardinal::vector<u8>& img, u32 w, u32 h,
             float black_pt, float white_pt, float gamma)
 {
     if (white_pt <= black_pt) white_pt = black_pt + 1e-3f;
@@ -187,16 +187,16 @@ void levels(std::vector<u8>& img, u32 w, u32 h,
         const Color c = get_px(img, w, x, y);
         auto remap = [&](u8 v) {
             float f = static_cast<float>(v) / 255.0f;
-            f = std::clamp((f - black_pt) / (white_pt - black_pt), 0.0f, 1.0f);
-            f = std::pow(f, 1.0f / gamma);
+            f = cardinal::clamp((f - black_pt) / (white_pt - black_pt), 0.0f, 1.0f);
+            f = cardinal::pow(f, 1.0f / gamma);
             return fclamp_u8(f * 255.0f);
         };
         put_px(img, w, x, y, Color{remap(c.r), remap(c.g), remap(c.b), c.a});
     }
 }
 
-void channel_swap(std::vector<u8>& img, u32 w, u32 h, const char* layout) {
-    if (layout == nullptr || std::strlen(layout) < 4) return;
+void channel_swap(cardinal::vector<u8>& img, u32 w, u32 h, const char* layout) {
+    if (layout == nullptr || cardinal::strlen(layout) < 4) return;
     auto pick = [](char ch, const Color& c) -> u8 {
         switch (ch) {
             case 'r': return c.r;
@@ -217,7 +217,7 @@ void channel_swap(std::vector<u8>& img, u32 w, u32 h, const char* layout) {
     }
 }
 
-void compose_alpha(std::vector<u8>& dst, const std::vector<u8>& src,
+void compose_alpha(cardinal::vector<u8>& dst, const cardinal::vector<u8>& src,
                    u32 w, u32 h)
 {
     for (u32 y = 0; y < h; ++y) for (u32 x = 0; x < w; ++x) {
@@ -229,7 +229,7 @@ void compose_alpha(std::vector<u8>& dst, const std::vector<u8>& src,
             static_cast<u8>(s.r * a + d.r * ia),
             static_cast<u8>(s.g * a + d.g * ia),
             static_cast<u8>(s.b * a + d.b * ia),
-            static_cast<u8>(std::min(255.0f, s.a + d.a * ia)),
+            static_cast<u8>(cardinal::min(255.0f, s.a + d.a * ia)),
         };
         put_px(dst, w, x, y, o);
     }

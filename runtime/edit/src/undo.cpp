@@ -2,6 +2,7 @@
 // Cardinal — Undo stack implementation.
 // =============================================================================
 #include <cardinal/edit/undo.hpp>
+#include <cardinal/core/utility.hpp>   // cardinal::move
 
 namespace cardinal::edit {
 
@@ -17,14 +18,14 @@ void UndoStack::enforce_capacity() {
 
 void UndoStack::push_executed(Command cmd) {
     truncate_redo();
-    history_.push_back(std::move(cmd));
+    history_.push_back(cardinal::move(cmd));
     cursor_ = history_.size();
     enforce_capacity();
 }
 
 void UndoStack::push_and_apply(Command cmd) {
     if (cmd.apply) cmd.apply();
-    push_executed(std::move(cmd));
+    push_executed(cardinal::move(cmd));
 }
 
 bool UndoStack::undo() {

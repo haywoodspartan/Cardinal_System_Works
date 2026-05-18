@@ -17,15 +17,14 @@
 // allocation-free.
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
-
-#include <limits>
-#include <memory>
-#include <vector>
+#include <cardinal/core/types.hpp>        // cardinal::unique_ptr
+#include <cardinal/core/limits.hpp>       // cardinal::numeric_limits
+#include <cardinal/core/utility.hpp>      // cardinal::pair
+#include <cardinal/core/containers.hpp>   // cardinal::vector
 
 namespace cardinal::nav {
 
-inline constexpr float kBlocked = std::numeric_limits<float>::infinity();
+inline constexpr float kBlocked = cardinal::numeric_limits<float>::infinity();
 
 // ---------------------------------------------------------------------------
 // Grid — 2D cost field. Indexed by (x, y), origin top-left, x grows right,
@@ -49,12 +48,12 @@ public:
     u32    open_cell_count() const noexcept;
 
     // Direct buffer access — for the editor heat-map renderer.
-    const std::vector<float>& cells() const noexcept { return cells_; }
+    const cardinal::vector<float>& cells() const noexcept { return cells_; }
 
 private:
     u32 w_{0};
     u32 h_{0};
-    std::vector<float> cells_;
+    cardinal::vector<float> cells_;
 };
 
 // ---------------------------------------------------------------------------
@@ -82,7 +81,7 @@ public:
     // populated either way (even when no path is found).
     PathStats find_path(const Grid& grid,
                         CellCoord start, CellCoord goal,
-                        std::vector<CellCoord>& out_cells,
+                        cardinal::vector<CellCoord>& out_cells,
                         bool allow_diagonal = true);
 
 private:
@@ -94,11 +93,11 @@ private:
         u32   open_index{static_cast<u32>(-1)};
     };
 
-    std::vector<Node>                          nodes_;
+    cardinal::vector<Node>                          nodes_;
     u32                                        grid_w_{0};
     u32                                        grid_h_{0};
     // Open set as a min-heap of (f, packed_xy).
-    std::vector<std::pair<float, u64>>         open_;
+    cardinal::vector<cardinal::pair<float, u64>>         open_;
 
     void ensure_(u32 w, u32 h);
     void open_push_(u64 key, float f);
@@ -117,7 +116,7 @@ private:
 struct FlowDir { i8 dx{0}, dy{0}; };
 
 void compute_flow_field(const Grid& grid, CellCoord goal,
-                        std::vector<FlowDir>& out_flow,
-                        std::vector<float>& out_distance);
+                        cardinal::vector<FlowDir>& out_flow,
+                        cardinal::vector<float>& out_distance);
 
 }  // namespace cardinal::nav

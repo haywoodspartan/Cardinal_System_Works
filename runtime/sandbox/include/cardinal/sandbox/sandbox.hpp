@@ -69,6 +69,16 @@ namespace proto {
     inline constexpr u32 OP_ATTACH = 0x01;
     inline constexpr u32 OP_TICK   = 0x02;
     inline constexpr u32 OP_DETACH = 0x03;
+    // 0x04 ATTACH_VM  payload: u32 module_len + bytes (cardinal::vm bytecode)
+    //   Runner verifies + loads the module with cardinal::vm (capability
+    //   sandbox), binds a host-fn allowlist that bridges log over OP_LOG,
+    //   resolves the entry fn "tick" (1 param = dt as f64-bits). Replies
+    //   READY (synthetic name/version) on success, ERROR on verify/load
+    //   failure. TICK then drives the VM's tick(); a Trap surfaces as an
+    //   inline ERROR (then ACK, like the DLL path) — a VM bug only ever
+    //   kills the child, and the capability model contains the script
+    //   regardless of process isolation.
+    inline constexpr u32 OP_ATTACH_VM = 0x04;
 
     inline constexpr u32 OP_READY  = 0x80;
     inline constexpr u32 OP_ACK    = 0x81;
@@ -119,6 +129,17 @@ public:
     // Returns nullptr on attach failure (compile errors / DLL missing /
     // runner spawn failed / pipe broken before READY).
     static std::unique_ptr<Sandbox> create(const Desc& desc, const char* dll_path);
+
+    // Capability-sandbox variant: instead of a native DLL, ship a
+    // cardinal::vm bytecode module to the child, which verifies + runs it
+    // in the VM. Strictly stronger isolation than the DLL path (no syscalls
+    // / bounded memory+compute / host-call allowlist) AND still process-
+    // isolated. Always uses the child process (mode is forced to
+    // Subprocess); returns nullptr if that's unavailable on this OS or the
+    // module fails to verify/attach. `module_bytes` is copied.
+    static std::unique_ptr<Sandbox> create_vm(const Desc& desc,
+                                              const u8* module_bytes,
+                                              usize len);
 
     Sandbox()                          = default;
     virtual ~Sandbox() = default;

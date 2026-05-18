@@ -9,3 +9,6 @@ add_subdirectory(08_sandbox)
 # Minimal editor host on the cardinal::ui::StudioEngine "roof" layer —
 # validates the wood/roof split with a tiny app body.
 add_subdirectory(09_studio_engine)
+# Capability-sandboxed bytecode VM, end to end (verify -> child process ->
+# tick -> host-call over the pipe).
+add_subdirectory(10_vm_sandbox)

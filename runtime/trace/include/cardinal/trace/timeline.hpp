@@ -16,12 +16,10 @@
 // the ring is full, oldest events fall off.
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
-
-#include <atomic>
-#include <chrono>
-#include <string>
-#include <vector>
+#include <cardinal/core/types.hpp>        // cardinal::string
+#include <cardinal/core/atomic.hpp>       // cardinal::atomic
+#include <cardinal/core/chrono.hpp>       // cardinal::chrono
+#include <cardinal/core/containers.hpp>   // cardinal::vector
 
 namespace cardinal::trace {
 
@@ -49,7 +47,7 @@ public:
 
     // Snapshot current contents into out. Lossy if writers added more than
     // capacity since the last snapshot.
-    void snapshot(std::vector<Event>& out) const;
+    void snapshot(cardinal::vector<Event>& out) const;
 
     // Clear the ring (also resets the writer index). Useful when the user
     // hits "Restart capture" in the panel.
@@ -63,9 +61,9 @@ private:
     Timeline& operator=(const Timeline&) = delete;
 
     static constexpr u32 kCap = 16384;
-    std::vector<Event>      ring_;
-    std::atomic<u64>        write_index_{0};
-    std::chrono::steady_clock::time_point t0_;
+    cardinal::vector<Event>      ring_;
+    cardinal::atomic<u64>        write_index_{0};
+    cardinal::chrono::steady_clock::time_point t0_;
 };
 
 // RAII scope tracer for native code: emits Call on construction, Return on

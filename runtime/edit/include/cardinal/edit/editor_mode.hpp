@@ -21,10 +21,8 @@
 // re-arm themselves.
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
-
-#include <functional>
-#include <string>
+#include <cardinal/core/types.hpp>     // cardinal::function, cardinal::string
+#include <cardinal/core/utility.hpp>   // cardinal::move
 
 namespace cardinal::edit {
 
@@ -51,8 +49,8 @@ public:
     void       set_mode(EditorMode m);
 
     // Subscribe to mode-change events. Last setter wins (single slot).
-    using OnModeChange = std::function<void(EditorMode old, EditorMode now)>;
-    void on_mode_change(OnModeChange cb) { on_change_ = std::move(cb); }
+    using OnModeChange = cardinal::function<void(EditorMode old, EditorMode now)>;
+    void on_mode_change(OnModeChange cb) { on_change_ = cardinal::move(cb); }
 
     // Per-mode flags (all panels share one struct so adding a flag doesn't
     // touch every call site).
@@ -66,13 +64,13 @@ public:
     }
 
     // Optional human-readable status — shown in the bottom status bar.
-    const std::string& status_text() const noexcept { return status_; }
-    void set_status_text(std::string s) { status_ = std::move(s); }
+    const cardinal::string& status_text() const noexcept { return status_; }
+    void set_status_text(cardinal::string s) { status_ = cardinal::move(s); }
 
 private:
     EditorMode    mode_{EditorMode::Select};
     OnModeChange  on_change_{};
-    std::string   status_{};
+    cardinal::string   status_{};
 };
 
 }  // namespace cardinal::edit

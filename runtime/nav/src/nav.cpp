@@ -1,8 +1,9 @@
 #include <cardinal/nav/nav.hpp>
 
-#include <algorithm>
-#include <cmath>
-#include <queue>
+#include <cardinal/core/algorithm.hpp>    // cardinal::fill/min/max/reverse/*_heap
+#include <cardinal/core/cmath.hpp>        // cardinal::isfinite/abs
+#include <cardinal/core/containers.hpp>   // cardinal::priority_queue
+// cardinal::pair / cardinal::greater arrive via nav.hpp / core/types.hpp
 
 namespace cardinal::nav {
 
@@ -41,15 +42,15 @@ void Grid::set_cost(i32 x, i32 y, float c) noexcept {
 
 void Grid::set_blocked(i32 x, i32 y) noexcept { set_cost(x, y, kBlocked); }
 
-void Grid::fill(float c) noexcept { std::fill(cells_.begin(), cells_.end(), c); }
+void Grid::fill(float c) noexcept { cardinal::fill(cells_.begin(), cells_.end(), c); }
 
 bool Grid::is_blocked(i32 x, i32 y) const noexcept {
-    return !std::isfinite(cost(x, y));
+    return !cardinal::isfinite(cost(x, y));
 }
 
 u32 Grid::open_cell_count() const noexcept {
     u32 n = 0;
-    for (float c : cells_) if (std::isfinite(c)) ++n;
+    for (float c : cells_) if (cardinal::isfinite(c)) ++n;
     return n;
 }
 
@@ -76,12 +77,12 @@ void PathQuery::ensure_(u32 w, u32 h) {
 
 void PathQuery::open_push_(u64 key, float f) {
     open_.emplace_back(f, key);
-    std::push_heap(open_.begin(), open_.end(),
+    cardinal::push_heap(open_.begin(), open_.end(),
         [](const auto& a, const auto& b){ return a.first > b.first; });
 }
 bool PathQuery::open_pop_(u64& out_key, float& out_f) {
     if (open_.empty()) return false;
-    std::pop_heap(open_.begin(), open_.end(),
+    cardinal::pop_heap(open_.begin(), open_.end(),
         [](const auto& a, const auto& b){ return a.first > b.first; });
     out_f   = open_.back().first;
     out_key = open_.back().second;
@@ -91,7 +92,7 @@ bool PathQuery::open_pop_(u64& out_key, float& out_f) {
 
 PathStats PathQuery::find_path(const Grid& grid,
                                CellCoord start, CellCoord goal,
-                               std::vector<CellCoord>& out_cells,
+                               cardinal::vector<CellCoord>& out_cells,
                                bool allow_diagonal)
 {
     PathStats st{};
@@ -105,10 +106,10 @@ PathStats PathQuery::find_path(const Grid& grid,
 
     auto idx = [W](i32 x, i32 y) { return static_cast<usize>(y) * W + static_cast<usize>(x); };
     auto h_oct = [&](i32 x, i32 y) {
-        const i32 dx = std::abs(x - goal.x);
-        const i32 dy = std::abs(y - goal.y);
+        const i32 dx = cardinal::abs(x - goal.x);
+        const i32 dy = cardinal::abs(y - goal.y);
         const float D = 1.0f, D2 = 1.41421356f;
-        return D * (dx + dy) + (D2 - 2.0f * D) * std::min(dx, dy);
+        return D * (dx + dy) + (D2 - 2.0f * D) * cardinal::min(dx, dy);
     };
 
     Node& s = nodes_[idx(start.x, start.y)];
@@ -128,7 +129,7 @@ PathStats PathQuery::find_path(const Grid& grid,
         if (cn.closed) continue;
         cn.closed = true;
         ++st.nodes_visited;
-        st.open_set_max = std::max(st.open_set_max, static_cast<u32>(open_.size()));
+        st.open_set_max = cardinal::max(st.open_set_max, static_cast<u32>(open_.size()));
 
         if (cx == goal.x && cy == goal.y) {
             // Reconstruct
@@ -138,7 +139,7 @@ PathStats PathQuery::find_path(const Grid& grid,
                 Node& rn = nodes_[idx(rx, ry)];
                 rx = rn.parent_x; ry = rn.parent_y;
             }
-            std::reverse(out_cells.begin(), out_cells.end());
+            cardinal::reverse(out_cells.begin(), out_cells.end());
             st.found     = true;
             st.path_cost = cn.g;
             return st;
@@ -149,7 +150,7 @@ PathStats PathQuery::find_path(const Grid& grid,
             const i32 ny = cy + d8y[i];
             if (!grid.in_bounds(nx, ny)) continue;
             const float ncost = grid.cost(nx, ny);
-            if (!std::isfinite(ncost)) continue;
+            if (!cardinal::isfinite(ncost)) continue;
             const float step = (i < 4 ? 1.0f : 1.41421356f) * ncost;
             const float tentative = cn.g + step;
             Node& nn = nodes_[idx(nx, ny)];
@@ -169,8 +170,8 @@ PathStats PathQuery::find_path(const Grid& grid,
 // neighbour as the flow direction.
 // ---------------------------------------------------------------------------
 void compute_flow_field(const Grid& grid, CellCoord goal,
-                        std::vector<FlowDir>& out_flow,
-                        std::vector<float>& out_distance)
+                        cardinal::vector<FlowDir>& out_flow,
+                        cardinal::vector<float>& out_distance)
 {
     const u32 W = grid.width();
     const u32 H = grid.height();
@@ -180,8 +181,8 @@ void compute_flow_field(const Grid& grid, CellCoord goal,
 
     auto idx = [W](i32 x, i32 y) { return static_cast<usize>(y) * W + static_cast<usize>(x); };
 
-    using Q = std::pair<float, u64>;
-    std::priority_queue<Q, std::vector<Q>, std::greater<>> pq;
+    using Q = cardinal::pair<float, u64>;
+    cardinal::priority_queue<Q, cardinal::vector<Q>, cardinal::greater<>> pq;
     out_distance[idx(goal.x, goal.y)] = 0.0f;
     pq.push({0.0f, pack_xy(goal.x, goal.y)});
 
@@ -198,7 +199,7 @@ void compute_flow_field(const Grid& grid, CellCoord goal,
             const i32 ny = cy + d8y[i];
             if (!grid.in_bounds(nx, ny)) continue;
             const float c = grid.cost(nx, ny);
-            if (!std::isfinite(c)) continue;
+            if (!cardinal::isfinite(c)) continue;
             const float nd = d + d8cost[i] * c;
             if (nd < out_distance[idx(nx, ny)]) {
                 out_distance[idx(nx, ny)] = nd;
@@ -211,7 +212,7 @@ void compute_flow_field(const Grid& grid, CellCoord goal,
     for (u32 y = 0; y < H; ++y) {
         for (u32 x = 0; x < W; ++x) {
             const float d_here = out_distance[idx(x, y)];
-            if (!std::isfinite(d_here)) continue;
+            if (!cardinal::isfinite(d_here)) continue;
             float best = d_here;
             i8 best_dx = 0, best_dy = 0;
             for (i32 i = 0; i < 8; ++i) {

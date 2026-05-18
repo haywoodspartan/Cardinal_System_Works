@@ -10,7 +10,7 @@
 //     cmd.label   = "Move entity";
 //     cmd.apply   = [=]{ entity.transform.translation = new_pos; };
 //     cmd.revert  = [=]{ entity.transform.translation = old_pos; };
-//     stack.push_executed(std::move(cmd));   // records that apply already ran
+//     stack.push_executed(cardinal::move(cmd));   // records that apply already ran
 //
 // `push_executed` is the common case for actions performed via direct UI
 // (the user dragged the gizmo, the engine already moved the entity, we
@@ -21,18 +21,15 @@
 // Pushing while in the middle of an undo chain truncates the redo half.
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
-
-#include <functional>
-#include <string>
-#include <vector>
+#include <cardinal/core/types.hpp>       // cardinal::function, cardinal::string
+#include <cardinal/core/containers.hpp>  // cardinal::vector
 
 namespace cardinal::edit {
 
 struct Command {
-    std::string             label;
-    std::function<void()>   apply;
-    std::function<void()>   revert;
+    cardinal::string             label;
+    cardinal::function<void()>   apply;
+    cardinal::function<void()>   revert;
 };
 
 class UndoStack {
@@ -65,7 +62,7 @@ private:
     void truncate_redo();
     void enforce_capacity();
 
-    std::vector<Command> history_;
+    cardinal::vector<Command> history_;
     usize                cursor_{0};   // 0..history_.size(); commands [0, cursor) are applied
     usize                capacity_;
 };

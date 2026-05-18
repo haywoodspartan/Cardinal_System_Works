@@ -35,11 +35,13 @@
 
 #include <cardinal/plugin/plugin.hpp>
 #include <cardinal/sandbox/sandbox.hpp>
+#include <cardinal/vm/vm.hpp>
 
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -255,7 +257,88 @@ bool handle_attach(const std::string& dll_path) {
     return true;
 }
 
+// ============================================================================
+// Capability-sandbox path: a cardinal::vm bytecode module instead of a DLL.
+// The VM is the security boundary (no syscalls / bounded memory + compute /
+// host-call allowlist); the child process is defence in depth.
+// ============================================================================
+namespace vm = cardinal::vm;
+
+struct LoadedVm {
+    vm::ModulePtr            module;
+    std::unique_ptr<vm::VM>  vmi;
+    cardinal::i64            tick_idx{-1};
+    bool                     attached{false};
+};
+LoadedVm g_vm;
+
+// The ENTIRE outside world available to sandboxed bytecode: one allowlisted
+// host fn that logs an i64 (forwarded over the pipe as a normal LOG frame).
+cardinal::i64 vm_host_log(vm::HostContext&, const cardinal::i64* a,
+                          cardinal::u32 n) noexcept {
+    char buf[64];
+    const long long v = (n >= 1u) ? static_cast<long long>(a[0]) : 0LL;
+    std::snprintf(buf, sizeof(buf), "%lld", v);
+    send_log(proto::LOG_INFO, "cvm", buf);
+    return 0;
+}
+const vm::HostFnDesc g_vm_host[] = {
+    { "log", &vm_host_log, 1u },
+};
+
+bool handle_attach_vm(const std::vector<char>& payload) {
+    if (payload.size() < 4u) { send_error("ATTACH_VM: short payload"); return false; }
+    cardinal::u32 mlen = 0;
+    std::memcpy(&mlen, payload.data(), 4);
+    if (static_cast<cardinal::usize>(mlen) + 4u > payload.size()) {
+        send_error("ATTACH_VM: truncated module"); return false;
+    }
+    const cardinal::u8* mbytes =
+        reinterpret_cast<const cardinal::u8*>(payload.data()) + 4;
+
+    vm::Limits lim{};
+    std::string err;
+    g_vm.module = vm::load(mbytes, mlen, lim, &err);
+    if (!g_vm.module) {
+        std::string m = "VM verify/load failed: " + err;
+        send_error(m.c_str());
+        return false;
+    }
+    const cardinal::i64 ti = vm::module_find_func(*g_vm.module, "tick");
+    if (ti < 0) { send_error("VM module has no 'tick' export"); return false; }
+    g_vm.tick_idx = ti;
+    g_vm.vmi = vm::VM::create(lim);
+    g_vm.vmi->set_host_fns(g_vm_host,
+        static_cast<cardinal::u32>(sizeof(g_vm_host) / sizeof(g_vm_host[0])));
+    g_vm.attached = true;
+
+    std::vector<char> p;
+    put_str(p, "cvm-module");
+    put_str(p, "1");
+    send_frame(proto::OP_READY, p.data(), static_cast<u32>(p.size()));
+    return true;
+}
+
+void handle_tick_vm(f32 dt) {
+    // dt reaches the script as the f64 bit-pattern in local 0 (the VM has
+    // F* ops). Result cell is ignored.
+    const cardinal::f64 d = static_cast<cardinal::f64>(dt);
+    cardinal::u64 bits = 0;
+    std::memcpy(&bits, &d, 8);
+    cardinal::i64 arg = static_cast<cardinal::i64>(bits);
+    cardinal::i64 ret = 0;
+    const vm::Trap t = g_vm.vmi->call(*g_vm.module,
+        static_cast<cardinal::u32>(g_vm.tick_idx), &arg, 1u, &ret);
+    if (t != vm::Trap::Finished && t != vm::Trap::Halted) {
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "VM trap: %s", vm::trap_name(t));
+        send_error(buf);   // non-fatal: ACK still follows (like the DLL path)
+    }
+    send_frame(proto::OP_ACK, nullptr, 0);
+}
+
 void handle_tick(f32 dt) {
+    if (g_vm.attached) { handle_tick_vm(dt); return; }
     if (g_loaded.info.on_tick == nullptr) {
         send_frame(proto::OP_ACK, nullptr, 0);
         return;
@@ -369,6 +452,12 @@ int main(int argc, char** argv) {
                     // so the host's WaitForSingleObject(process) wakes up.
                     return 1;
                 }
+            } break;
+
+            case proto::OP_ATTACH_VM: {
+                if (attached) { send_error("duplicate ATTACH"); break; }
+                attached = handle_attach_vm(payload);
+                if (!attached) return 1;   // host's WaitForSingleObject wakes
             } break;
 
             case proto::OP_TICK: {

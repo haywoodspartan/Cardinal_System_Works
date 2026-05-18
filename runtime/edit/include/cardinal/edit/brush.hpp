@@ -22,9 +22,7 @@
 //   Erase    — restore field toward its baseline value
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
-
-#include <functional>
+#include <cardinal/core/types.hpp>   // cardinal::function
 
 namespace cardinal::edit::brush {
 
@@ -72,10 +70,10 @@ CellAabb stamp_height_grid(float* heights, u32 width, u32 height,
 // `world_pos` is the brush center; `radius` is the brush's effective
 // radius (b.radius_world); the callback decides whether each candidate
 // is in-radius using its own coordinates.
-using SampleEnumFn = std::function<void(
-    const std::function<void(u32 idx, float dist_world)>& touch)>;
+using SampleEnumFn = cardinal::function<void(
+    const cardinal::function<void(u32 idx, float dist_world)>& touch)>;
 
 void stamp_generic(const Brush& b, const SampleEnumFn& enumerate,
-                   const std::function<void(u32 idx, float weight)>& apply);
+                   const cardinal::function<void(u32 idx, float weight)>& apply);
 
 }  // namespace cardinal::edit::brush

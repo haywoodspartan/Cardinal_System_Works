@@ -91,6 +91,8 @@ private:
 class SubprocessSandbox final : public Sandbox {
 public:
     SubprocessSandbox(const Desc& d, std::string dll) : desc_(d), dll_(std::move(dll)) {}
+    SubprocessSandbox(const Desc& d, std::vector<u8> mod)
+        : desc_(d), vm_mode_(true), module_bytes_(std::move(mod)) {}
 
     ~SubprocessSandbox() override { teardown(); }
 
@@ -184,15 +186,28 @@ public:
         }
         CloseHandle(evt);
 
-        // Send ATTACH with the dll_path payload (the runner already has it
-        // from argv; this is belt + braces so reattach-to-different-DLL
-        // ever becomes a feature without protocol churn).
+        // VM mode: ship the bytecode module (u32 len + bytes) and let the
+        // runner verify + host it in cardinal::vm. DLL mode: ship the dll
+        // path (the runner also has it from argv; belt + braces).
         std::vector<char> p;
-        const u32 plen = static_cast<u32>(dll_.size());
-        p.insert(p.end(), reinterpret_cast<const char*>(&plen),
-                          reinterpret_cast<const char*>(&plen) + 4);
-        p.insert(p.end(), dll_.begin(), dll_.end());
-        if (!send_frame_(proto::OP_ATTACH, p.data(), static_cast<u32>(p.size()))) {
+        u32 attach_op;
+        if (vm_mode_) {
+            const u32 mlen = static_cast<u32>(module_bytes_.size());
+            p.insert(p.end(), reinterpret_cast<const char*>(&mlen),
+                              reinterpret_cast<const char*>(&mlen) + 4);
+            p.insert(p.end(),
+                     reinterpret_cast<const char*>(module_bytes_.data()),
+                     reinterpret_cast<const char*>(module_bytes_.data())
+                         + module_bytes_.size());
+            attach_op = proto::OP_ATTACH_VM;
+        } else {
+            const u32 plen = static_cast<u32>(dll_.size());
+            p.insert(p.end(), reinterpret_cast<const char*>(&plen),
+                              reinterpret_cast<const char*>(&plen) + 4);
+            p.insert(p.end(), dll_.begin(), dll_.end());
+            attach_op = proto::OP_ATTACH;
+        }
+        if (!send_frame_(attach_op, p.data(), static_cast<u32>(p.size()))) {
             cardinal::log::errorf("sandbox", "ATTACH send failed");
             teardown();
             return false;
@@ -470,10 +485,12 @@ private:
         alive_ = false;
     }
 
-    Desc        desc_;
-    std::string dll_;
-    std::string runner_path_;
-    std::string pipe_name_;
+    Desc            desc_;
+    std::string     dll_;
+    bool            vm_mode_{false};
+    std::vector<u8> module_bytes_;
+    std::string     runner_path_;
+    std::string     pipe_name_;
 
     HANDLE      pipe_{INVALID_HANDLE_VALUE};
     HANDLE      process_{nullptr};
@@ -508,6 +525,24 @@ std::unique_ptr<Sandbox> Sandbox::create(const Desc& desc, const char* dll_path)
     auto s = std::make_unique<InProcessSandbox>(desc, std::string(dll_path));
     if (!s->initialize()) return nullptr;
     return s;
+}
+
+std::unique_ptr<Sandbox> Sandbox::create_vm(const Desc& desc,
+                                            const u8* module_bytes, usize len)
+{
+    if (module_bytes == nullptr || len == 0) return nullptr;
+#if defined(_WIN32)
+    // The capability sandbox is always process-isolated (that's the point).
+    std::vector<u8> mod(module_bytes, module_bytes + len);
+    auto s = std::make_unique<SubprocessSandbox>(desc, std::move(mod));
+    if (!s->initialize()) return nullptr;
+    return s;
+#else
+    (void)desc;
+    cardinal::log::errorf("sandbox",
+        "create_vm: subprocess VM host not implemented on this OS");
+    return nullptr;
+#endif
 }
 
 }  // namespace cardinal::sandbox

@@ -39,6 +39,7 @@ add_subdirectory(trace)
 # selection. Toggle per-mesh via cardinal::vgeom::set_enabled.
 add_subdirectory(vgeom)
 add_subdirectory(plugin)
+add_subdirectory(vm)
 add_subdirectory(sandbox)
 add_subdirectory(cppscript)
 add_subdirectory(script)

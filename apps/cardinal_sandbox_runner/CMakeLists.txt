@@ -8,6 +8,6 @@ endif()
 
 add_executable(cardinal_sandbox_runner main.cpp)
 target_link_libraries(cardinal_sandbox_runner PRIVATE
-    cardinal::core cardinal::plugin cardinal::sandbox
+    cardinal::core cardinal::plugin cardinal::sandbox cardinal::vm
     cardinal::compile_flags)
 set_target_properties(cardinal_sandbox_runner PROPERTIES FOLDER apps)

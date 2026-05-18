@@ -55,13 +55,25 @@ using isize = std::ptrdiff_t;
 // ---------------------------------------------------------------------------
 using string = std::string;
 
-template <class T> using unique_ptr = std::unique_ptr<T>;
+template <class T, class D = std::default_delete<T>>
+using unique_ptr = std::unique_ptr<T, D>;          // D defaulted: existing
+                                                   // single-arg uses unchanged
 template <class T> using shared_ptr = std::shared_ptr<T>;
 template <class T> using weak_ptr   = std::weak_ptr<T>;
+using std::default_delete;
 using std::make_shared;
 using std::make_unique;
 
 template <class Sig> using function = std::function<Sig>;
+template <class T>   using hash     = std::hash<T>;   // std hash functor
+
+// Standard comparison / function-object functors (also from <functional>).
+using std::less;            using std::greater;
+using std::less_equal;      using std::greater_equal;
+using std::equal_to;        using std::not_equal_to;
+using std::reference_wrapper;
+using std::ref;             using std::cref;
+using std::invoke;
 
 static_assert(sizeof(f32) == 4, "f32 must be 4 bytes");
 static_assert(sizeof(f64) == 8, "f64 must be 8 bytes");
