@@ -119,6 +119,72 @@ struct TagComponent : Component {
     const char* type_name() const noexcept override { return "Tag"; }
 };
 
+// ---------------------------------------------------------------------------
+// PlayerControllerComponent — first-person possession of the owning Actor.
+//
+// Reusable, engine-level player control. Deliberately decoupled from the
+// input system AND the scene camera (mirrors scene::FlyCamera / FlyInput):
+// the host fills a PlayerInput each frame from whatever source it has
+// (cardinal::input::Manager, a net-replicated command, an AI brain) and
+// calls tick(dt, in). The controller integrates WASD-relative motion +
+// gravity/jump into the owner's TransformComponent and caches yaw/pitch.
+// camera_eye()/camera_target() expose a first-person pose the host can
+// copy onto its scene::Camera while a player is possessed; nothing here
+// links actor -> input or actor -> camera ownership.
+// ---------------------------------------------------------------------------
+struct PlayerInput {
+    bool  accept_input{true};   // gate (false = ignore, e.g. typing in UI)
+    float move_x{0.0f};         // strafe  [-1,+1]  (A/D, left stick X)
+    float move_z{0.0f};         // forward [-1,+1]  (W/S, left stick Y)
+    bool  jump{false};
+    bool  sprint{false};
+    bool  look{false};          // apply mouse delta to yaw/pitch this frame
+    float mouse_dx{0.0f};       // px since last frame
+    float mouse_dy{0.0f};
+};
+
+struct PlayerControllerComponent : Component {
+    // Tunables — editor-friendly ranges.
+    float move_speed       {6.0f};    // world units / second
+    float sprint_multiplier{2.0f};
+    float look_sensitivity {0.0035f}; // radians / pixel
+    float eye_height       {1.7f};    // camera offset above the actor origin
+    float gravity          {-19.62f}; // 2g — snappy platformer feel
+    float jump_speed       {7.0f};    // initial up velocity on jump
+    float ground_y         {0.0f};    // simple floor plane (no physics dep)
+    float min_pitch_rad    {-1.553f}; // ~-89°
+    float max_pitch_rad    { 1.553f}; // ~+89°
+    bool  fly_mode         {false};   // true = no gravity, free vertical
+
+    const char* type_name() const noexcept override { return "PlayerController"; }
+    void on_attach(Actor& a) override { owner_ = &a; }
+    void on_detach(Actor&)   override { owner_ = nullptr; }
+
+    // Seed yaw/pitch from a forward vector so possession is seamless from
+    // wherever the editor camera was looking.
+    void sync_look_from_forward(const cardinal::scene::Vec3& fwd) noexcept;
+
+    // Advance one frame. Writes the owner's TransformComponent
+    // (translation + rotation_euler.y = yaw) and refreshes the cached
+    // first-person camera pose.
+    void tick(float dt, const PlayerInput& in) noexcept;
+
+    float yaw_rad()   const noexcept { return yaw_; }
+    float pitch_rad() const noexcept { return pitch_; }
+    bool  grounded()  const noexcept { return grounded_; }
+    const cardinal::scene::Vec3& camera_eye()    const noexcept { return cam_eye_; }
+    const cardinal::scene::Vec3& camera_target() const noexcept { return cam_target_; }
+
+private:
+    Actor*                owner_{nullptr};
+    float                 yaw_{0.0f};
+    float                 pitch_{0.0f};
+    float                 vy_{0.0f};        // vertical velocity (gravity/jump)
+    bool                  grounded_{true};
+    cardinal::scene::Vec3 cam_eye_{0, 0, 0};
+    cardinal::scene::Vec3 cam_target_{0, 0, -1};
+};
+
 // Script component — registers a name to call into cardinal::script /
 // cardinal::cppscript. We don't run scripts here; we just store the binding
 // so a higher-level system can dispatch.
