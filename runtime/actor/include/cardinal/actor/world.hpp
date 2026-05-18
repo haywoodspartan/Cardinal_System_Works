@@ -3,7 +3,7 @@
 // =============================================================================
 // Cardinal — Actor World.
 //
-// One World owns a flat std::vector<unique_ptr<Actor>>. The simulation's
+// One World owns a flat cardinal::vector<unique_ptr<Actor>>. The simulation's
 // tick groups iterate over its actors. Actors are created via spawn()
 // (which assigns an id) and removed via destroy() (which marks alive=false
 // and the World sweeps in a later tick — defers iterator invalidation).
@@ -16,14 +16,10 @@
 // =============================================================================
 
 #include <cardinal/actor/actor.hpp>
-#include <cardinal/core/types.hpp>
-
-#include <any>
-#include <functional>
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <vector>
+#include <cardinal/core/types.hpp>        // function/memory/string
+#include <cardinal/core/any.hpp>          // cardinal::any
+#include <cardinal/core/utility.hpp>      // cardinal::move
+#include <cardinal/core/containers.hpp>   // unordered_map/vector
 
 namespace cardinal::actor {
 
@@ -35,8 +31,8 @@ namespace cardinal::actor {
 // to spawn_blueprint(name).
 // ---------------------------------------------------------------------------
 struct Blueprint {
-    std::string                          name;
-    std::function<void(Actor& /*new*/)>  build;
+    cardinal::string                          name;
+    cardinal::function<void(Actor& /*new*/)>  build;
 };
 
 class World {
@@ -47,8 +43,8 @@ public:
     World& operator=(const World&) = delete;
 
     // ---- Spawn / destroy ---------------------------------------------
-    Actor*  spawn(std::string name);
-    Actor*  spawn_blueprint(const std::string& blueprint_name);
+    Actor*  spawn(cardinal::string name);
+    Actor*  spawn_blueprint(const cardinal::string& blueprint_name);
 
     // Mark for destruction; the actual remove happens on the next sweep().
     void    destroy(ActorId id);
@@ -57,10 +53,10 @@ public:
     // ---- Lookup / iteration ------------------------------------------
     Actor*       find(ActorId id);
     const Actor* find(ActorId id) const;
-    Actor*       find_by_name(const std::string& name);
-    std::vector<Actor*> find_by_tag(const std::string& tag);
+    Actor*       find_by_name(const cardinal::string& name);
+    cardinal::vector<Actor*> find_by_tag(const cardinal::string& tag);
 
-    const std::vector<std::unique_ptr<Actor>>& actors() const noexcept { return actors_; }
+    const cardinal::vector<cardinal::unique_ptr<Actor>>& actors() const noexcept { return actors_; }
     usize actor_count() const noexcept;
 
     // ---- Per-frame --------------------------------------------------
@@ -71,23 +67,23 @@ public:
 
     // ---- Blueprints --------------------------------------------------
     void register_blueprint(Blueprint bp);
-    void unregister_blueprint(const std::string& name);
-    const Blueprint* find_blueprint(const std::string& name) const;
-    std::vector<std::string> blueprint_names() const;
+    void unregister_blueprint(const cardinal::string& name);
+    const Blueprint* find_blueprint(const cardinal::string& name) const;
+    cardinal::vector<cardinal::string> blueprint_names() const;
 
     // ---- Event bus ---------------------------------------------------
-    using EventFn = std::function<void(const std::any& payload)>;
+    using EventFn = cardinal::function<void(const cardinal::any& payload)>;
     using HandlerId = u32;
-    HandlerId subscribe(const std::string& event, EventFn fn);
+    HandlerId subscribe(const cardinal::string& event, EventFn fn);
     void      unsubscribe(HandlerId id);
-    void      broadcast(const std::string& event, const std::any& payload = {});
+    void      broadcast(const cardinal::string& event, const cardinal::any& payload = {});
 
 private:
     ActorId                                                  next_id_{1};
-    std::vector<std::unique_ptr<Actor>>                      actors_;
-    std::unordered_map<std::string, Blueprint>               blueprints_;
+    cardinal::vector<cardinal::unique_ptr<Actor>>                      actors_;
+    cardinal::unordered_map<cardinal::string, Blueprint>               blueprints_;
     struct Sub { HandlerId id; EventFn fn; };
-    std::unordered_map<std::string, std::vector<Sub>>        subscribers_;
+    cardinal::unordered_map<cardinal::string, cardinal::vector<Sub>>        subscribers_;
     HandlerId                                                next_handler_id_{1};
 };
 

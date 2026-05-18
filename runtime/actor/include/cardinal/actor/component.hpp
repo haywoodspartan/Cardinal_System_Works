@@ -15,11 +15,9 @@
 // Defaults are no-ops; override what you need.
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
+#include <cardinal/core/types.hpp>        // memory/string
+#include <cardinal/core/containers.hpp>   // cardinal::vector
 #include <cardinal/scene/math.hpp>
-
-#include <memory>
-#include <string>
 
 namespace cardinal::actor {
 
@@ -55,7 +53,7 @@ struct TransformComponent : Component {
 // Optional — points at a scene::Mesh asset that the renderer should draw.
 // We don't own the mesh; the scene::AssetCatalog does.
 struct MeshComponent : Component {
-    std::string asset_id;             // catalog id, resolved at draw time
+    cardinal::string asset_id;             // catalog id, resolved at draw time
     cardinal::scene::Vec3 tint{1, 1, 1};
     bool visible{true};
     const char* type_name() const noexcept override { return "Mesh"; }
@@ -84,7 +82,7 @@ struct LightComponent : Component {
 
 // Audio emitter — speaks to cardinal::audio. Loop, volume, pitch, channel.
 struct AudioEmitterComponent : Component {
-    std::string cue_id;               // looked up in audio::Engine
+    cardinal::string cue_id;               // looked up in audio::Engine
     float       volume{1.0f};
     float       pitch{1.0f};
     bool        loop{false};
@@ -113,11 +111,11 @@ struct RigidBodyComponent : Component {
 // Tag set — string tags + bit flags. Used for queries (find_by_tag) and
 // filtering in the inspector / sequencer.
 struct TagComponent : Component {
-    std::vector<std::string> tags;
+    cardinal::vector<cardinal::string> tags;
     u32                      flags{0};
-    bool has(const std::string& t) const noexcept;
-    void add(std::string t);
-    void remove(const std::string& t);
+    bool has(const cardinal::string& t) const noexcept;
+    void add(cardinal::string t);
+    void remove(const cardinal::string& t);
     const char* type_name() const noexcept override { return "Tag"; }
 };
 
@@ -125,8 +123,8 @@ struct TagComponent : Component {
 // cardinal::cppscript. We don't run scripts here; we just store the binding
 // so a higher-level system can dispatch.
 struct ScriptComponent : Component {
-    std::string entry_name;           // e.g. "onSpawn" / "onTick"
-    std::string source_path;          // .lua or .cpp
+    cardinal::string entry_name;           // e.g. "onSpawn" / "onTick"
+    cardinal::string source_path;          // .lua or .cpp
     bool        enabled{true};
     const char* type_name() const noexcept override { return "Script"; }
 };

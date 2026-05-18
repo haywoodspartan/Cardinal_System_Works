@@ -1,6 +1,7 @@
 #include <cardinal/actor/component.hpp>
 
-#include <algorithm>
+#include <cardinal/core/algorithm.hpp>   // cardinal::find/remove
+#include <cardinal/core/utility.hpp>     // cardinal::move
 
 namespace cardinal::actor {
 
@@ -11,16 +12,16 @@ cardinal::scene::Mat4 TransformComponent::matrix() const {
          * Mat4::scaling(scale);
 }
 
-bool TagComponent::has(const std::string& t) const noexcept {
-    return std::find(tags.begin(), tags.end(), t) != tags.end();
+bool TagComponent::has(const cardinal::string& t) const noexcept {
+    return cardinal::find(tags.begin(), tags.end(), t) != tags.end();
 }
 
-void TagComponent::add(std::string t) {
-    if (!has(t)) tags.push_back(std::move(t));
+void TagComponent::add(cardinal::string t) {
+    if (!has(t)) tags.push_back(cardinal::move(t));
 }
 
-void TagComponent::remove(const std::string& t) {
-    tags.erase(std::remove(tags.begin(), tags.end(), t), tags.end());
+void TagComponent::remove(const cardinal::string& t) {
+    tags.erase(cardinal::remove(tags.begin(), tags.end(), t), tags.end());
 }
 
 }  // namespace cardinal::actor

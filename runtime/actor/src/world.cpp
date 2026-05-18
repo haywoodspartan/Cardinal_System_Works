@@ -2,7 +2,8 @@
 
 #include <cardinal/core/log.hpp>
 
-#include <algorithm>
+#include <cardinal/core/algorithm.hpp>   // cardinal::sort/remove_if
+// cardinal::make_unique/move/any/vector arrive via actor/world.hpp
 
 namespace cardinal::actor {
 
@@ -11,16 +12,16 @@ World::World() {
 }
 World::~World() = default;
 
-Actor* World::spawn(std::string name) {
-    auto a = std::make_unique<Actor>(next_id_++, std::move(name));
+Actor* World::spawn(cardinal::string name) {
+    auto a = cardinal::make_unique<Actor>(next_id_++, cardinal::move(name));
     Actor* raw = a.get();
     // Every actor gets a TransformComponent by default.
     raw->add_component<TransformComponent>();
-    actors_.push_back(std::move(a));
+    actors_.push_back(cardinal::move(a));
     return raw;
 }
 
-Actor* World::spawn_blueprint(const std::string& blueprint_name) {
+Actor* World::spawn_blueprint(const cardinal::string& blueprint_name) {
     auto it = blueprints_.find(blueprint_name);
     if (it == blueprints_.end()) {
         cardinal::log::warnf("actor/world",
@@ -38,8 +39,8 @@ void World::destroy(ActorId id) {
 
 void World::sweep() {
     actors_.erase(
-        std::remove_if(actors_.begin(), actors_.end(),
-                       [](const std::unique_ptr<Actor>& a){ return !a->alive(); }),
+        cardinal::remove_if(actors_.begin(), actors_.end(),
+                       [](const cardinal::unique_ptr<Actor>& a){ return !a->alive(); }),
         actors_.end());
 }
 
@@ -51,13 +52,13 @@ const Actor* World::find(ActorId id) const {
     return const_cast<World*>(this)->find(id);
 }
 
-Actor* World::find_by_name(const std::string& name) {
+Actor* World::find_by_name(const cardinal::string& name) {
     for (auto& a : actors_) if (a->name() == name) return a.get();
     return nullptr;
 }
 
-std::vector<Actor*> World::find_by_tag(const std::string& tag) {
-    std::vector<Actor*> r;
+cardinal::vector<Actor*> World::find_by_tag(const cardinal::string& tag) {
+    cardinal::vector<Actor*> r;
     for (auto& a : actors_) {
         if (auto* tc = a->get_component<TagComponent>()) {
             if (tc->has(tag)) r.push_back(a.get());
@@ -78,36 +79,36 @@ void World::tick(float dt) {
 
 void World::register_blueprint(Blueprint bp) {
     auto name = bp.name;
-    blueprints_[name] = std::move(bp);
+    blueprints_[name] = cardinal::move(bp);
 }
-void World::unregister_blueprint(const std::string& name) {
+void World::unregister_blueprint(const cardinal::string& name) {
     blueprints_.erase(name);
 }
-const Blueprint* World::find_blueprint(const std::string& name) const {
+const Blueprint* World::find_blueprint(const cardinal::string& name) const {
     auto it = blueprints_.find(name);
     return it == blueprints_.end() ? nullptr : &it->second;
 }
-std::vector<std::string> World::blueprint_names() const {
-    std::vector<std::string> r;
+cardinal::vector<cardinal::string> World::blueprint_names() const {
+    cardinal::vector<cardinal::string> r;
     r.reserve(blueprints_.size());
     for (const auto& [n, _] : blueprints_) r.push_back(n);
-    std::sort(r.begin(), r.end());
+    cardinal::sort(r.begin(), r.end());
     return r;
 }
 
-World::HandlerId World::subscribe(const std::string& event, EventFn fn) {
-    Sub s{ next_handler_id_++, std::move(fn) };
+World::HandlerId World::subscribe(const cardinal::string& event, EventFn fn) {
+    Sub s{ next_handler_id_++, cardinal::move(fn) };
     const HandlerId id = s.id;
-    subscribers_[event].push_back(std::move(s));
+    subscribers_[event].push_back(cardinal::move(s));
     return id;
 }
 void World::unsubscribe(HandlerId id) {
     for (auto& [_, list] : subscribers_) {
-        list.erase(std::remove_if(list.begin(), list.end(),
+        list.erase(cardinal::remove_if(list.begin(), list.end(),
             [id](const Sub& s){ return s.id == id; }), list.end());
     }
 }
-void World::broadcast(const std::string& event, const std::any& payload) {
+void World::broadcast(const cardinal::string& event, const cardinal::any& payload) {
     auto it = subscribers_.find(event);
     if (it == subscribers_.end()) return;
     for (auto& s : it->second) if (s.fn) s.fn(payload);
