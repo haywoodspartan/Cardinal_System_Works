@@ -7,7 +7,8 @@
 #include <cardinal/vgeom/vgeom.hpp>
 #include <cardinal/vgeom/cluster.hpp>
 
-#include <cmath>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cmath.hpp>
 
 namespace cardinal::vgeom {
 
@@ -30,25 +31,25 @@ f32 project_sphere_pixel_radius(const Vec3& center_local,
     const Vec3 world_center = mul_pos(model, center_local);
 
     auto col_len = [&](int c) noexcept {
-        return std::sqrt(model.m[c][0]*model.m[c][0]
+        return cardinal::sqrt(model.m[c][0]*model.m[c][0]
                        + model.m[c][1]*model.m[c][1]
                        + model.m[c][2]*model.m[c][2]);
     };
-    const f32 s   = std::max(col_len(0), std::max(col_len(1), col_len(2)));
+    const f32 s   = cardinal::max(col_len(0), cardinal::max(col_len(1), col_len(2)));
     const f32 wr  = radius_local * s;
 
     const Vec3 view_center = mul_pos(view, world_center);
     const f32  z = -view_center.z;
 
     const f32 m11      = proj.m[1][1];
-    const f32 is_ortho = (std::fabs(proj.m[3][3]) > 0.5f) ? 1.0f : 0.0f;
+    const f32 is_ortho = (cardinal::fabs(proj.m[3][3]) > 0.5f) ? 1.0f : 0.0f;
 
     if (z <= wr && is_ortho == 0.0f) return 1e9f;
     if (m11 == 0.0f) return 1e9f;
 
-    const f32 perspective_pixel_r = (wr * m11) / std::max(z, 1e-3f)
+    const f32 perspective_pixel_r = (wr * m11) / cardinal::max(z, 1e-3f)
                                   * (viewport_pixel_height * 0.5f);
-    const f32 ortho_pixel_r       = wr * std::fabs(m11)
+    const f32 ortho_pixel_r       = wr * cardinal::fabs(m11)
                                   * (viewport_pixel_height * 0.5f);
     return is_ortho > 0.0f ? ortho_pixel_r : perspective_pixel_r;
 }

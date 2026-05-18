@@ -12,7 +12,7 @@
 
 #include <cardinal/vgeom/vgeom.hpp>     // Vertex, Vec3, Mat4 type aliases
 
-#include <vector>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::vgeom {
 
@@ -58,8 +58,8 @@ struct Hierarchy {
     // SoA-friendly: clusters[] is the header table, vertices[] is the
     // shared blob clusters slice into. clusters[0] == root by
     // convention; leaves are scattered at the deepest levels.
-    std::vector<Cluster>  clusters;
-    std::vector<Vertex>   vertices;
+    cardinal::vector<Cluster>  clusters;
+    cardinal::vector<Vertex>   vertices;
 
     // Master triangle count = the source mesh's triangle count, the
     // floor of "what we'd draw without vgeom". Stats divide drawn /

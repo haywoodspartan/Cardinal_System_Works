@@ -39,14 +39,12 @@
 #include <cardinal/core/simd_math.hpp>
 #include <cardinal/core/typedefs.hpp>
 
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstring>
-#include <limits>
-#include <queue>
-#include <unordered_map>
-#include <vector>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cmath.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/limits.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::vgeom {
 
@@ -68,9 +66,9 @@ struct VertHash {
         // shared verts but the renderer's expanded triangle-list form
         // means we see THREE copies of each shared vert per quad — we
         // dedupe them here.
-        const i32 ix = static_cast<i32>(std::round(v.x * 1e5f));
-        const i32 iy = static_cast<i32>(std::round(v.y * 1e5f));
-        const i32 iz = static_cast<i32>(std::round(v.z * 1e5f));
+        const i32 ix = static_cast<i32>(cardinal::round(v.x * 1e5f));
+        const i32 iy = static_cast<i32>(cardinal::round(v.y * 1e5f));
+        const i32 iz = static_cast<i32>(cardinal::round(v.z * 1e5f));
         usize h = 0xcbf29ce484222325ull;
         h = (h ^ static_cast<u32>(ix)) * 0x100000001b3ull;
         h = (h ^ static_cast<u32>(iy)) * 0x100000001b3ull;
@@ -80,9 +78,9 @@ struct VertHash {
 };
 struct VertEq {
     bool operator()(const Vec3& a, const Vec3& b) const noexcept {
-        return std::fabs(a.x - b.x) < 1e-4f
-            && std::fabs(a.y - b.y) < 1e-4f
-            && std::fabs(a.z - b.z) < 1e-4f;
+        return cardinal::fabs(a.x - b.x) < 1e-4f
+            && cardinal::fabs(a.y - b.y) < 1e-4f
+            && cardinal::fabs(a.z - b.z) < 1e-4f;
     }
 };
 
@@ -100,9 +98,9 @@ struct EdgeKeyHash {
 // ids (kInvalid for boundary edges). Side effect: vert_dedup maps each
 // vertex-position to a canonical id.
 struct TriAdjacency {
-    std::vector<std::array<u32, 3>> neighbours;     // 3 per tri, kInvalid for boundary
-    std::vector<u32>                tri_verts;      // 3 canonical vert ids per tri
-    std::vector<Vec3>               canon_positions;
+    cardinal::vector<cardinal::array<u32, 3>> neighbours;     // 3 per tri, kInvalid for boundary
+    cardinal::vector<u32>                tri_verts;      // 3 canonical vert ids per tri
+    cardinal::vector<Vec3>               canon_positions;
 };
 
 TriAdjacency build_adjacency(const Vertex* verts, u32 vc) {
@@ -111,7 +109,7 @@ TriAdjacency build_adjacency(const Vertex* verts, u32 vc) {
     if (tri_count == 0) return a;
 
     // Dedup verts by position so triangles sharing a position share an id.
-    std::unordered_map<Vec3, u32, VertHash, VertEq> dedup;
+    cardinal::unordered_map<Vec3, u32, VertHash, VertEq> dedup;
     dedup.reserve(vc);
     a.tri_verts.resize(tri_count * 3);
     a.canon_positions.reserve(vc);
@@ -131,10 +129,10 @@ TriAdjacency build_adjacency(const Vertex* verts, u32 vc) {
 
     // Hash each edge (sorted) → owning tri id. On collision, link both
     // sides into each other's neighbour slot.
-    a.neighbours.assign(tri_count, std::array<u32, 3>{Cluster::kInvalid,
+    a.neighbours.assign(tri_count, cardinal::array<u32, 3>{Cluster::kInvalid,
                                                      Cluster::kInvalid,
                                                      Cluster::kInvalid});
-    std::unordered_map<EdgeKey, std::pair<u32, u32>, EdgeKeyHash> edge_owner;
+    cardinal::unordered_map<EdgeKey, cardinal::pair<u32, u32>, EdgeKeyHash> edge_owner;
     edge_owner.reserve(tri_count * 3);
 
     auto edge_key = [](u32 va, u32 vb) noexcept -> EdgeKey {
@@ -145,13 +143,13 @@ TriAdjacency build_adjacency(const Vertex* verts, u32 vc) {
         const u32 v0 = a.tri_verts[t*3 + 0];
         const u32 v1 = a.tri_verts[t*3 + 1];
         const u32 v2 = a.tri_verts[t*3 + 2];
-        const std::array<EdgeKey, 3> ek = {
+        const cardinal::array<EdgeKey, 3> ek = {
             edge_key(v0, v1), edge_key(v1, v2), edge_key(v2, v0)
         };
         for (u32 e = 0; e < 3; ++e) {
             auto it = edge_owner.find(ek[e]);
             if (it == edge_owner.end()) {
-                edge_owner.emplace(ek[e], std::pair<u32, u32>{t, e});
+                edge_owner.emplace(ek[e], cardinal::pair<u32, u32>{t, e});
             } else {
                 const auto [other_tri, other_edge] = it->second;
                 a.neighbours[t][e]                = other_tri;
@@ -166,16 +164,16 @@ TriAdjacency build_adjacency(const Vertex* verts, u32 vc) {
 // Greedy BFS cluster decomposition.
 // Returns one cluster_id per triangle.
 // -----------------------------------------------------------------------------
-std::vector<u32> decompose_clusters(const TriAdjacency& a, u32 target_tris) {
+cardinal::vector<u32> decompose_clusters(const TriAdjacency& a, u32 target_tris) {
     const u32 tri_count = static_cast<u32>(a.neighbours.size());
-    std::vector<u32> tri_cluster(tri_count, Cluster::kInvalid);
+    cardinal::vector<u32> tri_cluster(tri_count, Cluster::kInvalid);
     u32 next_cluster_id = 0;
 
     for (u32 seed = 0; seed < tri_count; ++seed) {
         if (tri_cluster[seed] != Cluster::kInvalid) continue;
         // Expand from seed.
         u32 cid = next_cluster_id++;
-        std::queue<u32> q;
+        cardinal::queue<u32> q;
         q.push(seed);
         tri_cluster[seed] = cid;
         u32 in_cluster = 0;
@@ -235,7 +233,7 @@ Quadric plane_quadric(const Vec3& p0, const Vec3& p1, const Vec3& p2) noexcept {
     Vec3 n{e1.y*e2.z - e1.z*e2.y,
            e1.z*e2.x - e1.x*e2.z,
            e1.x*e2.y - e1.y*e2.x};
-    const f32 len = std::sqrt(n.x*n.x + n.y*n.y + n.z*n.z);
+    const f32 len = cardinal::sqrt(n.x*n.x + n.y*n.y + n.z*n.z);
     if (len > 1e-8f) { n.x/=len; n.y/=len; n.z/=len; }
     const f32 d = -(n.x*p0.x + n.y*p0.y + n.z*p0.z);
     Quadric q;
@@ -261,7 +259,7 @@ Quadric plane_quadric(const Vec3& p0, const Vec3& p1, const Vec3& p2) noexcept {
 // are ~512 tris) and avoids the heap-invalidation complexity of a
 // proper priority queue. A real shipping cook upgrades this to
 // meshoptimizer's clusterizer + simplifier; the public API stays.
-std::vector<Vertex> simplify_qem(const std::vector<Vertex>& in_verts,
+cardinal::vector<Vertex> simplify_qem(const cardinal::vector<Vertex>& in_verts,
                                  u32 target_tris,
                                  f32* out_geometric_error)
 {
@@ -273,12 +271,12 @@ std::vector<Vertex> simplify_qem(const std::vector<Vertex>& in_verts,
 
     // Dedup positions so we work on a vert graph instead of a triangle
     // soup. We still output triangle-list at the end.
-    std::unordered_map<Vec3, u32, VertHash, VertEq> dedup;
-    std::vector<Vec3>   pos;
-    std::vector<Vec3>   nrm;        // averaged
-    std::vector<Vec3>   col;        // averaged
-    std::vector<u32>    counts;     // for averaging on merge
-    std::vector<std::array<u32, 3>> tris;
+    cardinal::unordered_map<Vec3, u32, VertHash, VertEq> dedup;
+    cardinal::vector<Vec3>   pos;
+    cardinal::vector<Vec3>   nrm;        // averaged
+    cardinal::vector<Vec3>   col;        // averaged
+    cardinal::vector<u32>    counts;     // for averaging on merge
+    cardinal::vector<cardinal::array<u32, 3>> tris;
     tris.reserve(in_tri_count);
 
     auto get_id = [&](const Vertex& v) -> u32 {
@@ -310,7 +308,7 @@ std::vector<Vertex> simplify_qem(const std::vector<Vertex>& in_verts,
     }
 
     // Per-vertex quadric.
-    std::vector<Quadric> Q(pos.size());
+    cardinal::vector<Quadric> Q(pos.size());
     for (const auto& tri : tris) {
         Quadric q = plane_quadric(pos[tri[0]], pos[tri[1]], pos[tri[2]]);
         Q[tri[0]].add(q);
@@ -319,15 +317,15 @@ std::vector<Vertex> simplify_qem(const std::vector<Vertex>& in_verts,
     }
 
     // Track "alive" verts + tris.
-    std::vector<u8> tri_alive(tris.size(), 1);
-    std::vector<u8> vert_alive(pos.size(), 1);
+    cardinal::vector<u8> tri_alive(tris.size(), 1);
+    cardinal::vector<u8> vert_alive(pos.size(), 1);
     u32 alive_tris = static_cast<u32>(tris.size());
 
     f32 max_collapse_error = 0.0f;
 
     while (alive_tris > target_tris) {
         // Find the lowest-error candidate edge. O(N) over alive tris.
-        f32  best_err  = std::numeric_limits<f32>::max();
+        f32  best_err  = cardinal::numeric_limits<f32>::max();
         u32  best_a    = Cluster::kInvalid;
         u32  best_b    = Cluster::kInvalid;
         Vec3 best_pos{};
@@ -337,7 +335,7 @@ std::vector<Vertex> simplify_qem(const std::vector<Vertex>& in_verts,
             const auto& tri = tris[t];
             for (int e = 0; e < 3; ++e) {
                 u32 a = tri[e], b = tri[(e+1)%3];
-                if (a > b) std::swap(a, b);          // canonicalise
+                if (a > b) cardinal::swap(a, b);          // canonicalise
                 // Candidate collapse position: midpoint (cheap; the
                 // analytically-optimal version solves the 3x3 system
                 // from Q[a]+Q[b], skipped here for simplicity).
@@ -356,7 +354,7 @@ std::vector<Vertex> simplify_qem(const std::vector<Vertex>& in_verts,
         }
         if (best_a == Cluster::kInvalid) break;       // nothing more to collapse
 
-        max_collapse_error = std::max(max_collapse_error, std::sqrt(std::max(0.0f, best_err)));
+        max_collapse_error = cardinal::max(max_collapse_error, cardinal::sqrt(cardinal::max(0.0f, best_err)));
 
         // Apply the collapse: move a, merge b into a, remove degenerate tris.
         pos[best_a] = best_pos;
@@ -381,7 +379,7 @@ std::vector<Vertex> simplify_qem(const std::vector<Vertex>& in_verts,
     if (out_geometric_error) *out_geometric_error = max_collapse_error;
 
     // Emit surviving triangle-list verts.
-    std::vector<Vertex> out;
+    cardinal::vector<Vertex> out;
     out.reserve(static_cast<usize>(alive_tris) * 3);
     for (u32 t = 0; t < tris.size(); ++t) {
         if (!tri_alive[t]) continue;
@@ -413,10 +411,10 @@ void compute_bounds(const Vertex* verts, u32 count, Vec3& center, f32& radius) {
         const f32 dx = verts[i].position.x - c.x;
         const f32 dy = verts[i].position.y - c.y;
         const f32 dz = verts[i].position.z - c.z;
-        r2 = std::max(r2, dx*dx + dy*dy + dz*dz);
+        r2 = cardinal::max(r2, dx*dx + dy*dy + dz*dz);
     }
     center = c;
-    radius = std::sqrt(r2);
+    radius = cardinal::sqrt(r2);
 }
 
 }  // namespace
@@ -424,7 +422,7 @@ void compute_bounds(const Vertex* verts, u32 count, Vec3& center, f32& radius) {
 // =============================================================================
 // cook — top-level
 // =============================================================================
-std::shared_ptr<Hierarchy> cook(const CookDesc& desc) {
+cardinal::shared_ptr<Hierarchy> cook(const CookDesc& desc) {
     if (desc.vertices == nullptr || desc.vertex_count == 0 ||
         (desc.vertex_count % 3) != 0)
     {
@@ -438,32 +436,32 @@ std::shared_ptr<Hierarchy> cook(const CookDesc& desc) {
         ? desc.cluster_target_tris : kClusterTargetTris;
     const f32 ratio  = desc.simplify_ratio > 0.0f ? desc.simplify_ratio : 0.5f;
 
-    auto h = std::make_shared<Hierarchy>();
+    auto h = cardinal::make_shared<Hierarchy>();
     h->master_tri_count = desc.vertex_count / 3;
 
     // -------- Build LEVEL 0 clusters (highest detail) ------------------------
-    std::vector<Vertex> current_verts(desc.vertices,
+    cardinal::vector<Vertex> current_verts(desc.vertices,
                                       desc.vertices + desc.vertex_count);
 
     // Levels accumulate from the LEAVES up. We finally reverse-index the
     // levels so clusters[0] = root.
     struct Level {
-        std::vector<Cluster>  clusters;
-        std::vector<Vertex>   verts;     // contiguous, sliced by cluster
+        cardinal::vector<Cluster>  clusters;
+        cardinal::vector<Vertex>   verts;     // contiguous, sliced by cluster
     };
-    std::vector<Level> levels;
+    cardinal::vector<Level> levels;
 
     u32 level_idx = 0;
     while (true) {
         TriAdjacency adj = build_adjacency(current_verts.data(),
                                            static_cast<u32>(current_verts.size()));
-        std::vector<u32> tri_cluster = decompose_clusters(adj, target);
+        cardinal::vector<u32> tri_cluster = decompose_clusters(adj, target);
 
         // Group triangle verts by cluster id and build Level entry.
         u32 cluster_count = 0;
-        for (u32 cid : tri_cluster) cluster_count = std::max(cluster_count, cid + 1);
+        for (u32 cid : tri_cluster) cluster_count = cardinal::max(cluster_count, cid + 1);
 
-        std::vector<std::vector<Vertex>> bucket(cluster_count);
+        cardinal::vector<cardinal::vector<Vertex>> bucket(cluster_count);
         const u32 tri_count = static_cast<u32>(tri_cluster.size());
         for (u32 t = 0; t < tri_count; ++t) {
             bucket[tri_cluster[t]].push_back(current_verts[t*3 + 0]);
@@ -482,25 +480,25 @@ std::shared_ptr<Hierarchy> cook(const CookDesc& desc) {
             L.verts.insert(L.verts.end(), bucket[c].begin(), bucket[c].end());
             L.clusters.push_back(cl);
         }
-        levels.push_back(std::move(L));
+        levels.push_back(cardinal::move(L));
 
         if (cluster_count <= 1) break;     // converged — root is the single survivor
 
         // Build the NEXT (coarser) level: group clusters of
         // kClusterGroupSize, concat their tris, simplify to ratio.
-        std::vector<Vertex> next_verts;
+        cardinal::vector<Vertex> next_verts;
         next_verts.reserve(current_verts.size() / 2);
         for (u32 g = 0; g < cluster_count; g += kClusterGroupSize) {
-            std::vector<Vertex> grouped;
+            cardinal::vector<Vertex> grouped;
             for (u32 k = 0; k < kClusterGroupSize && g + k < cluster_count; ++k) {
                 grouped.insert(grouped.end(),
                                bucket[g + k].begin(), bucket[g + k].end());
             }
             const u32 grouped_tris = static_cast<u32>(grouped.size() / 3);
-            const u32 target_tris  = std::max<u32>(1,
+            const u32 target_tris  = cardinal::max<u32>(1,
                 static_cast<u32>(static_cast<f32>(grouped_tris) * ratio));
             f32 err = 0.0f;
-            std::vector<Vertex> simp = simplify_qem(grouped, target_tris, &err);
+            cardinal::vector<Vertex> simp = simplify_qem(grouped, target_tris, &err);
             (void)err;     // attached to the parent cluster below
 
             // QEM edge collapse linearly averages the normals of merged
@@ -531,7 +529,7 @@ std::shared_ptr<Hierarchy> cook(const CookDesc& desc) {
         // If the simplifier made no progress (every group failed to
         // collapse), break to avoid an infinite loop.
         if (next_verts.size() >= current_verts.size()) break;
-        current_verts = std::move(next_verts);
+        current_verts = cardinal::move(next_verts);
 
         ++level_idx;
         if (level_idx > 32) break;         // safety — should never reach this
@@ -540,10 +538,10 @@ std::shared_ptr<Hierarchy> cook(const CookDesc& desc) {
     // Pack levels into the final hierarchy. clusters[0] = root (deepest
     // level we built). Leaves are at the largest level index, which is
     // levels[0] in our build order. Reverse so the root sits at the front.
-    std::reverse(levels.begin(), levels.end());
+    cardinal::reverse(levels.begin(), levels.end());
 
     // Concatenate clusters + verts; remap vertex_offset to be global.
-    std::vector<u32> level_first_cluster(levels.size(), 0);
+    cardinal::vector<u32> level_first_cluster(levels.size(), 0);
     u32 cluster_cursor = 0;
     for (usize li = 0; li < levels.size(); ++li) {
         level_first_cluster[li] = cluster_cursor;
@@ -596,7 +594,7 @@ std::shared_ptr<Hierarchy> cook(const CookDesc& desc) {
                 h->clusters[parent_base + p].child_count    = 0;
                 continue;
             }
-            const u32 take = std::min<u32>(kClusterGroupSize,
+            const u32 take = cardinal::min<u32>(kClusterGroupSize,
                 child_base + child_total - first);
             h->clusters[parent_base + p].first_child_id = first;
             h->clusters[parent_base + p].child_count    = take;

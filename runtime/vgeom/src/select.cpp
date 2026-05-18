@@ -23,10 +23,10 @@
 #include <cardinal/core/simd_math.hpp>
 #include <cardinal/core/types.hpp>
 
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <vector>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cmath.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::vgeom {
 
@@ -36,12 +36,12 @@ namespace {
 // (Gribb–Hartmann method). Plane format: (nx, ny, nz, d) with the
 // convention "point on the inside has nx*x + ny*y + nz*z + d >= 0".
 struct Plane { f32 nx, ny, nz, d; };
-struct Frustum6 { std::array<Plane, 6> p; };
+struct Frustum6 { cardinal::array<Plane, 6> p; };
 
 Frustum6 frustum_from_vp(const Mat4& vp) noexcept {
     Frustum6 f{};
     auto plane = [&](Plane& p, f32 a, f32 b, f32 c, f32 d) noexcept {
-        const f32 len = std::sqrt(a*a + b*b + c*c);
+        const f32 len = cardinal::sqrt(a*a + b*b + c*c);
         const f32 inv = (len > 1e-8f) ? (1.0f / len) : 1.0f;
         p.nx = a * inv; p.ny = b * inv; p.nz = c * inv; p.d = d * inv;
     };
@@ -66,11 +66,11 @@ Frustum6 frustum_from_vp(const Mat4& vp) noexcept {
 // non-uniform scale would require an OBB or per-axis bound.
 f32 model_radius_scale(const Mat4& m) noexcept {
     auto col_len = [&](int c) noexcept {
-        return std::sqrt(m.m[c][0]*m.m[c][0]
+        return cardinal::sqrt(m.m[c][0]*m.m[c][0]
                        + m.m[c][1]*m.m[c][1]
                        + m.m[c][2]*m.m[c][2]);
     };
-    return std::max(col_len(0), std::max(col_len(1), col_len(2)));
+    return cardinal::max(col_len(0), cardinal::max(col_len(1), col_len(2)));
 }
 
 }  // namespace
@@ -116,13 +116,13 @@ void select(const SelectInput& in, SelectOutput& out) {
     //
     // Thread-local storage for the per-call scratch — multiple threads
     // calling select() concurrently each get their own buffers.
-    static thread_local std::vector<u32> frontier;
-    static thread_local std::vector<u32> next_frontier;
-    static thread_local std::vector<f32> local_xyz;   // AoS: 3*N floats
-    static thread_local std::vector<f32> world_xyz;   // AoS: 3*N floats
-    static thread_local std::vector<f32> local_r;     // N floats
-    static thread_local std::vector<f32> sx, sy, sz, sr;
-    static thread_local std::vector<u8>  bits;
+    static thread_local cardinal::vector<u32> frontier;
+    static thread_local cardinal::vector<u32> next_frontier;
+    static thread_local cardinal::vector<f32> local_xyz;   // AoS: 3*N floats
+    static thread_local cardinal::vector<f32> world_xyz;   // AoS: 3*N floats
+    static thread_local cardinal::vector<f32> local_r;     // N floats
+    static thread_local cardinal::vector<f32> sx, sy, sz, sr;
+    static thread_local cardinal::vector<u8>  bits;
 
     frontier.clear();
     frontier.reserve(256);
@@ -220,7 +220,7 @@ void select(const SelectInput& in, SelectOutput& out) {
                 }
             }
         }
-        std::swap(frontier, next_frontier);
+        cardinal::swap(frontier, next_frontier);
     }
 
     // ----- Morton-order the cut for spatial draw locality ----------------
@@ -236,9 +236,9 @@ void select(const SelectInput& in, SelectOutput& out) {
     // expects. The root sphere covers the whole mesh, so this maps the
     // mesh's local bounds to [0, 2^21-1] in each axis.
     if (out.cluster_ids.size() > 1 && !in.hierarchy->clusters.empty()) {
-        static thread_local std::vector<u32>                 mqx, mqy, mqz;
-        static thread_local std::vector<u64>                 mort_codes;
-        static thread_local std::vector<std::pair<u64, u32>> mort_pairs;
+        static thread_local cardinal::vector<u32>                 mqx, mqy, mqz;
+        static thread_local cardinal::vector<u64>                 mort_codes;
+        static thread_local cardinal::vector<cardinal::pair<u64, u32>> mort_pairs;
 
         const usize n = out.cluster_ids.size();
         mqx.resize(n); mqy.resize(n); mqz.resize(n);
@@ -254,16 +254,16 @@ void select(const SelectInput& in, SelectOutput& out) {
 
         for (usize i = 0; i < n; ++i) {
             const Vec3& c = in.hierarchy->clusters[out.cluster_ids[i]].center;
-            mqx[i] = static_cast<u32>(std::clamp((c.x - base_x) * inv, 0.0f, 2097151.0f));
-            mqy[i] = static_cast<u32>(std::clamp((c.y - base_y) * inv, 0.0f, 2097151.0f));
-            mqz[i] = static_cast<u32>(std::clamp((c.z - base_z) * inv, 0.0f, 2097151.0f));
+            mqx[i] = static_cast<u32>(cardinal::clamp((c.x - base_x) * inv, 0.0f, 2097151.0f));
+            mqy[i] = static_cast<u32>(cardinal::clamp((c.y - base_y) * inv, 0.0f, 2097151.0f));
+            mqz[i] = static_cast<u32>(cardinal::clamp((c.z - base_z) * inv, 0.0f, 2097151.0f));
         }
         cardinal::core::simd::morton_encode_3d_array(
             mort_codes.data(), mqx.data(), mqy.data(), mqz.data(), n);
         for (usize i = 0; i < n; ++i) {
             mort_pairs[i] = { mort_codes[i], out.cluster_ids[i] };
         }
-        std::sort(mort_pairs.begin(), mort_pairs.end(),
+        cardinal::sort(mort_pairs.begin(), mort_pairs.end(),
                   [](const auto& a, const auto& b){ return a.first < b.first; });
         for (usize i = 0; i < n; ++i) {
             out.cluster_ids[i] = mort_pairs[i].second;

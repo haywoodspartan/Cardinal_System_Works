@@ -112,9 +112,7 @@
 
 #include <cardinal/core/math.hpp>      // core::Vec3 / Vec4 / Mat4 (canonical types)
 #include <cardinal/core/types.hpp>
-
-#include <memory>
-#include <vector>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::vgeom {
 
@@ -188,7 +186,7 @@ struct CookDesc {
 // Run the cook. Returns nullptr on bad input (no verts, non-triangle-list).
 // The returned Hierarchy is reference-counted — share it across multiple
 // scene entities that reuse the same source mesh.
-std::shared_ptr<Hierarchy> cook(const CookDesc& desc);
+cardinal::shared_ptr<Hierarchy> cook(const CookDesc& desc);
 
 // =============================================================================
 // Selection — pick the per-frame cut through the hierarchy.
@@ -213,7 +211,7 @@ struct SelectInput {
 struct SelectOutput {
     // Cluster ids selected, in front-to-back order. Renderer iterates
     // these and emits each cluster's vertices into the transform queue.
-    std::vector<u32>    cluster_ids;
+    cardinal::vector<u32>    cluster_ids;
     FrameStats          stats;
 };
 
