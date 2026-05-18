@@ -25,11 +25,8 @@
 // =============================================================================
 
 #include <cardinal/actor/world.hpp>
-#include <cardinal/core/types.hpp>
-
-#include <functional>
-#include <string>
-#include <vector>
+#include <cardinal/core/types.hpp>        // function/string/unique_ptr
+#include <cardinal/core/containers.hpp>   // cardinal::vector
 
 namespace cardinal::sim {
 
@@ -101,7 +98,7 @@ public:
     float time_scale() const noexcept;
 
     // ---- Tick groups -------------------------------------------------
-    using TickFn = std::function<void(float dt)>;
+    using TickFn = cardinal::function<void(float dt)>;
     using HandlerId = u32;
     HandlerId add_handler(TickGroup g, TickFn fn);
     void      remove_handler(HandlerId id);
@@ -115,9 +112,9 @@ private:
     void integrate_physics_(float dt);
 
     SimDesc                                desc_{};
-    std::unique_ptr<cardinal::actor::World> world_;
+    cardinal::unique_ptr<cardinal::actor::World> world_;
     struct Sub { HandlerId id; TickFn fn; };
-    std::vector<Sub>                       handlers_[static_cast<usize>(TickGroup::Count)];
+    cardinal::vector<Sub>                       handlers_[static_cast<usize>(TickGroup::Count)];
     HandlerId                              next_handler_id_{1};
 
     bool                                   paused_{false};

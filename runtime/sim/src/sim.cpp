@@ -4,7 +4,9 @@
 #include <cardinal/core/async.hpp>
 #include <cardinal/core/log.hpp>
 
-#include <algorithm>
+#include <cardinal/core/algorithm.hpp>   // cardinal::remove_if/max
+#include <cardinal/core/utility.hpp>     // cardinal::move
+// cardinal::make_unique/vector/function arrive via sim.hpp
 
 namespace cardinal::sim {
 
@@ -23,7 +25,7 @@ const char* tick_group_name(TickGroup g) noexcept {
 }
 
 SimWorld::SimWorld(const SimDesc& desc)
-    : desc_(desc), world_(std::make_unique<cardinal::actor::World>())
+    : desc_(desc), world_(cardinal::make_unique<cardinal::actor::World>())
 {
     paused_ = desc.start_paused;
 }
@@ -41,12 +43,12 @@ float SimWorld::time_scale() const noexcept { return time_scale_; }
 
 SimWorld::HandlerId SimWorld::add_handler(TickGroup g, TickFn fn) {
     const HandlerId id = next_handler_id_++;
-    handlers_[static_cast<usize>(g)].push_back(Sub{ id, std::move(fn) });
+    handlers_[static_cast<usize>(g)].push_back(Sub{ id, cardinal::move(fn) });
     return id;
 }
 void SimWorld::remove_handler(HandlerId id) {
     for (auto& list : handlers_) {
-        list.erase(std::remove_if(list.begin(), list.end(),
+        list.erase(cardinal::remove_if(list.begin(), list.end(),
             [id](const Sub& s){ return s.id == id; }), list.end());
     }
 }
@@ -62,12 +64,12 @@ void SimWorld::run_group_(TickGroup g, float dt) {
     // is identical and dispatch overhead is wasted).
     //
     // We build the task vector once per group call. Per-handler overhead
-    // is one std::function copy — negligible against the work each
+    // is one cardinal::function copy — negligible against the work each
     // handler does (every realistic handler touches dozens of entities).
     if (desc_.parallel_handlers && list.size() > 1
         && cardinal::async::pool() != nullptr)
     {
-        std::vector<std::function<void()>> tasks;
+        cardinal::vector<cardinal::function<void()>> tasks;
         tasks.reserve(list.size());
         for (const auto& s : list) {
             if (!s.fn) continue;
@@ -95,7 +97,7 @@ void SimWorld::integrate_physics_(float dt) {
         rb->velocity.x += rb->acceleration.x * dt;
         rb->velocity.y += rb->acceleration.y * dt;
         rb->velocity.z += rb->acceleration.z * dt;
-        const float damp = std::max(0.0f, 1.0f - rb->linear_damping * dt);
+        const float damp = cardinal::max(0.0f, 1.0f - rb->linear_damping * dt);
         rb->velocity.x *= damp;
         rb->velocity.y *= damp;
         rb->velocity.z *= damp;
