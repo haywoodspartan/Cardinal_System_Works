@@ -7,10 +7,13 @@
 #include <cardinal/scene/scene.hpp>
 #include <cardinal/sky/sky.hpp>
 
-#include <cstdio>
-#include <cstring>
-#include <fstream>
-#include <sstream>
+#include <cardinal/core/cstdio.hpp>      // cardinal::snprintf/sscanf
+#include <cardinal/core/cstdlib.hpp>     // cardinal::atof/atoi
+#include <cardinal/core/cstring.hpp>     // cardinal raw byte ops
+#include <cardinal/core/fstream.hpp>     // cardinal::ifstream/ofstream/ios/getline
+#include <cardinal/core/sstream.hpp>     // cardinal::stringstream
+#include <cardinal/core/utility.hpp>     // cardinal::move
+#include <cardinal/core/containers.hpp>  // cardinal::vector
 
 namespace cardinal::serial {
 
@@ -19,7 +22,7 @@ namespace cardinal::serial {
 // ---------------------------------------------------------------------------
 namespace text {
 
-void emit_kv(std::string& out, const char* key, const char* value) {
+void emit_kv(cardinal::string& out, const char* key, const char* value) {
     out += "  ";
     out += key;
     out += " = \"";
@@ -27,22 +30,22 @@ void emit_kv(std::string& out, const char* key, const char* value) {
     out += "\"\n";
 }
 
-void emit_kf(std::string& out, const char* key, float value) {
+void emit_kf(cardinal::string& out, const char* key, float value) {
     char buf[64];
-    std::snprintf(buf, sizeof(buf), "  %s = %.6f\n", key, value);
+    cardinal::snprintf(buf, sizeof(buf), "  %s = %.6f\n", key, value);
     out += buf;
 }
 
-void emit_kv3(std::string& out, const char* key, float x, float y, float z) {
+void emit_kv3(cardinal::string& out, const char* key, float x, float y, float z) {
     char buf[96];
-    std::snprintf(buf, sizeof(buf), "  %s = (%.6f, %.6f, %.6f)\n", key, x, y, z);
+    cardinal::snprintf(buf, sizeof(buf), "  %s = (%.6f, %.6f, %.6f)\n", key, x, y, z);
     out += buf;
 }
 
-bool parse_kv(const std::string& line, std::string* key, std::string* value) {
+bool parse_kv(const cardinal::string& line, cardinal::string* key, cardinal::string* value) {
     const auto eq = line.find('=');
-    if (eq == std::string::npos) return false;
-    auto trim = [](std::string s) {
+    if (eq == cardinal::string::npos) return false;
+    auto trim = [](cardinal::string s) {
         while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.erase(s.begin());
         while (!s.empty() && (s.back() == ' '  || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.pop_back();
         return s;
@@ -62,34 +65,34 @@ namespace {
 // ---------------------------------------------------------------------------
 // Property emit / apply
 // ---------------------------------------------------------------------------
-void emit_prop(std::string& out, const cardinal::game::PropertyDef& p) {
+void emit_prop(cardinal::string& out, const cardinal::game::PropertyDef& p) {
     using K = cardinal::game::PropertyKind;
     char buf[256];
     switch (p.kind) {
         case K::Float: {
             const float* f = static_cast<const float*>(p.ptr);
-            std::snprintf(buf, sizeof(buf), "  prop float %s = %.6f\n",
+            cardinal::snprintf(buf, sizeof(buf), "  prop float %s = %.6f\n",
                           p.name.c_str(), *f);
             out += buf;
             break;
         }
         case K::Int: {
             const int* i = static_cast<const int*>(p.ptr);
-            std::snprintf(buf, sizeof(buf), "  prop int %s = %d\n",
+            cardinal::snprintf(buf, sizeof(buf), "  prop int %s = %d\n",
                           p.name.c_str(), *i);
             out += buf;
             break;
         }
         case K::Bool: {
             const bool* b = static_cast<const bool*>(p.ptr);
-            std::snprintf(buf, sizeof(buf), "  prop bool %s = %s\n",
+            cardinal::snprintf(buf, sizeof(buf), "  prop bool %s = %s\n",
                           p.name.c_str(), *b ? "true" : "false");
             out += buf;
             break;
         }
         case K::Vec3: {
             const float* v = static_cast<const float*>(p.ptr);
-            std::snprintf(buf, sizeof(buf),
+            cardinal::snprintf(buf, sizeof(buf),
                 "  prop vec3 %s = (%.6f, %.6f, %.6f)\n",
                 p.name.c_str(), v[0], v[1], v[2]);
             out += buf;
@@ -97,15 +100,15 @@ void emit_prop(std::string& out, const cardinal::game::PropertyDef& p) {
         }
         case K::Color: {
             const float* v = static_cast<const float*>(p.ptr);
-            std::snprintf(buf, sizeof(buf),
+            cardinal::snprintf(buf, sizeof(buf),
                 "  prop color %s = (%.6f, %.6f, %.6f)\n",
                 p.name.c_str(), v[0], v[1], v[2]);
             out += buf;
             break;
         }
         case K::String: {
-            const std::string* s = static_cast<const std::string*>(p.ptr);
-            std::snprintf(buf, sizeof(buf), "  prop string %s = \"%s\"\n",
+            const cardinal::string* s = static_cast<const cardinal::string*>(p.ptr);
+            cardinal::snprintf(buf, sizeof(buf), "  prop string %s = \"%s\"\n",
                           p.name.c_str(), s->c_str());
             out += buf;
             break;
@@ -114,19 +117,19 @@ void emit_prop(std::string& out, const cardinal::game::PropertyDef& p) {
 }
 
 bool apply_prop(cardinal::game::PropertyDef& p,
-                const std::string& kind,
-                const std::string& value)
+                const cardinal::string& kind,
+                const cardinal::string& value)
 {
     using K = cardinal::game::PropertyKind;
     auto parse_vec3 = [&](float& x, float& y, float& z) {
-        return std::sscanf(value.c_str(), " (%f , %f , %f", &x, &y, &z) == 3;
+        return cardinal::sscanf(value.c_str(), " (%f , %f , %f", &x, &y, &z) == 3;
     };
     if (kind == "float" && p.kind == K::Float) {
-        *static_cast<float*>(p.ptr) = static_cast<float>(std::atof(value.c_str()));
+        *static_cast<float*>(p.ptr) = static_cast<float>(cardinal::atof(value.c_str()));
         return true;
     }
     if (kind == "int" && p.kind == K::Int) {
-        *static_cast<int*>(p.ptr) = std::atoi(value.c_str());
+        *static_cast<int*>(p.ptr) = cardinal::atoi(value.c_str());
         return true;
     }
     if (kind == "bool" && p.kind == K::Bool) {
@@ -154,10 +157,10 @@ bool apply_prop(cardinal::game::PropertyDef& p,
         // pair (same rule as text::parse_kv) so values round-trip
         // exactly — otherwise every save/load cycle accreted another
         // layer of quotes, silently corrupting the value.
-        std::string v = value;
+        cardinal::string v = value;
         if (v.size() >= 2 && v.front() == '"' && v.back() == '"')
             v = v.substr(1, v.size() - 2);
-        *static_cast<std::string*>(p.ptr) = std::move(v);
+        *static_cast<cardinal::string*>(p.ptr) = cardinal::move(v);
         return true;
     }
     return false;
@@ -169,11 +172,11 @@ bool apply_prop(cardinal::game::PropertyDef& p,
 // World save
 // ---------------------------------------------------------------------------
 SaveStats save_world(const cardinal::actor::World& world,
-                     const std::string& path,
-                     std::string* error_out)
+                     const cardinal::string& path,
+                     cardinal::string* error_out)
 {
     SaveStats s{};
-    std::string out;
+    cardinal::string out;
     out.reserve(8192);
     out += "# Cardinal save v1\n";
 
@@ -184,7 +187,7 @@ SaveStats save_world(const cardinal::actor::World& world,
         out += "\" {\n";
 
         // Class — empty for non-GameActor instances.
-        std::string cls;
+        cardinal::string cls;
         cardinal::game::GameActor* ga = nullptr;
         for (const auto& c : aptr->components()) {
             if (auto* g = dynamic_cast<cardinal::game::GameActor*>(c.get())) {
@@ -219,12 +222,12 @@ SaveStats save_world(const cardinal::actor::World& world,
         ++s.actors_written;
     }
 
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    cardinal::ofstream f(path, cardinal::ios::binary | cardinal::ios::trunc);
     if (!f) {
         if (error_out) *error_out = "could not open file for write: " + path;
         return s;
     }
-    f.write(out.data(), static_cast<std::streamsize>(out.size()));
+    f.write(out.data(), static_cast<cardinal::streamsize>(out.size()));
     s.bytes_written = static_cast<u64>(out.size());
     cardinal::log::infof("serial",
         "saved world: %u actors, %u props -> %s (%llu bytes)",
@@ -237,30 +240,30 @@ SaveStats save_world(const cardinal::actor::World& world,
 // World load
 // ---------------------------------------------------------------------------
 LoadStats load_world(cardinal::game::Game& game,
-                     const std::string& path,
+                     const cardinal::string& path,
                      bool replace_existing,
-                     std::string* error_out)
+                     cardinal::string* error_out)
 {
     LoadStats st{};
-    std::ifstream f(path);
+    cardinal::ifstream f(path);
     if (!f) {
         if (error_out) *error_out = "could not open file: " + path;
         return st;
     }
 
     if (replace_existing) {
-        std::vector<u32> ids;
+        cardinal::vector<u32> ids;
         for (const auto& aptr : game.world().actors())
             if (aptr->alive()) ids.push_back(aptr->id());
         for (auto id : ids) game.world().destroy(id);
         game.world().sweep();
     }
 
-    std::string line;
+    cardinal::string line;
     cardinal::actor::Actor*           cur_actor = nullptr;
     cardinal::game::GameActor*         cur_ga    = nullptr;
-    std::string                       cur_actor_name;
-    std::vector<cardinal::game::PropertyDef> cur_props;
+    cardinal::string                       cur_actor_name;
+    cardinal::vector<cardinal::game::PropertyDef> cur_props;
     auto refresh_props = [&]() {
         cur_props.clear();
         if (cur_ga == nullptr) return;
@@ -268,7 +271,7 @@ LoadStats load_world(cardinal::game::Game& game,
         if (def && def->describe_properties) cur_props = def->describe_properties(cur_ga);
     };
 
-    while (std::getline(f, line)) {
+    while (cardinal::getline(f, line)) {
         // Strip leading whitespace.
         usize i = 0;
         while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) ++i;
@@ -277,8 +280,8 @@ LoadStats load_world(cardinal::game::Game& game,
         // Block open.
         if (line.compare(i, 6, "actor ") == 0) {
             const auto q1 = line.find('"', i);
-            const auto q2 = (q1 == std::string::npos) ? std::string::npos : line.find('"', q1 + 1);
-            std::string name = (q1 != std::string::npos && q2 != std::string::npos)
+            const auto q2 = (q1 == cardinal::string::npos) ? cardinal::string::npos : line.find('"', q1 + 1);
+            cardinal::string name = (q1 != cardinal::string::npos && q2 != cardinal::string::npos)
                 ? line.substr(q1 + 1, q2 - q1 - 1) : "Actor";
             // We can't spawn yet — class isn't known. Defer until "class = ...".
             // Keep the parsed name so the "class =" branch can pass it to
@@ -300,19 +303,19 @@ LoadStats load_world(cardinal::game::Game& game,
 
         // Property lines start with "prop <kind> <name> = <value>".
         if (line.compare(i, 5, "prop ") == 0) {
-            std::string rest = line.substr(i + 5);
+            cardinal::string rest = line.substr(i + 5);
             // Format: "<kind> <name> = <value>"
             const auto sp1 = rest.find(' ');
             const auto eq  = rest.find('=', sp1);
-            if (sp1 == std::string::npos || eq == std::string::npos) {
+            if (sp1 == cardinal::string::npos || eq == cardinal::string::npos) {
                 ++st.errors;
                 continue;
             }
-            std::string kind = rest.substr(0, sp1);
-            std::string name = rest.substr(sp1 + 1, eq - sp1 - 1);
-            std::string val  = rest.substr(eq + 1);
+            cardinal::string kind = rest.substr(0, sp1);
+            cardinal::string name = rest.substr(sp1 + 1, eq - sp1 - 1);
+            cardinal::string val  = rest.substr(eq + 1);
             // trim
-            auto trim = [](std::string s) {
+            auto trim = [](cardinal::string s) {
                 while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.erase(s.begin());
                 while (!s.empty() && (s.back()  == ' ' || s.back()  == '\t' || s.back() == '\r')) s.pop_back();
                 return s;
@@ -333,7 +336,7 @@ LoadStats load_world(cardinal::game::Game& game,
         }
 
         // Key=value lines.
-        std::string key, val;
+        cardinal::string key, val;
         if (!text::parse_kv(line.substr(i), &key, &val)) continue;
 
         if (key == "class") {
@@ -365,7 +368,7 @@ LoadStats load_world(cardinal::game::Game& game,
 
         if (key == "position" || key == "rotation" || key == "scale") {
             float x = 0, y = 0, z = 0;
-            std::sscanf(val.c_str(), " (%f , %f , %f", &x, &y, &z);
+            cardinal::sscanf(val.c_str(), " (%f , %f , %f", &x, &y, &z);
             if (auto* tr = cur_actor->get_component<cardinal::actor::TransformComponent>()) {
                 if (key == "position")   tr->translation    = {x, y, z};
                 if (key == "rotation")   tr->rotation_euler = {x, y, z};
@@ -383,10 +386,10 @@ LoadStats load_world(cardinal::game::Game& game,
 // ---------------------------------------------------------------------------
 // Sky save / load
 // ---------------------------------------------------------------------------
-bool save_sky(const cardinal::sky::Sky& sky, const std::string& path,
-              std::string* error_out)
+bool save_sky(const cardinal::sky::Sky& sky, const cardinal::string& path,
+              cardinal::string* error_out)
 {
-    std::string out;
+    cardinal::string out;
     out += "# Cardinal sky v1\n";
     out += "sky {\n";
     text::emit_kf(out, "hour",        sky.hour());
@@ -395,7 +398,7 @@ bool save_sky(const cardinal::sky::Sky& sky, const std::string& path,
     out += "  keys {\n";
     for (const auto& k : sky.keys()) {
         char buf[256];
-        std::snprintf(buf, sizeof(buf),
+        cardinal::snprintf(buf, sizeof(buf),
             "    key h=%.4f ze=(%.4f,%.4f,%.4f) ho=(%.4f,%.4f,%.4f) "
             "sc=(%.4f,%.4f,%.4f) si=%.4f am=(%.4f,%.4f,%.4f)\n",
             k.hour,
@@ -407,33 +410,33 @@ bool save_sky(const cardinal::sky::Sky& sky, const std::string& path,
         out += buf;
     }
     out += "  }\n}\n";
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    cardinal::ofstream f(path, cardinal::ios::binary | cardinal::ios::trunc);
     if (!f) {
         if (error_out) *error_out = "could not open: " + path;
         return false;
     }
-    f.write(out.data(), static_cast<std::streamsize>(out.size()));
+    f.write(out.data(), static_cast<cardinal::streamsize>(out.size()));
     return true;
 }
 
-bool load_sky(cardinal::sky::Sky& sky, const std::string& path,
-              std::string* error_out)
+bool load_sky(cardinal::sky::Sky& sky, const cardinal::string& path,
+              cardinal::string* error_out)
 {
-    std::ifstream f(path);
+    cardinal::ifstream f(path);
     if (!f) {
         if (error_out) *error_out = "could not open: " + path;
         return false;
     }
     sky.keys().clear();
-    std::string line;
-    while (std::getline(f, line)) {
+    cardinal::string line;
+    while (cardinal::getline(f, line)) {
         usize i = 0;
         while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) ++i;
         if (i >= line.size() || line[i] == '#') continue;
 
         if (line.compare(i, 4, "key ") == 0) {
             cardinal::sky::SkyKey k{};
-            std::sscanf(line.c_str() + i,
+            cardinal::sscanf(line.c_str() + i,
                 "key h=%f ze=(%f,%f,%f) ho=(%f,%f,%f) sc=(%f,%f,%f) si=%f am=(%f,%f,%f)",
                 &k.hour,
                 &k.zenith.x, &k.zenith.y, &k.zenith.z,
@@ -445,10 +448,10 @@ bool load_sky(cardinal::sky::Sky& sky, const std::string& path,
             continue;
         }
 
-        std::string key, val;
+        cardinal::string key, val;
         if (!text::parse_kv(line.substr(i), &key, &val)) continue;
-        if (key == "hour")        sky.set_hour(static_cast<float>(std::atof(val.c_str())));
-        if (key == "time_scale")  sky.set_time_scale(static_cast<float>(std::atof(val.c_str())));
+        if (key == "hour")        sky.set_hour(static_cast<float>(cardinal::atof(val.c_str())));
+        if (key == "time_scale")  sky.set_time_scale(static_cast<float>(cardinal::atof(val.c_str())));
         if (key == "frozen")      sky.set_frozen(val == "true" || val == "1");
     }
     sky.sort_keys();
@@ -471,11 +474,11 @@ bool load_sky(cardinal::sky::Sky& sky, const std::string& path,
 //   }
 // =============================================================================
 SceneSaveStats save_scene(const cardinal::scene::Scene& scene,
-                          const std::string& path,
-                          std::string* error_out)
+                          const cardinal::string& path,
+                          cardinal::string* error_out)
 {
     SceneSaveStats stats{};
-    std::string out;
+    cardinal::string out;
     out.reserve(scene.entities().size() * 256);
     out += "# Cardinal scene save v1\n";
 
@@ -521,24 +524,24 @@ SceneSaveStats save_scene(const cardinal::scene::Scene& scene,
         ++stats.entities_written;
     }
 
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    cardinal::ofstream f(path, cardinal::ios::binary | cardinal::ios::trunc);
     if (!f) {
         if (error_out) *error_out = "could not open: " + path;
         return stats;
     }
-    f.write(out.data(), static_cast<std::streamsize>(out.size()));
+    f.write(out.data(), static_cast<cardinal::streamsize>(out.size()));
     stats.bytes_written = out.size();
     return stats;
 }
 
 SceneLoadStats load_scene(cardinal::scene::Scene& scene,
                           const MeshRegistry& mesh_registry,
-                          const std::string& path,
+                          const cardinal::string& path,
                           bool replace_existing,
-                          std::string* error_out)
+                          cardinal::string* error_out)
 {
     SceneLoadStats stats{};
-    std::ifstream f(path);
+    cardinal::ifstream f(path);
     if (!f) {
         if (error_out) *error_out = "could not open: " + path;
         ++stats.errors;
@@ -547,22 +550,22 @@ SceneLoadStats load_scene(cardinal::scene::Scene& scene,
 
     if (replace_existing) {
         // Snapshot ids first so we don't mutate the vector mid-walk.
-        std::vector<u32> ids;
+        cardinal::vector<u32> ids;
         ids.reserve(scene.entities().size());
         for (const auto& e : scene.entities()) ids.push_back(e.id);
         for (u32 id : ids) scene.remove_entity(id);
     }
 
-    auto parse_vec3 = [](const std::string& v, float& x, float& y, float& z) {
-        return std::sscanf(v.c_str(), " (%f , %f , %f", &x, &y, &z) == 3;
+    auto parse_vec3 = [](const cardinal::string& v, float& x, float& y, float& z) {
+        return cardinal::sscanf(v.c_str(), " (%f , %f , %f", &x, &y, &z) == 3;
     };
 
-    std::string line;
+    cardinal::string line;
     cardinal::scene::Entity* current = nullptr;
-    std::string current_mesh_name;
+    cardinal::string current_mesh_name;
     bool current_vgeom_attached = false;
     bool current_vgeom_enabled  = true;
-    while (std::getline(f, line)) {
+    while (cardinal::getline(f, line)) {
         usize i = 0;
         while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) ++i;
         if (i >= line.size() || line[i] == '#') continue;
@@ -570,12 +573,12 @@ SceneLoadStats load_scene(cardinal::scene::Scene& scene,
         if (line.compare(i, 7, "entity ") == 0) {
             // entity "Name" {
             const auto q1 = line.find('"', i);
-            const auto q2 = (q1 != std::string::npos) ? line.find('"', q1 + 1) : std::string::npos;
-            if (q1 == std::string::npos || q2 == std::string::npos) {
+            const auto q2 = (q1 != cardinal::string::npos) ? line.find('"', q1 + 1) : cardinal::string::npos;
+            if (q1 == cardinal::string::npos || q2 == cardinal::string::npos) {
                 ++stats.errors;
                 continue;
             }
-            const std::string name = line.substr(q1 + 1, q2 - q1 - 1);
+            const cardinal::string name = line.substr(q1 + 1, q2 - q1 - 1);
             current = &scene.add_entity(name);
             current_mesh_name.clear();
             current_vgeom_attached = false;
@@ -619,7 +622,7 @@ SceneLoadStats load_scene(cardinal::scene::Scene& scene,
         }
         if (current == nullptr) continue;
 
-        std::string key, val;
+        cardinal::string key, val;
         if (!text::parse_kv(line.substr(i), &key, &val)) continue;
 
         if (key == "mesh") {
@@ -651,16 +654,16 @@ SceneLoadStats load_scene(cardinal::scene::Scene& scene,
         } else if (key == "visible") {
             current->visible = (val == "true" || val == "1");
         } else if (key == "mat_spec_intensity") {
-            float mf = 0; if (std::sscanf(val.c_str(), " %f", &mf) == 1)
+            float mf = 0; if (cardinal::sscanf(val.c_str(), " %f", &mf) == 1)
                 current->material.specular_intensity = mf;
         } else if (key == "mat_spec_power") {
-            float mf = 0; if (std::sscanf(val.c_str(), " %f", &mf) == 1)
+            float mf = 0; if (cardinal::sscanf(val.c_str(), " %f", &mf) == 1)
                 current->material.specular_power = mf;
         } else if (key == "mat_roughness") {
-            float mf = 0; if (std::sscanf(val.c_str(), " %f", &mf) == 1)
+            float mf = 0; if (cardinal::sscanf(val.c_str(), " %f", &mf) == 1)
                 current->material.roughness = mf;
         } else if (key == "mat_metalness") {
-            float mf = 0; if (std::sscanf(val.c_str(), " %f", &mf) == 1)
+            float mf = 0; if (cardinal::sscanf(val.c_str(), " %f", &mf) == 1)
                 current->material.metalness = mf;
         } else if (key == "vgeom_attached") {
             current_vgeom_attached = (val == "true" || val == "1");

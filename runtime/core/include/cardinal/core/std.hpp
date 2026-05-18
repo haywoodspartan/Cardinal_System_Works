@@ -31,3 +31,5 @@
 #include <cardinal/core/thread.hpp>
 #include <cardinal/core/chrono.hpp>
 #include <cardinal/core/filesystem.hpp>
+#include <cardinal/core/fstream.hpp>
+#include <cardinal/core/sstream.hpp>

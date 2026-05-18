@@ -34,12 +34,8 @@
 // refs would need a re-create story — likely a CookDesc-keyed cache).
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
-
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <vector>
+#include <cardinal/core/types.hpp>        // cardinal::unique_ptr/string
+#include <cardinal/core/containers.hpp>   // unordered_map/vector
 
 namespace cardinal::actor { class World; }
 namespace cardinal::game  { class Game;  }
@@ -59,7 +55,7 @@ struct LoadStats {
     u32 properties_applied{0};
     u32 actors_skipped{0};      // class not registered
     u32 errors{0};
-    std::vector<std::string> warnings;
+    cardinal::vector<cardinal::string> warnings;
 };
 
 // ---------------------------------------------------------------------------
@@ -75,22 +71,22 @@ struct LoadStats {
 // blank slate" workflow. The `replace_existing` param does that for you.
 // ---------------------------------------------------------------------------
 SaveStats save_world(const cardinal::actor::World& world,
-                     const std::string& path,
-                     std::string* error_out = nullptr);
+                     const cardinal::string& path,
+                     cardinal::string* error_out = nullptr);
 
 LoadStats load_world(cardinal::game::Game& game,
-                     const std::string& path,
+                     const cardinal::string& path,
                      bool replace_existing = false,
-                     std::string* error_out = nullptr);
+                     cardinal::string* error_out = nullptr);
 
 // ---------------------------------------------------------------------------
 // Sky save / load — small format extension that stores the current hour,
 // time scale, frozen flag, and every phase key.
 // ---------------------------------------------------------------------------
-bool save_sky(const cardinal::sky::Sky& sky, const std::string& path,
-              std::string* error_out = nullptr);
-bool load_sky(cardinal::sky::Sky&       sky, const std::string& path,
-              std::string* error_out = nullptr);
+bool save_sky(const cardinal::sky::Sky& sky, const cardinal::string& path,
+              cardinal::string* error_out = nullptr);
+bool load_sky(cardinal::sky::Sky&       sky, const cardinal::string& path,
+              cardinal::string* error_out = nullptr);
 
 // ---------------------------------------------------------------------------
 // Scene save / load — round-trips scene::Entity[] (rendering primitives).
@@ -116,21 +112,21 @@ struct SceneLoadStats {
     u32 entities_spawned{0};
     u32 entities_skipped_unknown_mesh{0};
     u32 errors{0};
-    std::vector<std::string> warnings;
+    cardinal::vector<cardinal::string> warnings;
 };
 
 using MeshRegistry =
-    std::unordered_map<std::string, std::shared_ptr<cardinal::scene::Mesh>>;
+    cardinal::unordered_map<cardinal::string, cardinal::shared_ptr<cardinal::scene::Mesh>>;
 
 SceneSaveStats save_scene(const cardinal::scene::Scene& scene,
-                          const std::string& path,
-                          std::string* error_out = nullptr);
+                          const cardinal::string& path,
+                          cardinal::string* error_out = nullptr);
 
 SceneLoadStats load_scene(cardinal::scene::Scene& scene,
                           const MeshRegistry& mesh_registry,
-                          const std::string& path,
+                          const cardinal::string& path,
                           bool replace_existing = false,
-                          std::string* error_out = nullptr);
+                          cardinal::string* error_out = nullptr);
 
 // ---------------------------------------------------------------------------
 // Helpers — usable directly when an integrator wants a custom blob format.
@@ -138,11 +134,11 @@ SceneLoadStats load_scene(cardinal::scene::Scene& scene,
 // return whether the line matched the expected schema.
 // ---------------------------------------------------------------------------
 namespace text {
-    void emit_kv (std::string& out, const char* key, const char* value);
-    void emit_kf (std::string& out, const char* key, float value);
-    void emit_kv3(std::string& out, const char* key,
+    void emit_kv (cardinal::string& out, const char* key, const char* value);
+    void emit_kf (cardinal::string& out, const char* key, float value);
+    void emit_kv3(cardinal::string& out, const char* key,
                   float x, float y, float z);
-    bool parse_kv (const std::string& line, std::string* key, std::string* value);
+    bool parse_kv (const cardinal::string& line, cardinal::string* key, cardinal::string* value);
 }
 
 }  // namespace cardinal::serial
