@@ -20,10 +20,11 @@
 #include <cardinal/script/engine.hpp>
 #include <cardinal/window/window.hpp>
 
-#include <chrono>
-#include <cstring>
-#include <filesystem>
-#include <thread>
+#include <cardinal/core/chrono.hpp>
+#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/filesystem.hpp>
+#include <cardinal/core/thread.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::engine {
 
@@ -50,11 +51,11 @@ rhi::Swapchain::ReflexMode desc_reflex_to_rhi(EngineDesc::ReflexMode m) noexcept
 EngineDesc::Backend parse_backend_arg(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const char* a = argv[i];
-        if (std::strncmp(a, "--backend=", 10) != 0) continue;
+        if (cardinal::strncmp(a, "--backend=", 10) != 0) continue;
         const char* val = a + 10;
-        if (std::strcmp(val, "vulkan") == 0) return EngineDesc::Backend::Vulkan;
-        if (std::strcmp(val, "d3d12")  == 0) return EngineDesc::Backend::D3D12;
-        if (std::strcmp(val, "auto")   == 0) return EngineDesc::Backend::Auto;
+        if (cardinal::strcmp(val, "vulkan") == 0) return EngineDesc::Backend::Vulkan;
+        if (cardinal::strcmp(val, "d3d12")  == 0) return EngineDesc::Backend::D3D12;
+        if (cardinal::strcmp(val, "auto")   == 0) return EngineDesc::Backend::Auto;
     }
     return EngineDesc::Backend::Auto;
 }
@@ -120,7 +121,7 @@ public:
         if (desc.with_terrain_profiles)  scene::register_default_terrain_profiles();
 
         // Scene.
-        if (desc.with_scene) scene_ = std::make_unique<scene::Scene>();
+        if (desc.with_scene) scene_ = cardinal::make_unique<scene::Scene>();
 
         // Pipelines.
         if (desc.with_pipelines) {
@@ -138,10 +139,10 @@ public:
 
         // Plugins.
         if (desc.with_plugins) {
-            std::filesystem::path pdir =
+            cardinal::fs::path pdir =
                 desc.plugin_dir.empty()
-                ? (std::filesystem::current_path() / "plugins")
-                : std::filesystem::path(desc.plugin_dir);
+                ? (cardinal::fs::current_path() / "plugins")
+                : cardinal::fs::path(desc.plugin_dir);
             (void)pdir;  // Registry::load_directory logs the scan result.
             plugin::Registry::instance().load_directory(pdir.string().c_str());
         }
@@ -220,8 +221,8 @@ public:
         swapchain_->reflex_marker(rhi::Swapchain::ReflexMarker::InputSample, frame_index_);
 
         if (window_->is_minimized()) {
-            using namespace std::chrono_literals;
-            std::this_thread::sleep_for(16ms);
+            using namespace cardinal::chrono_literals;
+            cardinal::this_thread::sleep_for(16ms);
             in_frame_ = false;
             return false;       // Skip the rest of the frame
         }
@@ -291,15 +292,15 @@ public:
     u64  frame_index()     const noexcept override { return frame_index_; }
 
     void set_on_swapchain_resized(OnSwapchainResized cb) override {
-        on_swapchain_resized_ = std::move(cb);
+        on_swapchain_resized_ = cardinal::move(cb);
     }
 
     // ---- Backend hot-swap orchestration ---------------------------------
 
     void set_backend_swap_hooks(OnBeforeBackendSwap before,
                                 OnAfterBackendSwap  after) override {
-        on_before_swap_ = std::move(before);
-        on_after_swap_  = std::move(after);
+        on_before_swap_ = cardinal::move(before);
+        on_after_swap_  = cardinal::move(after);
     }
 
     bool request_backend_swap(EngineDesc::Backend target) override {
@@ -455,14 +456,14 @@ private:
     bool                validation_enabled_{false};
 
     EngineDesc                          desc_{};
-    std::unique_ptr<window::Window>     window_;
-    std::unique_ptr<rhi::Device>        device_;
-    std::unique_ptr<rhi::Swapchain>     swapchain_;
-    std::unique_ptr<scene::Scene>       scene_;
-    std::unique_ptr<render::Registry>   pipelines_;
-    std::unique_ptr<script::Engine>     lua_;
-    std::unique_ptr<physics::World>     physics_;
-    std::unique_ptr<core::FramePacer>   pacer_;
+    cardinal::unique_ptr<window::Window>     window_;
+    cardinal::unique_ptr<rhi::Device>        device_;
+    cardinal::unique_ptr<rhi::Swapchain>     swapchain_;
+    cardinal::unique_ptr<scene::Scene>       scene_;
+    cardinal::unique_ptr<render::Registry>   pipelines_;
+    cardinal::unique_ptr<script::Engine>     lua_;
+    cardinal::unique_ptr<physics::World>     physics_;
+    cardinal::unique_ptr<core::FramePacer>   pacer_;
 
     scene::FlyCamera                    fly_cam_;
     core::FrameTimer                    timer_;
@@ -478,8 +479,8 @@ private:
 };
 
 // ----- Public factory + run() ----------------------------------------------
-std::unique_ptr<Engine> Engine::create(const EngineDesc& desc) {
-    auto e = std::make_unique<EngineImpl>();
+cardinal::unique_ptr<Engine> Engine::create(const EngineDesc& desc) {
+    auto e = cardinal::make_unique<EngineImpl>();
     if (!e->initialize(desc)) return nullptr;
     return e;
 }

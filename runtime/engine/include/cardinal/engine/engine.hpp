@@ -38,11 +38,7 @@
 
 #include <cardinal/core/frame_pacer.hpp>
 #include <cardinal/core/time.hpp>
-#include <cardinal/core/types.hpp>
-
-#include <functional>
-#include <memory>
-#include <string>
+#include <cardinal/core/types.hpp>   // function/unique_ptr/string vocabulary
 
 namespace cardinal::rhi      { class Device; class Swapchain; }
 namespace cardinal::window   { class Window; }
@@ -56,7 +52,7 @@ namespace cardinal::engine {
 // Boot configuration. Pass to Engine::create / Engine::run.
 struct EngineDesc {
     // Window.
-    std::string window_title{"Cardinal"};
+    cardinal::string window_title{"Cardinal"};
     u32         window_width{1600};
     u32         window_height{900};
 
@@ -91,7 +87,7 @@ struct EngineDesc {
     bool        with_terrain_profiles{true};
 
     // Plugin search dir; empty → <exe>/plugins/.
-    std::string plugin_dir{};
+    cardinal::string plugin_dir{};
 };
 
 // Application interface — override to plug in app-specific logic. Every
@@ -127,7 +123,7 @@ public:
     static int run(int argc, char** argv, Application& app);
 
     // Lower-level: hand-rolled boot. Returns nullptr on failure.
-    static std::unique_ptr<Engine> create(const EngineDesc& desc);
+    static cardinal::unique_ptr<Engine> create(const EngineDesc& desc);
     virtual ~Engine() = default;
     Engine(const Engine&)            = delete;
     Engine& operator=(const Engine&) = delete;
@@ -200,8 +196,8 @@ public:
     // The host registers callbacks via set_backend_swap_hooks(). Both are
     // optional. The UI host (StudioEngine) chains its own swap hooks under
     // these so Studio gets re-bound to the new device transparently.
-    using OnBeforeBackendSwap = std::function<void(Engine&)>;
-    using OnAfterBackendSwap  = std::function<void(Engine&)>;
+    using OnBeforeBackendSwap = cardinal::function<void(Engine&)>;
+    using OnAfterBackendSwap  = cardinal::function<void(Engine&)>;
     virtual void set_backend_swap_hooks(OnBeforeBackendSwap before,
                                         OnAfterBackendSwap  after) = 0;
 
@@ -237,7 +233,7 @@ public:
     // resize → swapchain->resize). UI layers like StudioEngine wire this
     // to rebuild per-image framebuffers / overlay state. The hook fires
     // AFTER the swapchain has accepted the new size.
-    using OnSwapchainResized = std::function<void(Engine&)>;
+    using OnSwapchainResized = cardinal::function<void(Engine&)>;
     virtual void set_on_swapchain_resized(OnSwapchainResized cb) = 0;
 
     // ---- Clear color ----------------------------------------------------

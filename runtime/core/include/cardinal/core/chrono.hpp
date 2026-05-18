@@ -40,4 +40,9 @@ using std::chrono::seconds;
 using std::chrono::minutes;
 using std::chrono::hours;
 
+// Duration user-defined literals (1s / 16ms / 250us / 5min ...). Exposed
+// as a namespace alias so `using namespace cardinal::chrono_literals;`
+// brings the std UDL operators into scope without a direct std include.
+namespace chrono_literals = std::chrono_literals;
+
 }  // namespace cardinal
