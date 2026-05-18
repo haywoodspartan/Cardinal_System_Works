@@ -16,9 +16,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
+#include <cardinal/core/containers.hpp>
 #include <cardinal/scene/math.hpp>
-
-#include <vector>
 
 namespace cardinal::scene {
 
@@ -42,11 +41,11 @@ public:
     void  add(const Light& l)         { lights_.push_back(l); }
     void  set_ambient(const Vec3& a)  { ambient_ = a; }
 
-    const std::vector<Light>& lights() const noexcept { return lights_; }
+    const cardinal::vector<Light>& lights() const noexcept { return lights_; }
     // Non-const overload — hosts that want to animate per-frame state
     // (e.g. drive a directional from a sky time-of-day system) can
     // mutate lights_[i] in place rather than clear()+add() each tick.
-    std::vector<Light>&       lights()       noexcept { return lights_; }
+    cardinal::vector<Light>&       lights()       noexcept { return lights_; }
     const Vec3&               ambient() const noexcept { return ambient_; }
     usize                     count()   const noexcept { return lights_.size(); }
 
@@ -76,7 +75,7 @@ public:
                const Vec3& base_color) const noexcept;
 
 private:
-    std::vector<Light> lights_;
+    cardinal::vector<Light> lights_;
     Vec3               ambient_     {0.05f, 0.05f, 0.06f};
     Vec3               clear_color_ {0.07f, 0.08f, 0.10f};
     float              exposure_    {1.0f};

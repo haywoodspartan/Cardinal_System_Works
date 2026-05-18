@@ -9,10 +9,22 @@
 #include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
 
 #include <chrono>
+#include <ratio>    // SI ratio typedefs are the period arg of chrono::duration
+                     // — folded in here (chrono is their only real consumer),
+                     // mirroring how <system_error> lives in filesystem/charconv
 
 namespace cardinal {
 
 namespace chrono = std::chrono;
+
+// Compile-time ratio + the SI prefix specialisations from <ratio>. These are
+// the `Period` template argument of cardinal::chrono::duration<Rep, Period>
+// (e.g. duration<f32, cardinal::micro> for fractional microseconds).
+using std::ratio;
+using std::atto;   using std::femto;  using std::pico;   using std::nano;
+using std::micro;  using std::milli;  using std::centi;  using std::deci;
+using std::deca;   using std::hecto;  using std::kilo;   using std::mega;
+using std::giga;   using std::tera;   using std::peta;   using std::exa;
 
 using std::chrono::steady_clock;
 using std::chrono::system_clock;

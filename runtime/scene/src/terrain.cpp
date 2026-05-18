@@ -6,14 +6,15 @@
 #include <cardinal/core/log.hpp>
 #include <cardinal/scene/scene.hpp>
 
-#include <algorithm>
-#include <cctype>
-#include <cmath>
-#include <cstdio>
-#include <cstring>
-#include <fstream>
-#include <sstream>
-#include <string>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cctype.hpp>
+#include <cardinal/core/cmath.hpp>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/cstdlib.hpp>
+#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/fstream.hpp>
+#include <cardinal/core/sstream.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::scene {
 
@@ -45,7 +46,7 @@ inline float fade_smoothstep(float t) noexcept {
 }
 
 inline float value_noise_2d(float x, float z, u32 seed) noexcept {
-    const float fx = std::floor(x), fz = std::floor(z);
+    const float fx = cardinal::floor(x), fz = cardinal::floor(z);
     const int   ix = static_cast<int>(fx), iz = static_cast<int>(fz);
     const float tx = x - fx, tz = z - fz;
     const float ux = fade_smoothstep(tx), uz = fade_smoothstep(tz);
@@ -90,8 +91,8 @@ inline float fbm_shaped(float x, float z, int octaves, float lacunarity,
                                  seed + static_cast<u32>(i) * 131u);
         switch (shape) {
             case NoiseShape::Smooth:                     break;
-            case NoiseShape::Ridge:  v = 1.0f - std::fabs(v); break;
-            case NoiseShape::Billow: v = std::fabs(v);        break;
+            case NoiseShape::Ridge:  v = 1.0f - cardinal::fabs(v); break;
+            case NoiseShape::Billow: v = cardinal::fabs(v);        break;
         }
         sum  += amp * v;
         norm += amp;
@@ -114,7 +115,7 @@ inline Vec3 lerp_vec3(const Vec3& a, const Vec3& b, float t) noexcept {
 // ---------------------------------------------------------------------------
 float terrain_height(const TerrainParams& p, float wx, float wz) noexcept {
     const float n = fbm(wx * p.frequency, wz * p.frequency,
-                        std::clamp(p.octaves, 1, 8),
+                        cardinal::clamp(p.octaves, 1, 8),
                         p.lacunarity, p.gain, p.seed);
     return n * p.height_scale;
 }
@@ -155,7 +156,7 @@ static float layer_value(const NoiseLayer& L, float wx, float wz) noexcept {
         sz += az * L.warp_amount;
     }
     return fbm_shaped(sx * L.frequency, sz * L.frequency,
-                      std::clamp(L.octaves, 1, 8),
+                      cardinal::clamp(L.octaves, 1, 8),
                       L.lacunarity, L.gain, L.seed, L.shape);
 }
 
@@ -176,8 +177,8 @@ float terrain_height_profile(const TerrainProfile& P, float wx, float wz) noexce
                     h = h * (1.0f - L.weight) + (h * mask) * L.weight;
                 }
                 break;
-            case NoiseOp::Max:      h = std::max(h, v);                  break;
-            case NoiseOp::Min:      h = std::min(h, v);                  break;
+            case NoiseOp::Max:      h = cardinal::max(h, v);                  break;
+            case NoiseOp::Min:      h = cardinal::min(h, v);                  break;
         }
     }
     return h * P.height_scale;
@@ -186,22 +187,22 @@ float terrain_height_profile(const TerrainProfile& P, float wx, float wz) noexce
 Vec3 terrain_color_profile(const TerrainProfile& P, float height,
                            const Vec3& normal) noexcept
 {
-    const float span = std::max(1e-3f, P.tint_height_high - P.tint_height_low);
+    const float span = cardinal::max(1e-3f, P.tint_height_high - P.tint_height_low);
     float t = (height - P.tint_height_low) / span;
-    t = std::clamp(t, 0.0f, 1.0f);
+    t = cardinal::clamp(t, 0.0f, 1.0f);
     Vec3 base = lerp_vec3(P.tint_low, P.tint_high, t);
 
-    const float slope = 1.0f - std::clamp(normal.y, 0.0f, 1.0f);
-    const float thr   = std::clamp(P.cliff_blend_threshold, 0.0f, 0.9999f);
-    const float cliff = std::clamp((slope - thr) / (1.0f - thr), 0.0f, 1.0f);
+    const float slope = 1.0f - cardinal::clamp(normal.y, 0.0f, 1.0f);
+    const float thr   = cardinal::clamp(P.cliff_blend_threshold, 0.0f, 0.9999f);
+    const float cliff = cardinal::clamp((slope - thr) / (1.0f - thr), 0.0f, 1.0f);
     return lerp_vec3(base, P.tint_cliff, cliff);
 }
 
 struct TerrainProfileLibrary::Impl {
-    std::vector<TerrainProfile> entries;
+    cardinal::vector<TerrainProfile> entries;
 };
 
-TerrainProfileLibrary::TerrainProfileLibrary() : p_(std::make_unique<Impl>()) {}
+TerrainProfileLibrary::TerrainProfileLibrary() : p_(cardinal::make_unique<Impl>()) {}
 
 TerrainProfileLibrary& TerrainProfileLibrary::instance() {
     static TerrainProfileLibrary g;
@@ -210,9 +211,9 @@ TerrainProfileLibrary& TerrainProfileLibrary::instance() {
 
 void TerrainProfileLibrary::set(TerrainProfile prof) {
     for (auto& e : p_->entries) {
-        if (e.name == prof.name) { e = std::move(prof); return; }
+        if (e.name == prof.name) { e = cardinal::move(prof); return; }
     }
-    p_->entries.push_back(std::move(prof));
+    p_->entries.push_back(cardinal::move(prof));
 }
 
 bool TerrainProfileLibrary::remove(const char* name) {
@@ -229,12 +230,12 @@ const TerrainProfile* TerrainProfileLibrary::find(const char* name) const noexce
     return nullptr;
 }
 
-const std::vector<TerrainProfile>& TerrainProfileLibrary::all() const noexcept {
+const cardinal::vector<TerrainProfile>& TerrainProfileLibrary::all() const noexcept {
     return p_->entries;
 }
 
-std::vector<std::string> TerrainProfileLibrary::names() const {
-    std::vector<std::string> out;
+cardinal::vector<cardinal::string> TerrainProfileLibrary::names() const {
+    cardinal::vector<cardinal::string> out;
     out.reserve(p_->entries.size());
     for (const auto& e : p_->entries) out.push_back(e.name);
     return out;
@@ -250,29 +251,29 @@ std::vector<std::string> TerrainProfileLibrary::names() const {
 // ---------------------------------------------------------------------------
 namespace {
 
-inline std::string trim(std::string s) {
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())))  s.pop_back();
+inline cardinal::string trim(cardinal::string s) {
+    while (!s.empty() && cardinal::isspace(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
+    while (!s.empty() && cardinal::isspace(static_cast<unsigned char>(s.back())))  s.pop_back();
     return s;
 }
 
 // Split a line into tokens; honour double-quoted strings as one token.
-inline std::vector<std::string> tokenise(const std::string& line) {
-    std::vector<std::string> out;
+inline cardinal::vector<cardinal::string> tokenise(const cardinal::string& line) {
+    cardinal::vector<cardinal::string> out;
     size_t i = 0;
     while (i < line.size()) {
-        while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i]))) ++i;
+        while (i < line.size() && cardinal::isspace(static_cast<unsigned char>(line[i]))) ++i;
         if (i == line.size()) break;
         if (line[i] == '#') break;       // comment
         if (line[i] == '"') {
             size_t j = ++i;
-            std::string acc;
+            cardinal::string acc;
             while (j < line.size() && line[j] != '"') acc += line[j++];
             out.push_back(acc);
             i = (j < line.size()) ? j + 1 : j;
         } else {
             size_t j = i;
-            while (j < line.size() && !std::isspace(static_cast<unsigned char>(line[j]))) ++j;
+            while (j < line.size() && !cardinal::isspace(static_cast<unsigned char>(line[j]))) ++j;
             out.emplace_back(line.substr(i, j - i));
             i = j;
         }
@@ -280,14 +281,14 @@ inline std::vector<std::string> tokenise(const std::string& line) {
     return out;
 }
 
-inline NoiseOp parse_op(const std::string& s) {
+inline NoiseOp parse_op(const cardinal::string& s) {
     if (s == "add"      || s == "Add")      return NoiseOp::Add;
     if (s == "multiply" || s == "Multiply") return NoiseOp::Multiply;
     if (s == "max"      || s == "Max")      return NoiseOp::Max;
     if (s == "min"      || s == "Min")      return NoiseOp::Min;
     return NoiseOp::Add;
 }
-inline NoiseShape parse_shape(const std::string& s) {
+inline NoiseShape parse_shape(const cardinal::string& s) {
     if (s == "smooth" || s == "Smooth") return NoiseShape::Smooth;
     if (s == "ridge"  || s == "Ridge")  return NoiseShape::Ridge;
     if (s == "billow" || s == "Billow") return NoiseShape::Billow;
@@ -298,7 +299,7 @@ inline NoiseShape parse_shape(const std::string& s) {
 
 bool TerrainProfileLibrary::save_to_file(const char* path) const {
     if (path == nullptr || *path == '\0') return false;
-    std::ofstream f(path, std::ios::trunc);
+    cardinal::ofstream f(path, cardinal::ios::trunc);
     if (!f) {
         cardinal::log::warnf("scene/terrain", "save_to_file: cannot open '%s'", path);
         return false;
@@ -340,12 +341,12 @@ bool TerrainProfileLibrary::save_to_file(const char* path) const {
 
 bool TerrainProfileLibrary::load_from_file(const char* path) {
     if (path == nullptr || *path == '\0') return false;
-    std::ifstream f(path);
+    cardinal::ifstream f(path);
     if (!f) {
         cardinal::log::warnf("scene/terrain", "load_from_file: cannot open '%s'", path);
         return false;
     }
-    std::string line;
+    cardinal::string line;
     TerrainProfile cur;
     NoiseLayer     curlayer;
     bool           in_profile = false;
@@ -365,10 +366,10 @@ bool TerrainProfileLibrary::load_from_file(const char* path) {
         }
     };
 
-    while (std::getline(f, line)) {
+    while (cardinal::getline(f, line)) {
         auto tok = tokenise(line);
         if (tok.empty()) continue;
-        const std::string& k = tok[0];
+        const cardinal::string& k = tok[0];
 
         if (k == "profile") {
             commit_profile();
@@ -385,30 +386,30 @@ bool TerrainProfileLibrary::load_from_file(const char* path) {
             curlayer.id = (tok.size() > 1) ? tok[1] : "layer";
         } else if (in_layer) {
             // Layer-scope settings.
-            if      (k == "enabled"        && tok.size() > 1) curlayer.enabled        = std::atoi(tok[1].c_str()) != 0;
+            if      (k == "enabled"        && tok.size() > 1) curlayer.enabled        = cardinal::atoi(tok[1].c_str()) != 0;
             else if (k == "op"             && tok.size() > 1) curlayer.op             = parse_op(tok[1]);
             else if (k == "shape"          && tok.size() > 1) curlayer.shape          = parse_shape(tok[1]);
-            else if (k == "weight"         && tok.size() > 1) curlayer.weight         = std::stof(tok[1]);
-            else if (k == "frequency"      && tok.size() > 1) curlayer.frequency      = std::stof(tok[1]);
-            else if (k == "octaves"        && tok.size() > 1) curlayer.octaves        = std::atoi(tok[1].c_str());
-            else if (k == "lacunarity"     && tok.size() > 1) curlayer.lacunarity     = std::stof(tok[1]);
-            else if (k == "gain"           && tok.size() > 1) curlayer.gain           = std::stof(tok[1]);
-            else if (k == "seed"           && tok.size() > 1) curlayer.seed           = static_cast<u32>(std::stoul(tok[1]));
-            else if (k == "offset_x"       && tok.size() > 1) curlayer.offset_x       = std::stof(tok[1]);
-            else if (k == "offset_z"       && tok.size() > 1) curlayer.offset_z       = std::stof(tok[1]);
-            else if (k == "warp_amount"    && tok.size() > 1) curlayer.warp_amount    = std::stof(tok[1]);
-            else if (k == "warp_frequency" && tok.size() > 1) curlayer.warp_frequency = std::stof(tok[1]);
+            else if (k == "weight"         && tok.size() > 1) curlayer.weight         = cardinal::stof(tok[1]);
+            else if (k == "frequency"      && tok.size() > 1) curlayer.frequency      = cardinal::stof(tok[1]);
+            else if (k == "octaves"        && tok.size() > 1) curlayer.octaves        = cardinal::atoi(tok[1].c_str());
+            else if (k == "lacunarity"     && tok.size() > 1) curlayer.lacunarity     = cardinal::stof(tok[1]);
+            else if (k == "gain"           && tok.size() > 1) curlayer.gain           = cardinal::stof(tok[1]);
+            else if (k == "seed"           && tok.size() > 1) curlayer.seed           = static_cast<u32>(cardinal::stoul(tok[1]));
+            else if (k == "offset_x"       && tok.size() > 1) curlayer.offset_x       = cardinal::stof(tok[1]);
+            else if (k == "offset_z"       && tok.size() > 1) curlayer.offset_z       = cardinal::stof(tok[1]);
+            else if (k == "warp_amount"    && tok.size() > 1) curlayer.warp_amount    = cardinal::stof(tok[1]);
+            else if (k == "warp_frequency" && tok.size() > 1) curlayer.warp_frequency = cardinal::stof(tok[1]);
         } else {
             // Profile-scope settings.
             if      (k == "description"      && tok.size() > 1) cur.description           = tok[1];
-            else if (k == "base_height"      && tok.size() > 1) cur.base_height           = std::stof(tok[1]);
-            else if (k == "height_scale"     && tok.size() > 1) cur.height_scale          = std::stof(tok[1]);
-            else if (k == "tint_low"         && tok.size() > 3) cur.tint_low              = { std::stof(tok[1]), std::stof(tok[2]), std::stof(tok[3]) };
-            else if (k == "tint_high"        && tok.size() > 3) cur.tint_high             = { std::stof(tok[1]), std::stof(tok[2]), std::stof(tok[3]) };
-            else if (k == "tint_cliff"       && tok.size() > 3) cur.tint_cliff            = { std::stof(tok[1]), std::stof(tok[2]), std::stof(tok[3]) };
-            else if (k == "tint_height_low"  && tok.size() > 1) cur.tint_height_low       = std::stof(tok[1]);
-            else if (k == "tint_height_high" && tok.size() > 1) cur.tint_height_high      = std::stof(tok[1]);
-            else if (k == "cliff_blend"      && tok.size() > 1) cur.cliff_blend_threshold = std::stof(tok[1]);
+            else if (k == "base_height"      && tok.size() > 1) cur.base_height           = cardinal::stof(tok[1]);
+            else if (k == "height_scale"     && tok.size() > 1) cur.height_scale          = cardinal::stof(tok[1]);
+            else if (k == "tint_low"         && tok.size() > 3) cur.tint_low              = { cardinal::stof(tok[1]), cardinal::stof(tok[2]), cardinal::stof(tok[3]) };
+            else if (k == "tint_high"        && tok.size() > 3) cur.tint_high             = { cardinal::stof(tok[1]), cardinal::stof(tok[2]), cardinal::stof(tok[3]) };
+            else if (k == "tint_cliff"       && tok.size() > 3) cur.tint_cliff            = { cardinal::stof(tok[1]), cardinal::stof(tok[2]), cardinal::stof(tok[3]) };
+            else if (k == "tint_height_low"  && tok.size() > 1) cur.tint_height_low       = cardinal::stof(tok[1]);
+            else if (k == "tint_height_high" && tok.size() > 1) cur.tint_height_high      = cardinal::stof(tok[1]);
+            else if (k == "cliff_blend"      && tok.size() > 1) cur.cliff_blend_threshold = cardinal::stof(tok[1]);
         }
     }
     commit_profile();
@@ -427,7 +428,7 @@ void register_default_terrain_profiles() {
     auto& lib = TerrainProfileLibrary::instance();
 
     auto add_if_missing = [&](TerrainProfile p) {
-        if (lib.find(p.name.c_str()) == nullptr) lib.set(std::move(p));
+        if (lib.find(p.name.c_str()) == nullptr) lib.set(cardinal::move(p));
     };
 
     // --- Plains -------------------------------------------------------------
@@ -445,7 +446,7 @@ void register_default_terrain_profiles() {
         L.id = "ground"; L.frequency = 0.025f; L.octaves = 3; L.weight = 1.0f;
         L.gain = 0.45f; L.seed = 9001u;
         P.layers.push_back(L);
-        add_if_missing(std::move(P));
+        add_if_missing(cardinal::move(P));
     }
 
     // --- Rolling Hills ------------------------------------------------------
@@ -471,7 +472,7 @@ void register_default_terrain_profiles() {
             L.gain = 0.5f;  L.seed = 1102u;
             P.layers.push_back(L);
         }
-        add_if_missing(std::move(P));
+        add_if_missing(cardinal::move(P));
     }
 
     // --- Alpine Mountains ---------------------------------------------------
@@ -506,7 +507,7 @@ void register_default_terrain_profiles() {
             L.gain = 0.5f;  L.seed = 2103u;
             P.layers.push_back(L);
         }
-        add_if_missing(std::move(P));
+        add_if_missing(cardinal::move(P));
     }
 
     // --- Volcanic Wasteland -------------------------------------------------
@@ -535,7 +536,7 @@ void register_default_terrain_profiles() {
             L.gain = 0.6f;  L.seed = 3102u;
             P.layers.push_back(L);
         }
-        add_if_missing(std::move(P));
+        add_if_missing(cardinal::move(P));
     }
 
     // --- Coastal Dunes ------------------------------------------------------
@@ -564,7 +565,7 @@ void register_default_terrain_profiles() {
             L.gain = 0.5f;  L.seed = 4102u;
             P.layers.push_back(L);
         }
-        add_if_missing(std::move(P));
+        add_if_missing(cardinal::move(P));
     }
 
     // --- Canyon -------------------------------------------------------------
@@ -594,7 +595,7 @@ void register_default_terrain_profiles() {
             L.gain = 0.55f; L.seed = 5102u;
             P.layers.push_back(L);
         }
-        add_if_missing(std::move(P));
+        add_if_missing(cardinal::move(P));
     }
 
     cardinal::log::infof("scene/terrain",
@@ -607,11 +608,11 @@ void register_default_terrain_profiles() {
 // each split into two triangles. Vertex colour reflects local slope so
 // flat ground reads green and cliffs read grey-brown.
 // ---------------------------------------------------------------------------
-std::shared_ptr<Mesh> generate_terrain_chunk(rhi::Device& dev,
+cardinal::shared_ptr<Mesh> generate_terrain_chunk(rhi::Device& dev,
                                              const TerrainParams& p,
                                              int chunk_x, int chunk_z)
 {
-    const u32 N = std::max<u32>(2, p.resolution);
+    const u32 N = cardinal::max<u32>(2, p.resolution);
     const float step = p.chunk_size / static_cast<float>(N - 1);
 
     // World-space origin of THIS chunk's grid (its (0,0) vertex).
@@ -623,7 +624,7 @@ std::shared_ptr<Mesh> generate_terrain_chunk(rhi::Device& dev,
     // Pre-sample the height grid so each vertex computes its normal from
     // central differences — much faster than re-evaluating fbm 4× per vert.
     const u32 stride = N + 2;             // 1-cell halo on each side
-    std::vector<float> H(stride * stride);
+    cardinal::vector<float> H(stride * stride);
     for (u32 j = 0; j < stride; ++j) {
         for (u32 i = 0; i < stride; ++i) {
             const float wx = ox + (static_cast<float>(i) - 1.0f) * step;
@@ -635,7 +636,7 @@ std::shared_ptr<Mesh> generate_terrain_chunk(rhi::Device& dev,
 
     // Build vertex grid first.
     struct V { Vec3 pos; Vec3 nrm; Vec3 col; };
-    std::vector<V> grid(N * N);
+    cardinal::vector<V> grid(N * N);
     for (u32 j = 0; j < N; ++j) {
         for (u32 i = 0; i < N; ++i) {
             const float x = ox + static_cast<float>(i) * step;
@@ -650,7 +651,7 @@ std::shared_ptr<Mesh> generate_terrain_chunk(rhi::Device& dev,
             Vec3 n = normalize(Vec3{ (hl - hr), 2.0f * step, (hd - hu) });
 
             // Slope-shaded vertex colour: flat → green, steep → grey-brown.
-            const float slope = 1.0f - std::clamp(n.y, 0.0f, 1.0f);
+            const float slope = 1.0f - cardinal::clamp(n.y, 0.0f, 1.0f);
             Vec3 grass{ 0.30f, 0.55f, 0.25f };
             Vec3 cliff{ 0.55f, 0.50f, 0.45f };
             Vec3 col{ grass.x * (1.0f - slope) + cliff.x * slope,
@@ -663,7 +664,7 @@ std::shared_ptr<Mesh> generate_terrain_chunk(rhi::Device& dev,
 
     // Tessellate to triangle list — keeps the existing forward renderer
     // happy (it walks `cpu_vertices()` directly without an index buffer).
-    std::vector<Vertex> verts;
+    cardinal::vector<Vertex> verts;
     verts.reserve(static_cast<size_t>(N - 1) * (N - 1) * 6);
     for (u32 j = 0; j < N - 1; ++j) {
         for (u32 i = 0; i < N - 1; ++i) {
@@ -682,7 +683,7 @@ std::shared_ptr<Mesh> generate_terrain_chunk(rhi::Device& dev,
     auto m = Mesh::from_vertices(dev, verts.data(), static_cast<u32>(verts.size()));
     if (m) {
         char nm[64];
-        std::snprintf(nm, sizeof(nm), "TerrainChunk[%d,%d]", chunk_x, chunk_z);
+        cardinal::snprintf(nm, sizeof(nm), "TerrainChunk[%d,%d]", chunk_x, chunk_z);
         m->set_name(nm);
     }
     return m;
@@ -692,17 +693,17 @@ std::shared_ptr<Mesh> generate_terrain_chunk(rhi::Device& dev,
 // Profile-driven chunk mesh. Same tessellation strategy as the legacy path
 // but uses terrain_height_profile + terrain_color_profile for height + tint.
 // ---------------------------------------------------------------------------
-std::shared_ptr<Mesh> generate_terrain_chunk_profile(
+cardinal::shared_ptr<Mesh> generate_terrain_chunk_profile(
     rhi::Device& dev, const TerrainProfile& P,
     float chunk_size, u32 resolution, int chunk_x, int chunk_z)
 {
-    const u32   N    = std::max<u32>(2, resolution);
+    const u32   N    = cardinal::max<u32>(2, resolution);
     const float step = chunk_size / static_cast<float>(N - 1);
     const float ox   = static_cast<float>(chunk_x) * chunk_size - chunk_size * 0.5f;
     const float oz   = static_cast<float>(chunk_z) * chunk_size - chunk_size * 0.5f;
 
     const u32 stride = N + 2;
-    std::vector<float> H(stride * stride);
+    cardinal::vector<float> H(stride * stride);
     for (u32 j = 0; j < stride; ++j) {
         for (u32 i = 0; i < stride; ++i) {
             const float wx = ox + (static_cast<float>(i) - 1.0f) * step;
@@ -713,7 +714,7 @@ std::shared_ptr<Mesh> generate_terrain_chunk_profile(
     auto h_at = [&](u32 i, u32 j) -> float { return H[(j + 1) * stride + (i + 1)]; };
 
     struct V { Vec3 pos; Vec3 nrm; Vec3 col; };
-    std::vector<V> grid(N * N);
+    cardinal::vector<V> grid(N * N);
     for (u32 j = 0; j < N; ++j) {
         for (u32 i = 0; i < N; ++i) {
             const float x = ox + static_cast<float>(i) * step;
@@ -731,7 +732,7 @@ std::shared_ptr<Mesh> generate_terrain_chunk_profile(
         }
     }
 
-    std::vector<Vertex> verts;
+    cardinal::vector<Vertex> verts;
     verts.reserve(static_cast<size_t>(N - 1) * (N - 1) * 6);
     for (u32 j = 0; j < N - 1; ++j) {
         for (u32 i = 0; i < N - 1; ++i) {
@@ -750,19 +751,19 @@ std::shared_ptr<Mesh> generate_terrain_chunk_profile(
     auto m = Mesh::from_vertices(dev, verts.data(), static_cast<u32>(verts.size()));
     if (m) {
         char nm[64];
-        std::snprintf(nm, sizeof(nm), "TerrainChunk[%s,%d,%d]",
+        cardinal::snprintf(nm, sizeof(nm), "TerrainChunk[%s,%d,%d]",
                       P.name.empty() ? "?" : P.name.c_str(), chunk_x, chunk_z);
         m->set_name(nm);
     }
     return m;
 }
 
-std::vector<u32> spawn_terrain_grid(Scene& scene, rhi::Device& dev,
+cardinal::vector<u32> spawn_terrain_grid(Scene& scene, rhi::Device& dev,
                                     const TerrainGridDesc& desc)
 {
-    std::vector<u32> ids;
-    const int cx = std::max(1, desc.chunks_x);
-    const int cz = std::max(1, desc.chunks_z);
+    cardinal::vector<u32> ids;
+    const int cx = cardinal::max(1, desc.chunks_x);
+    const int cz = cardinal::max(1, desc.chunks_z);
     ids.reserve(static_cast<size_t>(cx) * cz);
 
     for (int j = 0; j < cz; ++j) {
@@ -773,7 +774,7 @@ std::vector<u32> spawn_terrain_grid(Scene& scene, rhi::Device& dev,
             if (mesh == nullptr) continue;
 
             char nm[64];
-            std::snprintf(nm, sizeof(nm), "Terrain[%d,%d]", gx, gz);
+            cardinal::snprintf(nm, sizeof(nm), "Terrain[%d,%d]", gx, gz);
             auto& e = scene.add_entity(nm);
             e.mesh = mesh;
             e.transform.translation = desc.origin;
@@ -784,12 +785,12 @@ std::vector<u32> spawn_terrain_grid(Scene& scene, rhi::Device& dev,
     return ids;
 }
 
-std::vector<u32> spawn_terrain_grid_profile(Scene& scene, rhi::Device& dev,
+cardinal::vector<u32> spawn_terrain_grid_profile(Scene& scene, rhi::Device& dev,
                                             const TerrainGridProfileDesc& desc)
 {
-    std::vector<u32> ids;
-    const int cx = std::max(1, desc.chunks_x);
-    const int cz = std::max(1, desc.chunks_z);
+    cardinal::vector<u32> ids;
+    const int cx = cardinal::max(1, desc.chunks_x);
+    const int cz = cardinal::max(1, desc.chunks_z);
     ids.reserve(static_cast<size_t>(cx) * cz);
 
     for (int j = 0; j < cz; ++j) {
@@ -801,7 +802,7 @@ std::vector<u32> spawn_terrain_grid_profile(Scene& scene, rhi::Device& dev,
             if (mesh == nullptr) continue;
 
             char nm[80];
-            std::snprintf(nm, sizeof(nm), "Terrain[%s,%d,%d]",
+            cardinal::snprintf(nm, sizeof(nm), "Terrain[%s,%d,%d]",
                           desc.profile.name.empty() ? "?" : desc.profile.name.c_str(),
                           gx, gz);
             auto& e = scene.add_entity(nm);

@@ -27,11 +27,11 @@
 #include <cardinal/vgeom/vgeom.hpp>
 #include <cardinal/vgeom/cluster.hpp>
 
-#include <algorithm>
-#include <chrono>
-#include <cmath>
-#include <random>
-#include <vector>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/chrono.hpp>
+#include <cardinal/core/cmath.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::scene {
 
@@ -395,7 +395,7 @@ static_assert(sizeof(GpuMaterial) == 16,
 // Append the 12 edges of an axis-aligned box (defined by min/max) to
 // the line-list vertex buffer. Each edge contributes 2 vertices (24
 // total per AABB) coloured uniformly. Used by the gizmo pass.
-inline void add_aabb_edges(std::vector<RenderVertex>& out,
+inline void add_aabb_edges(cardinal::vector<RenderVertex>& out,
                            const Vec3& mn, const Vec3& mx,
                            const Vec3& color)
 {
@@ -423,7 +423,7 @@ inline void add_aabb_edges(std::vector<RenderVertex>& out,
 // Append the 12 edges of a perspective camera frustum to the line-list
 // buffer. Reconstructs the 8 world-space corners by inverting view*proj
 // and projecting NDC corners back into world space.
-inline void add_frustum_edges(std::vector<RenderVertex>& out,
+inline void add_frustum_edges(cardinal::vector<RenderVertex>& out,
                               const Mat4& vp,
                               const Vec3& color)
 {
@@ -431,7 +431,7 @@ inline void add_frustum_edges(std::vector<RenderVertex>& out,
     auto unp = [&](float x, float y, float z) -> Vec3 {
         const Vec4 in{x, y, z, 1.0f};
         const Vec4 w  = inv * in;
-        const float iw = (std::abs(w.w) > 1e-6f) ? (1.0f / w.w) : 1.0f;
+        const float iw = (cardinal::abs(w.w) > 1e-6f) ? (1.0f / w.w) : 1.0f;
         return Vec3{w.x * iw, w.y * iw, w.z * iw};
     };
     // NDC corners — z=0 near, z=1 far (DX/Vulkan reverse-Z aware
@@ -465,7 +465,7 @@ inline void add_frustum_edges(std::vector<RenderVertex>& out,
 //
 // Used by the Spot-light gizmo: half-angle = acos(outer_cos), then
 // radius = length × tan(half-angle).
-inline void add_cone_edges(std::vector<RenderVertex>& out,
+inline void add_cone_edges(cardinal::vector<RenderVertex>& out,
                            const Vec3& apex, const Vec3& axis_in,
                            float length, float radius,
                            int segments, const Vec3& color)
@@ -475,17 +475,17 @@ inline void add_cone_edges(std::vector<RenderVertex>& out,
     // Normalize and build an orthonormal basis (u, v, axis). Pick the
     // world axis least parallel to `axis` as the seed for u, then
     // cross-product to get a robust right-handed frame.
-    const float al = std::sqrt(axis_in.x*axis_in.x + axis_in.y*axis_in.y + axis_in.z*axis_in.z);
+    const float al = cardinal::sqrt(axis_in.x*axis_in.x + axis_in.y*axis_in.y + axis_in.z*axis_in.z);
     const Vec3  axis = (al > 1e-6f) ? Vec3{axis_in.x/al, axis_in.y/al, axis_in.z/al}
                                     : Vec3{0, 1, 0};
-    const Vec3  seed = (std::abs(axis.y) < 0.9f) ? Vec3{0, 1, 0} : Vec3{1, 0, 0};
+    const Vec3  seed = (cardinal::abs(axis.y) < 0.9f) ? Vec3{0, 1, 0} : Vec3{1, 0, 0};
     // u = normalize(seed × axis); v = axis × u
     Vec3 u{
         seed.y*axis.z - seed.z*axis.y,
         seed.z*axis.x - seed.x*axis.z,
         seed.x*axis.y - seed.y*axis.x,
     };
-    const float ul = std::sqrt(u.x*u.x + u.y*u.y + u.z*u.z);
+    const float ul = cardinal::sqrt(u.x*u.x + u.y*u.y + u.z*u.z);
     u = (ul > 1e-6f) ? Vec3{u.x/ul, u.y/ul, u.z/ul} : Vec3{1, 0, 0};
     const Vec3 v{
         axis.y*u.z - axis.z*u.y,
@@ -499,13 +499,13 @@ inline void add_cone_edges(std::vector<RenderVertex>& out,
     };
     const Vec3 nz{0, 1, 0};      // unused by wireframe PS
     // Compute base ring then emit spokes + segments.
-    std::vector<Vec3> ring;
+    cardinal::vector<Vec3> ring;
     ring.reserve(static_cast<usize>(segments));
     const float two_pi = 6.28318530717958647692f;
     for (int s = 0; s < segments; ++s) {
         const float t  = static_cast<float>(s) / static_cast<float>(segments);
         const float a  = t * two_pi;
-        const float ca = std::cos(a), sa = std::sin(a);
+        const float ca = cardinal::cos(a), sa = cardinal::sin(a);
         ring.push_back(Vec3{
             base_centre.x + radius * (u.x * ca + v.x * sa),
             base_centre.y + radius * (u.y * ca + v.y * sa),
@@ -534,7 +534,7 @@ inline void add_cone_edges(std::vector<RenderVertex>& out,
 //
 // Used by the Point-light gizmo (range-radius sphere centred at the
 // light position).
-inline void add_sphere_edges(std::vector<RenderVertex>& out,
+inline void add_sphere_edges(cardinal::vector<RenderVertex>& out,
                              const Vec3& c, float r,
                              int segments, const Vec3& color)
 {
@@ -550,16 +550,16 @@ inline void add_sphere_edges(std::vector<RenderVertex>& out,
             Vec3 p0, p1;
             switch (plane) {
                 case 0:
-                    p0 = Vec3{c.x + r*std::cos(a0), c.y + r*std::sin(a0), c.z};
-                    p1 = Vec3{c.x + r*std::cos(a1), c.y + r*std::sin(a1), c.z};
+                    p0 = Vec3{c.x + r*cardinal::cos(a0), c.y + r*cardinal::sin(a0), c.z};
+                    p1 = Vec3{c.x + r*cardinal::cos(a1), c.y + r*cardinal::sin(a1), c.z};
                     break;
                 case 1:
-                    p0 = Vec3{c.x + r*std::cos(a0), c.y, c.z + r*std::sin(a0)};
-                    p1 = Vec3{c.x + r*std::cos(a1), c.y, c.z + r*std::sin(a1)};
+                    p0 = Vec3{c.x + r*cardinal::cos(a0), c.y, c.z + r*cardinal::sin(a0)};
+                    p1 = Vec3{c.x + r*cardinal::cos(a1), c.y, c.z + r*cardinal::sin(a1)};
                     break;
                 default:
-                    p0 = Vec3{c.x, c.y + r*std::cos(a0), c.z + r*std::sin(a0)};
-                    p1 = Vec3{c.x, c.y + r*std::cos(a1), c.z + r*std::sin(a1)};
+                    p0 = Vec3{c.x, c.y + r*cardinal::cos(a0), c.z + r*cardinal::sin(a0)};
+                    p1 = Vec3{c.x, c.y + r*cardinal::cos(a1), c.z + r*cardinal::sin(a1)};
                     break;
             }
             out.push_back({p0, nz, color});
@@ -572,11 +572,11 @@ inline void add_sphere_edges(std::vector<RenderVertex>& out,
 // lines: the shaft (origin → origin+dir*length) and a small 4-segment
 // arrowhead at the tip. Used by the Directional-light gizmo since
 // directionals don't have a world position.
-inline void add_dir_arrow(std::vector<RenderVertex>& out,
+inline void add_dir_arrow(cardinal::vector<RenderVertex>& out,
                           const Vec3& origin, const Vec3& dir_in,
                           float length, const Vec3& color)
 {
-    const float dl = std::sqrt(dir_in.x*dir_in.x + dir_in.y*dir_in.y + dir_in.z*dir_in.z);
+    const float dl = cardinal::sqrt(dir_in.x*dir_in.x + dir_in.y*dir_in.y + dir_in.z*dir_in.z);
     const Vec3  dir = (dl > 1e-6f) ? Vec3{dir_in.x/dl, dir_in.y/dl, dir_in.z/dl}
                                    : Vec3{0, 1, 0};
     const Vec3  tip{
@@ -589,13 +589,13 @@ inline void add_dir_arrow(std::vector<RenderVertex>& out,
     out.push_back({tip,    nz, color});
     // Arrowhead: 4 small segments back from the tip, in the orthogonal
     // plane of `dir`.
-    const Vec3 seed = (std::abs(dir.y) < 0.9f) ? Vec3{0, 1, 0} : Vec3{1, 0, 0};
+    const Vec3 seed = (cardinal::abs(dir.y) < 0.9f) ? Vec3{0, 1, 0} : Vec3{1, 0, 0};
     Vec3 u{
         seed.y*dir.z - seed.z*dir.y,
         seed.z*dir.x - seed.x*dir.z,
         seed.x*dir.y - seed.y*dir.x,
     };
-    const float ul = std::sqrt(u.x*u.x + u.y*u.y + u.z*u.z);
+    const float ul = cardinal::sqrt(u.x*u.x + u.y*u.y + u.z*u.z);
     u = (ul > 1e-6f) ? Vec3{u.x/ul, u.y/ul, u.z/ul} : Vec3{1, 0, 0};
     const Vec3 v{
         dir.y*u.z - dir.z*u.y,
@@ -623,7 +623,7 @@ inline void add_dir_arrow(std::vector<RenderVertex>& out,
 }
 
 inline Vec3 hsv_to_rgb(float h, float s, float v) {
-    const float i = std::floor(h * 6.0f);
+    const float i = cardinal::floor(h * 6.0f);
     const float f = h * 6.0f - i;
     const float p = v * (1.0f - s);
     const float q = v * (1.0f - f * s);
@@ -648,7 +648,7 @@ inline Vec3 hsv_to_rgb(float h, float s, float v) {
     const Vec3& sun_dir, float half, float near_z, float far_z)
 {
     // Normalise; guard a degenerate zero direction.
-    const float dl = std::sqrt(sun_dir.x*sun_dir.x + sun_dir.y*sun_dir.y
+    const float dl = cardinal::sqrt(sun_dir.x*sun_dir.x + sun_dir.y*sun_dir.y
                              + sun_dir.z*sun_dir.z);
     const Vec3 d = (dl > 1e-6f)
         ? Vec3{sun_dir.x/dl, sun_dir.y/dl, sun_dir.z/dl}
@@ -657,7 +657,7 @@ inline Vec3 hsv_to_rgb(float h, float s, float v) {
     // in front of it; distance = far_z*0.5 keeps the scene mid-frustum.
     const float dist = far_z * 0.5f;
     const Vec3 eye{ -d.x * dist, -d.y * dist, -d.z * dist };
-    const Vec3 up = (std::abs(d.y) < 0.95f) ? Vec3{0,1,0} : Vec3{0,0,1};
+    const Vec3 up = (cardinal::abs(d.y) < 0.95f) ? Vec3{0,1,0} : Vec3{0,0,1};
     const Mat4 view = Mat4::look_at(eye, Vec3{0,0,0}, up);
 
     Mat4 proj{};                       // zero-init
@@ -692,15 +692,15 @@ Vec3 color_for(ViewMode m, const Vec3& world_pos, const Vec3& world_normal,
         case ViewMode::Wireframe: return Vec3{ 0.55f, 0.85f, 1.0f };
         case ViewMode::Polygons: {
             // Deterministic hash of triangle index → vivid HSV colour.
-            const float h = std::fmod(static_cast<float>(tri_index) * 0.6180339887f, 1.0f);
+            const float h = cardinal::fmod(static_cast<float>(tri_index) * 0.6180339887f, 1.0f);
             return hsv_to_rgb(h, 0.6f, 0.95f);
         }
         case ViewMode::Heightmap: {
             // Map world Y into [0,1] over a wider range than the original
             // ±2 bracket — most demo scenes have terrain at -32..+32.
             // Cool→green→warm ramp so users can read elevation by hue.
-            const float t = std::clamp((world_pos.y + 32.0f) / 64.0f, 0.0f, 1.0f);
-            return Vec3{ t, 1.0f - std::abs(t - 0.5f) * 2.0f, 1.0f - t };
+            const float t = cardinal::clamp((world_pos.y + 32.0f) / 64.0f, 0.0f, 1.0f);
+            return Vec3{ t, 1.0f - cardinal::abs(t - 0.5f) * 2.0f, 1.0f - t };
         }
         case ViewMode::Normals: {
             return Vec3{ world_normal.x * 0.5f + 0.5f,
@@ -732,8 +732,8 @@ public:
         }
 
         rhi::PipelineDesc pd{};
-        pd.vertex_shader   = std::move(vs);
-        pd.fragment_shader = std::move(fs);
+        pd.vertex_shader   = cardinal::move(vs);
+        pd.fragment_shader = cardinal::move(fs);
         pd.vertex_stride   = sizeof(RenderVertex);
         pd.color_format    = sw.color_format();
         // Opt into depth-test on backends that expose a depth attachment.
@@ -854,10 +854,10 @@ public:
         // precision on Windows + Linux; we report µs so the panel stays
         // human-readable. Each phase computes its own elapsed_us into
         // stats_.<phase>_us at end of phase.
-        using clk = std::chrono::high_resolution_clock;
+        using clk = cardinal::chrono::high_resolution_clock;
         auto t_cull_begin = clk::now();
         auto elapsed_us = [](clk::time_point a, clk::time_point b) noexcept {
-            return std::chrono::duration<f32, std::micro>(b - a).count();
+            return cardinal::chrono::duration<f32, cardinal::micro>(b - a).count();
         };
 
         // ---------------------------------------------------------------
@@ -992,7 +992,7 @@ public:
                     // far-camera meshes pick coarser LODs as the user
                     // resizes the panel down.
                     si.viewport_pixel_height = static_cast<f32>(
-                        std::max<u32>(1u, swapchain_->viewport_height()));
+                        cardinal::max<u32>(1u, swapchain_->viewport_height()));
                     si.pixel_error_tolerance = vgeom::kPixelErrorTolerance;
 
                     vgeom_cuts_.emplace_back();
@@ -1044,7 +1044,7 @@ public:
             // fall through with one EntityWork like before — the
             // splitting only kicks in for terrain-scale meshes.
             for (u32 base = 0; base < tris_total; base += kSplitTriThreshold) {
-                const u32 tris = std::min(kSplitTriThreshold, tris_total - base);
+                const u32 tris = cardinal::min(kSplitTriThreshold, tris_total - base);
                 EntityWork w{};
                 w.entity     = &e;
                 w.tri_first  = base;
@@ -1096,7 +1096,7 @@ public:
                     model.m[0][1]*n.x + model.m[1][1]*n.y + model.m[2][1]*n.z,
                     model.m[0][2]*n.x + model.m[1][2]*n.y + model.m[2][2]*n.z,
                 };
-                const float l = std::sqrt(r.x*r.x + r.y*r.y + r.z*r.z);
+                const float l = cardinal::sqrt(r.x*r.x + r.y*r.y + r.z*r.z);
                 if (l > 1e-6f) { r.x /= l; r.y /= l; r.z /= l; }
                 return r;
             };
@@ -1182,8 +1182,8 @@ public:
         const usize bytes = cpu_verts_.size() * sizeof(RenderVertex);
         if (bytes > slot.capacity) {
             // Grow geometrically; first alloc starts at the default size.
-            slot.capacity = std::max(
-                std::max(slot.capacity * 2, bytes),
+            slot.capacity = cardinal::max(
+                cardinal::max(slot.capacity * 2, bytes),
                 scratch_default_capacity_);
             rhi::BufferDesc bd{};
             bd.size = slot.capacity;
@@ -1191,7 +1191,7 @@ public:
             bd.cpu_writable = true;
             auto nb = device_->create_buffer(bd);
             if (nb == nullptr) return;
-            slot.buffer = std::move(nb);
+            slot.buffer = cardinal::move(nb);
         }
         slot.buffer->upload(cpu_verts_.data(), bytes);
 
@@ -1298,7 +1298,7 @@ public:
                     // convention) which is what the PS cone math expects.
                     // Floor outer_cos at 1e-3 so a fully-open cone still
                     // reads as a Spot rather than as a Point.
-                    const float outer = std::max(L.spot_outer_cos, 1e-3f);
+                    const float outer = cardinal::max(L.spot_outer_cos, 1e-3f);
                     g.dir_intensity = Vec4{L.position.x, L.position.y,
                                            L.position.z, L.intensity};
                     g.color_range   = Vec4{L.color.x, L.color.y, L.color.z, L.range};
@@ -1334,15 +1334,15 @@ public:
         ScratchSlot& lslot = light_scratches_[vp_id];
         const usize lbytes = cpu_lights_.size() * sizeof(GpuLight);
         if (lbytes > lslot.capacity) {
-            lslot.capacity = std::max<usize>(
-                std::max<usize>(lslot.capacity * 2, lbytes),
+            lslot.capacity = cardinal::max<usize>(
+                cardinal::max<usize>(lslot.capacity * 2, lbytes),
                 static_cast<usize>(kMaxLights) * sizeof(GpuLight));
             rhi::BufferDesc bd{};
             bd.size         = lslot.capacity;
             bd.usage        = static_cast<u32>(rhi::BufferUsage::Storage);
             bd.cpu_writable = true;
             auto nb = device_->create_buffer(bd);
-            if (nb != nullptr) lslot.buffer = std::move(nb);
+            if (nb != nullptr) lslot.buffer = cardinal::move(nb);
         }
         if (lslot.buffer != nullptr) {
             lslot.buffer->upload(cpu_lights_.data(), lbytes);
@@ -1381,15 +1381,15 @@ public:
         ScratchSlot& mslot = material_scratches_[vp_id];
         const usize mbytes = cpu_materials_.size() * sizeof(GpuMaterial);
         if (mbytes > mslot.capacity) {
-            mslot.capacity = std::max<usize>(
-                std::max<usize>(mslot.capacity * 2, mbytes),
+            mslot.capacity = cardinal::max<usize>(
+                cardinal::max<usize>(mslot.capacity * 2, mbytes),
                 static_cast<usize>(64) * sizeof(GpuMaterial));
             rhi::BufferDesc bd{};
             bd.size         = mslot.capacity;
             bd.usage        = static_cast<u32>(rhi::BufferUsage::Storage);
             bd.cpu_writable = true;
             auto nb = device_->create_buffer(bd);
-            if (nb != nullptr) mslot.buffer = std::move(nb);
+            if (nb != nullptr) mslot.buffer = cardinal::move(nb);
         }
         if (mslot.buffer != nullptr) {
             mslot.buffer->upload(cpu_materials_.data(), mbytes);
@@ -1505,8 +1505,8 @@ public:
                             // length × sqrt(1-cos²)/cos. Clamp the
                             // cosine into (eps, 1) so a 0° or 180°
                             // degenerate cone doesn't divide by zero.
-                            const float oc = std::clamp(L.spot_outer_cos, 1e-3f, 0.9999f);
-                            const float sn = std::sqrt(1.0f - oc*oc);
+                            const float oc = cardinal::clamp(L.spot_outer_cos, 1e-3f, 0.9999f);
+                            const float sn = cardinal::sqrt(1.0f - oc*oc);
                             const float br = L.range * (sn / oc);
                             add_cone_edges(gizmo_verts_,
                                            L.position, L.direction,
@@ -1525,15 +1525,15 @@ public:
                 ScratchSlot& gslot = gizmo_scratches_[vp_id];
                 const usize gbytes = gizmo_verts_.size() * sizeof(RenderVertex);
                 if (gbytes > gslot.capacity) {
-                    gslot.capacity = std::max(
-                        std::max(gslot.capacity * 2, gbytes),
+                    gslot.capacity = cardinal::max(
+                        cardinal::max(gslot.capacity * 2, gbytes),
                         scratch_default_capacity_);
                     rhi::BufferDesc bd{};
                     bd.size = gslot.capacity;
                     bd.usage = static_cast<u32>(rhi::BufferUsage::Vertex);
                     bd.cpu_writable = true;
                     auto nb = device_->create_buffer(bd);
-                    if (nb != nullptr) gslot.buffer = std::move(nb);
+                    if (nb != nullptr) gslot.buffer = cardinal::move(nb);
                 }
                 if (gslot.buffer != nullptr) {
                     gslot.buffer->upload(gizmo_verts_.data(), gbytes);
@@ -1588,8 +1588,8 @@ private:
     rhi::Device*    device_{nullptr};
     rhi::Swapchain* swapchain_{nullptr};
 
-    std::unique_ptr<rhi::Pipeline> pso_solid_;
-    std::unique_ptr<rhi::Pipeline> pso_wire_;
+    cardinal::unique_ptr<rhi::Pipeline> pso_solid_;
+    cardinal::unique_ptr<rhi::Pipeline> pso_wire_;
     // Shadow mapping (pass 1). pso_shadow_ is the depth-only pipeline
     // (kShadowShader, color_format=Unknown); shadow_tex_ is the D32
     // shadow map (DepthRenderTarget|Sampled). Both may be null if the
@@ -1597,8 +1597,8 @@ private:
     // skip the shadow pass (main render is unaffected). The two-pass
     // render wiring + PCF sampling land in the next iteration.
     static constexpr cardinal::u32 kShadowDim = 2048;
-    std::unique_ptr<rhi::Pipeline> pso_shadow_;
-    std::unique_ptr<rhi::Texture>  shadow_tex_;
+    cardinal::unique_ptr<rhi::Pipeline> pso_shadow_;
+    cardinal::unique_ptr<rhi::Texture>  shadow_tex_;
     // Light-space view-proj used for pass 1 this frame; consumed by the
     // PCF sample in PSMain (next iteration). shadow_ready_ = pass 1
     // actually ran (triangle mode + directional + resources present).
@@ -1609,26 +1609,26 @@ private:
     // viewport N's draw by the time we record viewport N+1, so they cannot
     // share storage. Indexed by Swapchain::active_viewport().
     struct ScratchSlot {
-        std::unique_ptr<rhi::Buffer> buffer;
+        cardinal::unique_ptr<rhi::Buffer> buffer;
         usize                        capacity{0};
     };
-    std::vector<ScratchSlot>       scratches_;
+    cardinal::vector<ScratchSlot>       scratches_;
     usize                          scratch_default_capacity_{0};
-    std::vector<RenderVertex>      cpu_verts_;
+    cardinal::vector<RenderVertex>      cpu_verts_;
 
     // Per-viewport storage buffer holding the frame's GpuLight array
     // (bound at RHI storage slot 0). Same per-viewport ring rationale
     // as `scratches_` — viewport N's lights may still be in GPU flight
     // when viewport N+1 records. cpu_lights_ is the CPU staging vector,
     // reused across frames so the light upload doesn't churn the heap.
-    std::vector<ScratchSlot>       light_scratches_;
-    std::vector<GpuLight>          cpu_lights_;
+    cardinal::vector<ScratchSlot>       light_scratches_;
+    cardinal::vector<GpuLight>          cpu_lights_;
     // Per-viewport material storage buffer (RHI slot 1) + CPU staging.
     // One GpuMaterial per distinct entity drawn this frame, in entity-
     // encounter order — the draw loop pushes the matching index. Same
     // per-viewport ring rationale as light_scratches_.
-    std::vector<ScratchSlot>       material_scratches_;
-    std::vector<GpuMaterial>       cpu_materials_;
+    cardinal::vector<ScratchSlot>       material_scratches_;
+    cardinal::vector<GpuMaterial>       cpu_materials_;
 
     // Two-phase parallel transform — Phase 1 fills work_list_ sequentially
     // (cheap visibility cull + per-entity offset compute), Phase 2 fans out
@@ -1648,11 +1648,11 @@ private:
         usize         out_offset{0};   // index into cpu_verts_
         u32           tri_offset{0};   // global triangle id base (Polygons hue)
     };
-    std::vector<EntityWork>        work_list_;
+    cardinal::vector<EntityWork>        work_list_;
     // Per-frame scratch for vgeom selection — kept as a member so we
     // don't churn the heap each frame. One SelectOutput per vgeom-
     // enabled entity, reused across frames.
-    std::vector<vgeom::SelectOutput> vgeom_cuts_;
+    cardinal::vector<vgeom::SelectOutput> vgeom_cuts_;
 
     // SoA scratch for the per-frame frustum cull pass. Cleared and
     // refilled each render() call; capacity is retained so steady-state
@@ -1662,10 +1662,10 @@ private:
     // Six parallel min/max arrays per axis form the AABB SoA the
     // simd::frustum_cull_aabbs kernel wants. Caller fills these by
     // walking the candidate set once and calling entity_world_aabb.
-    std::vector<const Entity*>  cull_candidates_;
-    std::vector<f32>            cull_min_x_, cull_min_y_, cull_min_z_;
-    std::vector<f32>            cull_max_x_, cull_max_y_, cull_max_z_;
-    std::vector<u8>             cull_bits_;
+    cardinal::vector<const Entity*>  cull_candidates_;
+    cardinal::vector<f32>            cull_min_x_, cull_min_y_, cull_min_z_;
+    cardinal::vector<f32>            cull_max_x_, cull_max_y_, cull_max_z_;
+    cardinal::vector<u8>             cull_bits_;
 
     // Most recent frame_stats() snapshot. Reset at the top of render()
     // so even early-out frames produce a clean reading. Read by the
@@ -1687,14 +1687,14 @@ private:
     bool                           show_frustum_{false};
     bool                           show_axes_{false};
     bool                           show_lights_{false};
-    std::vector<RenderVertex>      gizmo_verts_;
-    std::vector<ScratchSlot>       gizmo_scratches_;
+    cardinal::vector<RenderVertex>      gizmo_verts_;
+    cardinal::vector<ScratchSlot>       gizmo_scratches_;
 };
 
 }  // namespace
 
-std::unique_ptr<ForwardRenderer> ForwardRenderer::create(rhi::Device& dev, rhi::Swapchain& sw) {
-    auto r = std::make_unique<ForwardRendererImpl>();
+cardinal::unique_ptr<ForwardRenderer> ForwardRenderer::create(rhi::Device& dev, rhi::Swapchain& sw) {
+    auto r = cardinal::make_unique<ForwardRendererImpl>();
     if (!r->initialize(dev, sw)) return nullptr;
     return r;
 }

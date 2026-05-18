@@ -13,15 +13,16 @@
 #include <cardinal/vgeom/vgeom.hpp>
 #include <cardinal/vgeom/cluster.hpp>
 
-#include <mutex>
-#include <unordered_map>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/thread.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::scene {
 
 namespace {
 
 struct Attachment {
-    std::shared_ptr<cardinal::vgeom::Hierarchy> hierarchy;
+    cardinal::shared_ptr<cardinal::vgeom::Hierarchy> hierarchy;
     bool                                        enabled{true};
     cardinal::vgeom::FrameStats                 last_stats{};
 };
@@ -31,8 +32,8 @@ struct Attachment {
 // entries persist after Mesh death until explicitly cleared, but
 // they're tiny — and migrating this to a real Mesh field is a one-
 // line follow-up once the API stabilises.
-std::mutex                                       g_mtx;
-std::unordered_map<const Mesh*, Attachment>      g_attach;
+cardinal::mutex                                       g_mtx;
+cardinal::unordered_map<const Mesh*, Attachment>      g_attach;
 
 }  // namespace
 
@@ -62,45 +63,45 @@ bool vgeom_attach(Mesh& mesh) {
     if (h == nullptr) return false;
 
     Attachment a{};
-    a.hierarchy = std::move(h);
+    a.hierarchy = cardinal::move(h);
     a.enabled   = true;
 
-    std::lock_guard<std::mutex> lg(g_mtx);
-    g_attach[&mesh] = std::move(a);
+    cardinal::lock_guard<cardinal::mutex> lg(g_mtx);
+    g_attach[&mesh] = cardinal::move(a);
     return true;
 }
 
 bool vgeom_attached(const Mesh& mesh) noexcept {
-    std::lock_guard<std::mutex> lg(g_mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(g_mtx);
     return g_attach.find(&mesh) != g_attach.end();
 }
 
 bool vgeom_enabled(const Mesh& mesh) noexcept {
-    std::lock_guard<std::mutex> lg(g_mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(g_mtx);
     auto it = g_attach.find(&mesh);
     return it != g_attach.end() && it->second.enabled;
 }
 
 void vgeom_set_enabled(Mesh& mesh, bool on) noexcept {
-    std::lock_guard<std::mutex> lg(g_mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(g_mtx);
     auto it = g_attach.find(&mesh);
     if (it != g_attach.end()) it->second.enabled = on;
 }
 
-std::shared_ptr<cardinal::vgeom::Hierarchy> vgeom_hierarchy_of(const Mesh& mesh) {
-    std::lock_guard<std::mutex> lg(g_mtx);
+cardinal::shared_ptr<cardinal::vgeom::Hierarchy> vgeom_hierarchy_of(const Mesh& mesh) {
+    cardinal::lock_guard<cardinal::mutex> lg(g_mtx);
     auto it = g_attach.find(&mesh);
     return it == g_attach.end() ? nullptr : it->second.hierarchy;
 }
 
 cardinal::vgeom::FrameStats vgeom_last_stats(const Mesh& mesh) noexcept {
-    std::lock_guard<std::mutex> lg(g_mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(g_mtx);
     auto it = g_attach.find(&mesh);
     return it == g_attach.end() ? cardinal::vgeom::FrameStats{} : it->second.last_stats;
 }
 
 void vgeom_publish_stats(Mesh& mesh, const cardinal::vgeom::FrameStats& s) {
-    std::lock_guard<std::mutex> lg(g_mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(g_mtx);
     auto it = g_attach.find(&mesh);
     if (it != g_attach.end()) it->second.last_stats = s;
 }

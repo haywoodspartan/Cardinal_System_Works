@@ -1,7 +1,7 @@
 #include <cardinal/scene/light.hpp>
 
-#include <algorithm>
-#include <cmath>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cmath.hpp>
 
 namespace cardinal::scene {
 
@@ -14,7 +14,7 @@ inline float clamp01(float x) noexcept {
 }
 
 inline float vlen(const Vec3& v) noexcept {
-    return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    return cardinal::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
 }
 
 inline Vec3 vnorm(const Vec3& v) noexcept {
@@ -71,13 +71,13 @@ Vec3 LightSet::shade(const Vec3& world_pos, const Vec3& world_normal,
                 atten = k * k;
                 if (cosAngle < l.spot_inner_cos) {
                     const float fall = (cosAngle - l.spot_outer_cos) /
-                        std::max(1e-4f, (l.spot_inner_cos - l.spot_outer_cos));
+                        cardinal::max(1e-4f, (l.spot_inner_cos - l.spot_outer_cos));
                     atten *= clamp01(fall);
                 }
                 break;
             }
         }
-        const float NdotL = std::max(0.0f, n.x * L.x + n.y * L.y + n.z * L.z);
+        const float NdotL = cardinal::max(0.0f, n.x * L.x + n.y * L.y + n.z * L.z);
         const float k = NdotL * atten * l.intensity;
         acc.x += base_color.x * l.color.x * k;
         acc.y += base_color.y * l.color.y * k;

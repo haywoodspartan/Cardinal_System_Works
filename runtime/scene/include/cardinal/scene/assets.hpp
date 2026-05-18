@@ -24,12 +24,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
+#include <cardinal/core/containers.hpp>
 #include <cardinal/scene/math.hpp>
-
-#include <functional>
-#include <memory>
-#include <string>
-#include <vector>
 
 namespace cardinal::rhi { class Device; }
 
@@ -50,17 +46,17 @@ struct AssetSpawnContext {
 };
 
 struct AssetSpawnResult {
-    std::vector<u32> entity_ids;     // every entity this spawn created
+    cardinal::vector<u32> entity_ids;     // every entity this spawn created
     u32              primary_id{0};  // the one the editor should select
 };
 
-using AssetFactory = std::function<AssetSpawnResult(const AssetSpawnContext&)>;
+using AssetFactory = cardinal::function<AssetSpawnResult(const AssetSpawnContext&)>;
 
 struct AssetDesc {
-    std::string  id;          // stable identifier — never localised
-    std::string  label;       // user-visible name
-    std::string  category;    // "Primitives", "Foliage", "Terrain", "Custom"
-    std::string  tooltip;
+    cardinal::string  id;          // stable identifier — never localised
+    cardinal::string  label;       // user-visible name
+    cardinal::string  category;    // "Primitives", "Foliage", "Terrain", "Custom"
+    cardinal::string  tooltip;
     AssetKind    kind{AssetKind::Primitive};
     AssetFactory factory;
 };
@@ -73,11 +69,11 @@ public:
     static AssetCatalog& instance();
 
     bool register_asset(AssetDesc d);
-    const std::vector<AssetDesc>& all() const noexcept;
+    const cardinal::vector<AssetDesc>& all() const noexcept;
     const AssetDesc* find(const char* id) const noexcept;
 
     // Categories in insertion order (deduplicated).
-    std::vector<std::string> categories() const;
+    cardinal::vector<cardinal::string> categories() const;
 
     // Convenience: spawn by id with a context. Returns an empty result when
     // the id is unknown.
@@ -89,7 +85,7 @@ private:
     AssetCatalog& operator=(const AssetCatalog&) = delete;
 
     struct Impl;
-    std::unique_ptr<Impl> p_;
+    cardinal::unique_ptr<Impl> p_;
 };
 
 // Registers the engine-shipped defaults: cube, sphere (lo/hi), plane,

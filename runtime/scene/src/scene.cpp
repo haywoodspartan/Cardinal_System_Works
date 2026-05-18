@@ -8,11 +8,12 @@
 #include <cardinal/core/simd_math.hpp>
 #include <cardinal/rhi/rhi.hpp>
 
-#include <algorithm>
-#include <atomic>
-#include <cmath>
-#include <limits>
-#include <vector>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/atomic.hpp>
+#include <cardinal/core/cmath.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/limits.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::scene {
 
@@ -29,9 +30,9 @@ const char* view_mode_name(ViewMode m) {
 }
 
 // ---- Mesh -------------------------------------------------------------------
-std::shared_ptr<Mesh> Mesh::from_vertices(rhi::Device& dev, const Vertex* verts, u32 count) {
+cardinal::shared_ptr<Mesh> Mesh::from_vertices(rhi::Device& dev, const Vertex* verts, u32 count) {
     if (count == 0 || verts == nullptr) return nullptr;
-    auto m = std::shared_ptr<Mesh>(new Mesh());
+    auto m = cardinal::shared_ptr<Mesh>(new Mesh());
     rhi::BufferDesc bd{};
     bd.size         = sizeof(Vertex) * count;
     bd.usage        = static_cast<u32>(rhi::BufferUsage::Vertex);
@@ -42,14 +43,14 @@ std::shared_ptr<Mesh> Mesh::from_vertices(rhi::Device& dev, const Vertex* verts,
         return nullptr;
     }
     buf->upload(verts, sizeof(Vertex) * count);
-    m->vbuf_   = std::move(buf);
+    m->vbuf_   = cardinal::move(buf);
     m->vcount_ = count;
     m->cpu_.assign(verts, verts + count);
     return m;
 }
 
 // Box centred on origin, ±size/2 on each axis. 36 vertices (no indexing).
-std::shared_ptr<Mesh> Mesh::make_box(rhi::Device& dev, float size) {
+cardinal::shared_ptr<Mesh> Mesh::make_box(rhi::Device& dev, float size) {
     const float h = size * 0.5f;
     const Vec3 col{ 0.85f, 0.86f, 0.92f };
     // 6 faces × 2 tris × 3 verts. Per-face shared normal.
@@ -79,14 +80,14 @@ std::shared_ptr<Mesh> Mesh::make_box(rhi::Device& dev, float size) {
 }
 
 // Plane on Y=0, facing +Y. subdivisions controls grid density (>=1).
-std::shared_ptr<Mesh> Mesh::make_plane(rhi::Device& dev, float size, u32 subdivisions) {
+cardinal::shared_ptr<Mesh> Mesh::make_plane(rhi::Device& dev, float size, u32 subdivisions) {
     if (subdivisions < 1) subdivisions = 1;
     const u32 N = subdivisions;
     const float step = size / static_cast<float>(N);
     const Vec3  col { 0.42f, 0.45f, 0.50f };
     const Vec3  nrm { 0.0f, 1.0f, 0.0f };
 
-    std::vector<Vertex> verts;
+    cardinal::vector<Vertex> verts;
     verts.reserve(N * N * 6);
     for (u32 j = 0; j < N; ++j) {
         for (u32 i = 0; i < N; ++i) {
@@ -108,11 +109,11 @@ std::shared_ptr<Mesh> Mesh::make_plane(rhi::Device& dev, float size, u32 subdivi
 }
 
 // UV sphere — N segments around, N/2 stacks. No indexing.
-std::shared_ptr<Mesh> Mesh::make_sphere(rhi::Device& dev, float radius, u32 segments) {
+cardinal::shared_ptr<Mesh> Mesh::make_sphere(rhi::Device& dev, float radius, u32 segments) {
     if (segments < 4) segments = 4;
     const u32 stacks = segments / 2;
     const Vec3 col{ 0.85f, 0.55f, 0.50f };
-    std::vector<Vertex> verts;
+    cardinal::vector<Vertex> verts;
     verts.reserve(segments * stacks * 6);
     for (u32 j = 0; j < stacks; ++j) {
         const float v0 = static_cast<float>(j)     / static_cast<float>(stacks);
@@ -125,7 +126,7 @@ std::shared_ptr<Mesh> Mesh::make_sphere(rhi::Device& dev, float radius, u32 segm
             const float t0 = u0 * 2.0f * kPi;
             const float t1 = u1 * 2.0f * kPi;
             auto pt = [&](float t, float p) {
-                Vec3 n{ std::sin(p) * std::cos(t), std::cos(p), std::sin(p) * std::sin(t) };
+                Vec3 n{ cardinal::sin(p) * cardinal::cos(t), cardinal::cos(p), cardinal::sin(p) * cardinal::sin(t) };
                 Vec3 pos = n * radius;
                 return Vertex{ pos, n, col };
             };
@@ -152,7 +153,7 @@ void Mesh::bounding_sphere(Vec3& out_center, float& out_radius) const noexcept {
             }
         }
         bs_center_ = c;
-        bs_radius_ = std::sqrt(r2);
+        bs_radius_ = cardinal::sqrt(r2);
         bs_cached_ = true;
     }
     out_center = bs_center_;
@@ -183,11 +184,11 @@ void Mesh::bounding_aabb(Vec3& out_min, Vec3& out_max) const noexcept {
 }
 
 // ---- Scene ------------------------------------------------------------------
-Entity& Scene::add_entity(std::string name) {
+Entity& Scene::add_entity(cardinal::string name) {
     Entity e;
     e.id   = next_id_++;
-    e.name = std::move(name);
-    entities_.push_back(std::move(e));
+    e.name = cardinal::move(name);
+    entities_.push_back(cardinal::move(e));
     return entities_.back();
 }
 
@@ -213,8 +214,8 @@ Entity* Scene::find_by_id(u32 id) {
 
 // ----- Hierarchy --------------------------------------------------------------
 
-std::vector<u32> Scene::children_of(u32 parent_id) const {
-    std::vector<u32> out;
+cardinal::vector<u32> Scene::children_of(u32 parent_id) const {
+    cardinal::vector<u32> out;
     out.reserve(8);
     for (const auto& e : entities_) {
         if (e.parent_id == parent_id) out.push_back(e.id);
@@ -276,10 +277,10 @@ usize Scene::assign_chunks(float chunk_size_units) noexcept {
             const float wx = e.transform.translation.x;
             const float wy = e.transform.translation.y;
             const float wz = e.transform.translation.z;
-            if (!std::isfinite(wx) || !std::isfinite(wy) || !std::isfinite(wz)) continue;
-            const i32 cx = static_cast<i32>(std::floor(wx * inv));
-            const i32 cy = static_cast<i32>(std::floor(wy * inv));
-            const i32 cz = static_cast<i32>(std::floor(wz * inv));
+            if (!cardinal::isfinite(wx) || !cardinal::isfinite(wy) || !cardinal::isfinite(wz)) continue;
+            const i32 cx = static_cast<i32>(cardinal::floor(wx * inv));
+            const i32 cy = static_cast<i32>(cardinal::floor(wy * inv));
+            const i32 cz = static_cast<i32>(cardinal::floor(wz * inv));
             if (e.chunk_x != cx || e.chunk_y != cy || e.chunk_z != cz) {
                 e.chunk_x = cx; e.chunk_y = cy; e.chunk_z = cz;
                 ++changed;
@@ -288,7 +289,7 @@ usize Scene::assign_chunks(float chunk_size_units) noexcept {
         return changed;
     }
 
-    std::atomic<usize> changed_atomic{0};
+    cardinal::atomic<usize> changed_atomic{0};
     cardinal::async::parallel_for(
         0u, static_cast<u32>(entities_.size()),
         [this, inv, &changed_atomic](u32 i) {
@@ -296,16 +297,16 @@ usize Scene::assign_chunks(float chunk_size_units) noexcept {
             const float wx = e.transform.translation.x;
             const float wy = e.transform.translation.y;
             const float wz = e.transform.translation.z;
-            if (!std::isfinite(wx) || !std::isfinite(wy) || !std::isfinite(wz)) return;
-            const i32 cx = static_cast<i32>(std::floor(wx * inv));
-            const i32 cy = static_cast<i32>(std::floor(wy * inv));
-            const i32 cz = static_cast<i32>(std::floor(wz * inv));
+            if (!cardinal::isfinite(wx) || !cardinal::isfinite(wy) || !cardinal::isfinite(wz)) return;
+            const i32 cx = static_cast<i32>(cardinal::floor(wx * inv));
+            const i32 cy = static_cast<i32>(cardinal::floor(wy * inv));
+            const i32 cz = static_cast<i32>(cardinal::floor(wz * inv));
             if (e.chunk_x != cx || e.chunk_y != cy || e.chunk_z != cz) {
                 e.chunk_x = cx; e.chunk_y = cy; e.chunk_z = cz;
-                changed_atomic.fetch_add(1, std::memory_order_relaxed);
+                changed_atomic.fetch_add(1, cardinal::memory_order_relaxed);
             }
         });
-    return changed_atomic.load(std::memory_order_relaxed);
+    return changed_atomic.load(cardinal::memory_order_relaxed);
 }
 
 // ---- Picking ----------------------------------------------------------------
@@ -314,9 +315,9 @@ void entity_world_sphere(const Entity& e, Vec3& out_center, float& out_radius) {
     if (e.mesh) e.mesh->bounding_sphere(lc, lr);
     // Apply uniform scale + translation. Non-uniform scale would need an
     // OBB or per-axis bound; for the editor's primitives this is enough.
-    const float s = std::max({ std::abs(e.transform.scale.x),
-                               std::abs(e.transform.scale.y),
-                               std::abs(e.transform.scale.z) });
+    const float s = cardinal::max({ cardinal::abs(e.transform.scale.x),
+                               cardinal::abs(e.transform.scale.y),
+                               cardinal::abs(e.transform.scale.z) });
     out_center = e.transform.translation
                + Vec3{ lc.x * e.transform.scale.x,
                        lc.y * e.transform.scale.y,
@@ -343,8 +344,8 @@ void entity_world_aabb(const Entity& e, Vec3& out_min, Vec3& out_max) {
             const float coeff = get(ai, ao);
             const float a = coeff * lo_i;
             const float b = coeff * hi_i;
-            (&mn.x)[ao] += std::min(a, b);
-            (&mx.x)[ao] += std::max(a, b);
+            (&mn.x)[ao] += cardinal::min(a, b);
+            (&mx.x)[ao] += cardinal::max(a, b);
         }
     }
     out_min = mn;
@@ -364,9 +365,9 @@ u32 pick_entity(const Scene& scene, const Ray& ray, float* out_t) {
     // picking could share that scratch — kept independent for now so
     // picking works whether or not the renderer has rendered this
     // frame (mouse hover, headless tests, etc.).
-    static thread_local std::vector<u32> ids;
-    static thread_local std::vector<f32> mn_x, mn_y, mn_z, mx_x, mx_y, mx_z;
-    static thread_local std::vector<f32> t_out;
+    static thread_local cardinal::vector<u32> ids;
+    static thread_local cardinal::vector<f32> mn_x, mn_y, mn_z, mx_x, mx_y, mx_z;
+    static thread_local cardinal::vector<f32> t_out;
 
     ids.clear();
     mn_x.clear(); mn_y.clear(); mn_z.clear();
@@ -412,7 +413,7 @@ u32 pick_entity(const Scene& scene, const Ray& ray, float* out_t) {
     u32 best_i  = 0;
     cardinal::core::simd::min_index_f32(&best_t, &best_i, t_out.data(), n);
 
-    if (best_t == std::numeric_limits<f32>::infinity()) return 0;
+    if (best_t == cardinal::numeric_limits<f32>::infinity()) return 0;
     if (out_t) *out_t = best_t;
     return ids[best_i];
 }

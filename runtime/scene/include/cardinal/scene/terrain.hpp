@@ -49,11 +49,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
+#include <cardinal/core/containers.hpp>
 #include <cardinal/scene/math.hpp>
-
-#include <memory>
-#include <string>
-#include <vector>
 
 namespace cardinal::rhi { class Device; }
 
@@ -77,7 +74,7 @@ struct TerrainParams {
 };
 
 float terrain_height(const TerrainParams& p, float wx, float wz) noexcept;
-std::shared_ptr<Mesh> generate_terrain_chunk(rhi::Device& dev,
+cardinal::shared_ptr<Mesh> generate_terrain_chunk(rhi::Device& dev,
                                              const TerrainParams& p,
                                              int chunk_x, int chunk_z);
 
@@ -88,7 +85,7 @@ struct TerrainGridDesc {
     Vec3          origin{0, 0, 0};
     Vec3          tint{1.0f, 1.0f, 1.0f};
 };
-std::vector<u32> spawn_terrain_grid(Scene& scene,
+cardinal::vector<u32> spawn_terrain_grid(Scene& scene,
                                     rhi::Device& dev,
                                     const TerrainGridDesc& desc);
 
@@ -118,7 +115,7 @@ const char* noise_shape_name(NoiseShape) noexcept;
 
 // One layer in a profile. Layers are evaluated in declaration order.
 struct NoiseLayer {
-    std::string id;                 // "base", "ridges", "river_mask"
+    cardinal::string id;                 // "base", "ridges", "river_mask"
     bool        enabled{true};
     NoiseOp     op{NoiseOp::Add};
     NoiseShape  shape{NoiseShape::Smooth};
@@ -136,11 +133,11 @@ struct NoiseLayer {
 
 // One named, reusable terrain recipe.
 struct TerrainProfile {
-    std::string             name;
-    std::string             description;
+    cardinal::string             name;
+    cardinal::string             description;
     float                   base_height{0.0f};        // DC offset before layers
     float                   height_scale{8.0f};       // multiplier on combined height
-    std::vector<NoiseLayer> layers;
+    cardinal::vector<NoiseLayer> layers;
 
     // Tint ramp — Vertex colour is computed from height and surface slope:
     //   tint_low  → grass/valley colour at tint_height_low
@@ -167,8 +164,8 @@ public:
     void                                set(TerrainProfile p);
     bool                                remove(const char* name);
     const TerrainProfile*               find(const char* name) const noexcept;
-    const std::vector<TerrainProfile>&  all() const noexcept;
-    std::vector<std::string>            names() const;
+    const cardinal::vector<TerrainProfile>&  all() const noexcept;
+    cardinal::vector<cardinal::string>            names() const;
 
     // Persistence — append-style (load merges into existing library; save
     // writes the entire current set).
@@ -181,7 +178,7 @@ private:
     TerrainProfileLibrary& operator=(const TerrainProfileLibrary&) = delete;
 
     struct Impl;
-    std::unique_ptr<Impl> p_;
+    cardinal::unique_ptr<Impl> p_;
 };
 
 // Register the engine-shipped curated profile presets:
@@ -200,7 +197,7 @@ Vec3  terrain_color_profile(const TerrainProfile& p,
                             float height, const Vec3& normal) noexcept;
 
 // Build one chunk tile mesh from a profile.
-std::shared_ptr<Mesh> generate_terrain_chunk_profile(
+cardinal::shared_ptr<Mesh> generate_terrain_chunk_profile(
     rhi::Device&           dev,
     const TerrainProfile&  profile,
     float                  chunk_size,
@@ -217,7 +214,7 @@ struct TerrainGridProfileDesc {
     float          chunk_size{32.0f};
     Vec3           origin{0, 0, 0};
 };
-std::vector<u32> spawn_terrain_grid_profile(Scene& scene,
+cardinal::vector<u32> spawn_terrain_grid_profile(Scene& scene,
                                             rhi::Device& dev,
                                             const TerrainGridProfileDesc& desc);
 

@@ -17,7 +17,7 @@
 #include <cardinal/core/spatial.hpp>
 #include <cardinal/core/types.hpp>
 
-#include <cmath>
+#include <cardinal/core/cmath.hpp>
 
 namespace cardinal::scene {
 
@@ -71,7 +71,7 @@ inline bool ray_sphere_intersect(const Ray& r, const Vec3& center, float radius,
     const float c = dot(oc, oc) - radius * radius;
     const float discriminant = b * b - c;
     if (discriminant < 0.0f) return false;
-    const float s = std::sqrt(discriminant);
+    const float s = cardinal::sqrt(discriminant);
     const float t0 = -b - s;
     const float t1 = -b + s;
     const float t = (t0 > 0.0f) ? t0 : ((t1 > 0.0f) ? t1 : -1.0f);
@@ -85,7 +85,7 @@ inline bool ray_sphere_intersect(const Ray& r, const Vec3& center, float radius,
 inline bool ray_plane_y_intersect(const Ray& r, float plane_y,
                                   Vec3* out_hit = nullptr) noexcept
 {
-    if (std::abs(r.direction.y) < 1e-6f) return false;
+    if (cardinal::abs(r.direction.y) < 1e-6f) return false;
     const float t = (plane_y - r.origin.y) / r.direction.y;
     if (t <= 0.0f) return false;
     if (out_hit) *out_hit = r.at(t);

@@ -7,8 +7,9 @@
 #include <cardinal/scene/scene.hpp>
 #include <cardinal/scene/terrain.hpp>
 
-#include <algorithm>
-#include <unordered_set>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::scene {
 
@@ -16,10 +17,10 @@ namespace cardinal::scene {
 // AssetCatalog::Impl
 // ---------------------------------------------------------------------------
 struct AssetCatalog::Impl {
-    std::vector<AssetDesc> entries;
+    cardinal::vector<AssetDesc> entries;
 };
 
-AssetCatalog::AssetCatalog() : p_(std::make_unique<Impl>()) {}
+AssetCatalog::AssetCatalog() : p_(cardinal::make_unique<Impl>()) {}
 
 AssetCatalog& AssetCatalog::instance() {
     static AssetCatalog g;
@@ -40,11 +41,11 @@ bool AssetCatalog::register_asset(AssetDesc d) {
             return false;
         }
     }
-    p_->entries.push_back(std::move(d));
+    p_->entries.push_back(cardinal::move(d));
     return true;
 }
 
-const std::vector<AssetDesc>& AssetCatalog::all() const noexcept {
+const cardinal::vector<AssetDesc>& AssetCatalog::all() const noexcept {
     return p_->entries;
 }
 
@@ -56,9 +57,9 @@ const AssetDesc* AssetCatalog::find(const char* id) const noexcept {
     return nullptr;
 }
 
-std::vector<std::string> AssetCatalog::categories() const {
-    std::vector<std::string> out;
-    std::unordered_set<std::string> seen;
+cardinal::vector<cardinal::string> AssetCatalog::categories() const {
+    cardinal::vector<cardinal::string> out;
+    cardinal::unordered_set<cardinal::string> seen;
     for (const auto& e : p_->entries) {
         if (seen.insert(e.category).second) out.push_back(e.category);
     }
@@ -98,7 +99,7 @@ void register_default_assets(rhi::Device& device) {
     auto plane_med    = Mesh::make_plane (device, 8.0f, 8);
 
     auto reg_primitive = [&](const char* id, const char* label,
-                             const char* tip, std::shared_ptr<Mesh> mesh,
+                             const char* tip, cardinal::shared_ptr<Mesh> mesh,
                              Vec3 tint, float lift_y)
     {
         AssetDesc d{};
@@ -117,7 +118,7 @@ void register_default_assets(rhi::Device& device) {
             e.tint = tint;
             return AssetSpawnResult{ { e.id }, e.id };
         };
-        cat.register_asset(std::move(d));
+        cat.register_asset(cardinal::move(d));
     };
 
     reg_primitive("primitive.cube",       "Cube",            "Unit cube primitive",
@@ -154,7 +155,7 @@ void register_default_assets(rhi::Device& device) {
             leaves.tint = { 0.30f, 0.55f, 0.25f };
             return AssetSpawnResult{ { trunk.id, leaves.id }, leaves.id };
         };
-        cat.register_asset(std::move(d));
+        cat.register_asset(cardinal::move(d));
     }
 
     // Terrain — single-chunk asset so the user can drop a hill anywhere.
@@ -177,7 +178,7 @@ void register_default_assets(rhi::Device& device) {
             e.tint = { 1.0f, 1.0f, 1.0f };   // mesh already has slope colours
             return AssetSpawnResult{ { e.id }, e.id };
         };
-        cat.register_asset(std::move(d));
+        cat.register_asset(cardinal::move(d));
     }
 
     cardinal::log::infof("scene/assets",

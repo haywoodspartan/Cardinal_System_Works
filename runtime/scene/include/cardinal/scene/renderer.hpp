@@ -17,8 +17,6 @@
 #include <cardinal/scene/light.hpp>
 #include <cardinal/scene/scene.hpp>
 
-#include <memory>
-
 namespace cardinal::rhi { class Device; class Swapchain; class Pipeline; class Buffer; }
 
 namespace cardinal::scene {
@@ -59,7 +57,7 @@ struct FrameStats {
 
 class ForwardRenderer {
 public:
-    static std::unique_ptr<ForwardRenderer> create(rhi::Device& dev,
+    static cardinal::unique_ptr<ForwardRenderer> create(rhi::Device& dev,
                                                    rhi::Swapchain& sw);
     virtual ~ForwardRenderer() = default;
 

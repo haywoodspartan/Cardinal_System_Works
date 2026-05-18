@@ -17,12 +17,9 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/utility.hpp>
 #include <cardinal/scene/math.hpp>
-
-#include <memory>
-#include <string>
-#include <unordered_set>
-#include <vector>
 
 namespace cardinal::rhi { class Device; class Buffer; }
 
@@ -61,13 +58,13 @@ namespace cardinal::scene {
 // Mesh = an immutable vertex+index buffer pair owned by the GPU device.
 class Mesh {
 public:
-    static std::shared_ptr<Mesh> from_vertices(rhi::Device& dev,
+    static cardinal::shared_ptr<Mesh> from_vertices(rhi::Device& dev,
                                                const Vertex* verts, u32 count);
 
     // Built-in primitives.
-    static std::shared_ptr<Mesh> make_box(rhi::Device&,   float size = 1.0f);
-    static std::shared_ptr<Mesh> make_plane(rhi::Device&, float size = 10.0f, u32 subdivisions = 8);
-    static std::shared_ptr<Mesh> make_sphere(rhi::Device&,float radius = 1.0f, u32 segments = 24);
+    static cardinal::shared_ptr<Mesh> make_box(rhi::Device&,   float size = 1.0f);
+    static cardinal::shared_ptr<Mesh> make_plane(rhi::Device&, float size = 10.0f, u32 subdivisions = 8);
+    static cardinal::shared_ptr<Mesh> make_sphere(rhi::Device&,float radius = 1.0f, u32 segments = 24);
 
     rhi::Buffer*  vertex_buffer() const noexcept { return vbuf_.get(); }
     u32           vertex_count() const noexcept  { return vcount_; }
@@ -87,15 +84,15 @@ public:
     // SIMD frustum-vs-AABB cull.
     void bounding_aabb(Vec3& out_min, Vec3& out_max) const noexcept;
 
-    const std::string& name() const noexcept     { return name_; }
-    void set_name(std::string n) { name_ = std::move(n); }
+    const cardinal::string& name() const noexcept     { return name_; }
+    void set_name(cardinal::string n) { name_ = cardinal::move(n); }
 
 private:
     Mesh() = default;
-    std::unique_ptr<rhi::Buffer> vbuf_;
+    cardinal::unique_ptr<rhi::Buffer> vbuf_;
     u32                          vcount_{0};
-    std::vector<Vertex>          cpu_;
-    std::string                  name_;
+    cardinal::vector<Vertex>          cpu_;
+    cardinal::string                  name_;
     mutable Vec3                 bs_center_{};
     mutable float                bs_radius_{0.0f};
     mutable bool                 bs_cached_{false};
@@ -145,9 +142,9 @@ class Scene;
 class Entity {
 public:
     u32                   id{0};
-    std::string           name;
+    cardinal::string           name;
     Transform             transform;
-    std::shared_ptr<Mesh> mesh;
+    cardinal::shared_ptr<Mesh> mesh;
     Vec3                  tint{1, 1, 1};
     Material              material{};
     bool                  visible{true};
@@ -186,12 +183,12 @@ public:
 
 class Scene {
 public:
-    Entity& add_entity(std::string name);
+    Entity& add_entity(cardinal::string name);
     bool    remove_entity(u32 id);
     Entity* find_by_id(u32 id);
 
-    std::vector<Entity>& entities() noexcept { return entities_; }
-    const std::vector<Entity>& entities() const noexcept { return entities_; }
+    cardinal::vector<Entity>& entities() noexcept { return entities_; }
+    const cardinal::vector<Entity>& entities() const noexcept { return entities_; }
 
     // ----- Hierarchy helpers ----------------------------------------------
     //
@@ -206,7 +203,7 @@ public:
     // that's already (transitively) a parent of P is rejected (returns false).
     // The Studio's drag-to-reparent UI uses the return value to bail out
     // gracefully rather than corrupt the tree.
-    std::vector<u32> children_of(u32 parent_id) const;
+    cardinal::vector<u32> children_of(u32 parent_id) const;
     bool             set_parent(u32 entity_id, u32 new_parent_id);
     bool             would_create_cycle(u32 entity_id, u32 new_parent_id) const;
     Camera& camera() noexcept             { return camera_; }
@@ -253,7 +250,7 @@ public:
     usize assign_chunks(f32 chunk_size_units) noexcept;
 
 private:
-    std::vector<Entity>     entities_;
+    cardinal::vector<Entity>     entities_;
     Camera                  camera_;
     u32                     next_id_{1};
     ChunkSet                visible_chunks_{};
@@ -299,7 +296,7 @@ bool vgeom_enabled (const Mesh& mesh) noexcept;
 void vgeom_set_enabled(Mesh& mesh, bool on) noexcept;
 
 // Hierarchy lookup for the renderer. Returns null when not attached.
-std::shared_ptr<cardinal::vgeom::Hierarchy> vgeom_hierarchy_of(const Mesh& mesh);
+cardinal::shared_ptr<cardinal::vgeom::Hierarchy> vgeom_hierarchy_of(const Mesh& mesh);
 
 // Per-mesh stats published by the renderer each frame (drawn vs master
 // triangle count, cull statistics). Studio panel reads these.
