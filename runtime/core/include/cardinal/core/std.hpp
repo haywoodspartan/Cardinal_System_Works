@@ -21,7 +21,9 @@
 #include <cardinal/core/charconv.hpp>
 #include <cardinal/core/cmath.hpp>
 #include <cardinal/core/cstring.hpp>
+#include <cardinal/core/cctype.hpp>
 #include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/cstdarg.hpp>
 #include <cardinal/core/cstdlib.hpp>
 #include <cardinal/core/cassert.hpp>
 #include <cardinal/core/new.hpp>

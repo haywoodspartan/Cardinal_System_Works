@@ -42,11 +42,9 @@
 // case-insensitive, but the all_*() listings sort case-sensitively.
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
-
-#include <functional>
-#include <string>
-#include <vector>
+#include <cardinal/core/types.hpp>        // cardinal::function, cardinal::string
+#include <cardinal/core/utility.hpp>      // cardinal::move
+#include <cardinal/core/containers.hpp>   // cardinal::vector
 
 namespace cardinal::console {
 
@@ -57,14 +55,14 @@ namespace cardinal::console {
 // ----------------------------------------------------------------------------
 class Output {
 public:
-    using Fn = std::function<void(const std::string&)>;
-    explicit Output(Fn f) : fn_(std::move(f)) {}
+    using Fn = cardinal::function<void(const cardinal::string&)>;
+    explicit Output(Fn f) : fn_(cardinal::move(f)) {}
 
     // printf-style write — convenient for the common case of formatted lines.
     // The console panel scrollback and the Lua-bound write both come through
     // this entry, so bots and humans see identical output.
     void operator()(const char* fmt, ...);
-    void line(const std::string& s) { if (fn_) fn_(s); }
+    void line(const cardinal::string& s) { if (fn_) fn_(s); }
 
 private:
     Fn fn_;
@@ -80,8 +78,8 @@ private:
 enum class CVarType : u32 { Bool, Int, Float, String };
 
 struct CVar {
-    std::string name;        // dotted-namespace convention: "r.vsync", "world.render_dist_xz"
-    std::string help;        // one-line description shown in the UI
+    cardinal::string name;        // dotted-namespace convention: "r.vsync", "world.render_dist_xz"
+    cardinal::string help;        // one-line description shown in the UI
     CVarType    type{CVarType::Bool};
 
     // Range hints — only relevant for Int / Float, ignored otherwise.
@@ -91,14 +89,14 @@ struct CVar {
     // Type-erased getters / setters bind to live engine state. Each cvar
     // populates exactly one (get_*, set_*) pair matching `type`. The other
     // fields stay null and are never invoked.
-    std::function<bool()>        get_bool;
-    std::function<void(bool)>    set_bool;
-    std::function<i64()>         get_int;
-    std::function<void(i64)>     set_int;
-    std::function<f64()>         get_float;
-    std::function<void(f64)>     set_float;
-    std::function<std::string()> get_string;
-    std::function<void(const std::string&)> set_string;
+    cardinal::function<bool()>        get_bool;
+    cardinal::function<void(bool)>    set_bool;
+    cardinal::function<i64()>         get_int;
+    cardinal::function<void(i64)>     set_int;
+    cardinal::function<f64()>         get_float;
+    cardinal::function<void(f64)>     set_float;
+    cardinal::function<cardinal::string()> get_string;
+    cardinal::function<void(const cardinal::string&)> set_string;
 };
 
 // ----------------------------------------------------------------------------
@@ -107,10 +105,10 @@ struct CVar {
 // whitespace (with simple "double-quoted strings" support).
 // ----------------------------------------------------------------------------
 struct CCommand {
-    std::string name;        // dotted: "scene.list", "world.evict_all"
-    std::string help;        // shown by `help <name>` and in autocomplete tooltips
+    cardinal::string name;        // dotted: "scene.list", "world.evict_all"
+    cardinal::string help;        // shown by `help <name>` and in autocomplete tooltips
 
-    using Fn = std::function<void(const std::vector<std::string>& argv,
+    using Fn = cardinal::function<void(const cardinal::vector<cardinal::string>& argv,
                                   Output& out)>;
     Fn fn;
 };
@@ -129,21 +127,21 @@ public:
     // helper macros below use these.
     bool register_cvar   (CVar    cv);
     bool register_command(CCommand cc);
-    void unregister(const std::string& name);
+    void unregister(const cardinal::string& name);
     void clear();
 
     // ----- Lookup -----
-    const CVar*     find_cvar   (const std::string& name) const noexcept;
-    const CCommand* find_command(const std::string& name) const noexcept;
+    const CVar*     find_cvar   (const cardinal::string& name) const noexcept;
+    const CCommand* find_command(const cardinal::string& name) const noexcept;
 
     // Snapshot accessors for the UI — lists are sorted alphabetically so the
     // autocomplete popup is stable frame-to-frame.
-    std::vector<const CVar*>     all_cvars()    const;
-    std::vector<const CCommand*> all_commands() const;
+    cardinal::vector<const CVar*>     all_cvars()    const;
+    cardinal::vector<const CCommand*> all_commands() const;
 
     // Prefix autocomplete — returns up to `max_results` names (cvars + commands)
     // whose lowercased name starts with `prefix` (also lowercased).
-    std::vector<std::string> complete(const std::string& prefix,
+    cardinal::vector<cardinal::string> complete(const cardinal::string& prefix,
                                       usize max_results = 16) const;
 
     // ----- Execution -----
@@ -159,7 +157,7 @@ public:
     // Returns true if `input` resolved to a registered cvar / command. Returns
     // false (without writing to `out`) when nothing matched, so the caller
     // can fall through to a scripting engine.
-    bool execute(const std::string& input, Output& out);
+    bool execute(const cardinal::string& input, Output& out);
 
 private:
     Registry() = default;
@@ -167,14 +165,14 @@ private:
     Registry(const Registry&) = delete;
     Registry& operator=(const Registry&) = delete;
 
-    std::vector<CVar>     cvars_;
-    std::vector<CCommand> commands_;
+    cardinal::vector<CVar>     cvars_;
+    cardinal::vector<CCommand> commands_;
 };
 
 // ----------------------------------------------------------------------------
 // Convenience macros — wire a cvar / command into the Registry with a
 // single call, including builder boilerplate. Use inside engine init code.
-// Lambdas can capture by reference; the registry stores the std::function.
+// Lambdas can capture by reference; the registry stores the cardinal::function.
 //
 // Trailing args use `__VA_ARGS__` so call-site lambdas with multi-element
 // capture lists like `[a, b, c](...) { ... }` don't get split by the
@@ -189,7 +187,7 @@ private:
         _cv.name = (NAME); _cv.help = (HELP);                                  \
         _cv.type = cardinal::console::CVarType::Bool;                          \
         _cv.get_bool = (GET); _cv.set_bool = __VA_ARGS__;                      \
-        cardinal::console::Registry::instance().register_cvar(std::move(_cv)); \
+        cardinal::console::Registry::instance().register_cvar(cardinal::move(_cv)); \
     } while (0)
 
 #define CARDINAL_CVAR_INT(NAME, HELP, MIN, MAX, GET, ...)                      \
@@ -200,7 +198,7 @@ private:
         _cv.min = static_cast<cardinal::f64>(MIN);                             \
         _cv.max = static_cast<cardinal::f64>(MAX);                             \
         _cv.get_int = (GET); _cv.set_int = __VA_ARGS__;                        \
-        cardinal::console::Registry::instance().register_cvar(std::move(_cv)); \
+        cardinal::console::Registry::instance().register_cvar(cardinal::move(_cv)); \
     } while (0)
 
 #define CARDINAL_CVAR_FLOAT(NAME, HELP, MIN, MAX, GET, ...)                    \
@@ -211,7 +209,7 @@ private:
         _cv.min = static_cast<cardinal::f64>(MIN);                             \
         _cv.max = static_cast<cardinal::f64>(MAX);                             \
         _cv.get_float = (GET); _cv.set_float = __VA_ARGS__;                    \
-        cardinal::console::Registry::instance().register_cvar(std::move(_cv)); \
+        cardinal::console::Registry::instance().register_cvar(cardinal::move(_cv)); \
     } while (0)
 
 #define CARDINAL_CVAR_STRING(NAME, HELP, GET, ...)                             \
@@ -220,7 +218,7 @@ private:
         _cv.name = (NAME); _cv.help = (HELP);                                  \
         _cv.type = cardinal::console::CVarType::String;                        \
         _cv.get_string = (GET); _cv.set_string = __VA_ARGS__;                  \
-        cardinal::console::Registry::instance().register_cvar(std::move(_cv)); \
+        cardinal::console::Registry::instance().register_cvar(cardinal::move(_cv)); \
     } while (0)
 
 #define CARDINAL_CCOMMAND(NAME, HELP, ...)                                     \
@@ -228,7 +226,7 @@ private:
         cardinal::console::CCommand _cc;                                       \
         _cc.name = (NAME); _cc.help = (HELP);                                  \
         _cc.fn   = __VA_ARGS__;                                                \
-        cardinal::console::Registry::instance().register_command(std::move(_cc)); \
+        cardinal::console::Registry::instance().register_command(cardinal::move(_cc)); \
     } while (0)
 
 }  // namespace cardinal::console

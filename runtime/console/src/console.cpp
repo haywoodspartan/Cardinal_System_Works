@@ -3,12 +3,12 @@
 // =============================================================================
 #include <cardinal/console/console.hpp>
 
-#include <algorithm>
-#include <cctype>
-#include <cstdarg>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
+#include <cardinal/core/algorithm.hpp>   // cardinal::min/sort/unique/clamp
+#include <cardinal/core/cctype.hpp>      // cardinal::tolower/isspace
+#include <cardinal/core/cstdarg.hpp>     // cardinal::va_list (+ va_* macros)
+#include <cardinal/core/cstdio.hpp>      // cardinal::vsnprintf
+#include <cardinal/core/cstdlib.hpp>     // cardinal::strtoll/strtod
+#include <cardinal/core/cstring.hpp>
 
 namespace cardinal::console {
 
@@ -20,10 +20,10 @@ void Output::operator()(const char* fmt, ...) {
     char buf[1024];
     va_list ap;
     va_start(ap, fmt);
-    const int n = std::vsnprintf(buf, sizeof(buf), fmt, ap);
+    const int n = cardinal::vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     if (n < 0) return;
-    fn_(std::string(buf, static_cast<usize>(std::min<int>(n, sizeof(buf) - 1))));
+    fn_(cardinal::string(buf, static_cast<usize>(cardinal::min<int>(n, sizeof(buf) - 1))));
 }
 
 // ----------------------------------------------------------------------------
@@ -31,16 +31,16 @@ void Output::operator()(const char* fmt, ...) {
 // ----------------------------------------------------------------------------
 namespace {
 
-std::string lower(std::string s) {
-    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+cardinal::string lower(cardinal::string s) {
+    for (auto& c : s) c = static_cast<char>(cardinal::tolower(static_cast<unsigned char>(c)));
     return s;
 }
 
-bool ieq(const std::string& a, const std::string& b) noexcept {
+bool ieq(const cardinal::string& a, const cardinal::string& b) noexcept {
     if (a.size() != b.size()) return false;
     for (usize i = 0; i < a.size(); ++i) {
-        if (std::tolower(static_cast<unsigned char>(a[i])) !=
-            std::tolower(static_cast<unsigned char>(b[i]))) return false;
+        if (cardinal::tolower(static_cast<unsigned char>(a[i])) !=
+            cardinal::tolower(static_cast<unsigned char>(b[i]))) return false;
     }
     return true;
 }
@@ -48,45 +48,45 @@ bool ieq(const std::string& a, const std::string& b) noexcept {
 // Split a console line into tokens. "double quoted strings" survive as one
 // token; everything else is whitespace-separated. Backslash-escapes are not
 // supported (UE5 does the same — quotes are literal containers, no escapes).
-std::vector<std::string> tokenize(const std::string& s) {
-    std::vector<std::string> out;
-    std::string cur;
+cardinal::vector<cardinal::string> tokenize(const cardinal::string& s) {
+    cardinal::vector<cardinal::string> out;
+    cardinal::string cur;
     bool in_quote = false;
     for (char c : s) {
         if (in_quote) {
-            if (c == '"') { out.push_back(std::move(cur)); cur.clear(); in_quote = false; }
+            if (c == '"') { out.push_back(cardinal::move(cur)); cur.clear(); in_quote = false; }
             else          { cur.push_back(c); }
         } else if (c == '"') {
-            if (!cur.empty()) { out.push_back(std::move(cur)); cur.clear(); }
+            if (!cur.empty()) { out.push_back(cardinal::move(cur)); cur.clear(); }
             in_quote = true;
-        } else if (std::isspace(static_cast<unsigned char>(c))) {
-            if (!cur.empty()) { out.push_back(std::move(cur)); cur.clear(); }
+        } else if (cardinal::isspace(static_cast<unsigned char>(c))) {
+            if (!cur.empty()) { out.push_back(cardinal::move(cur)); cur.clear(); }
         } else {
             cur.push_back(c);
         }
     }
-    if (!cur.empty()) out.push_back(std::move(cur));
+    if (!cur.empty()) out.push_back(cardinal::move(cur));
     return out;
 }
 
-bool parse_bool(const std::string& s, bool& out) noexcept {
-    const std::string l = lower(s);
+bool parse_bool(const cardinal::string& s, bool& out) noexcept {
+    const cardinal::string l = lower(s);
     if (l == "1" || l == "true" || l == "on"  || l == "yes")  { out = true;  return true; }
     if (l == "0" || l == "false"|| l == "off" || l == "no")   { out = false; return true; }
     return false;
 }
 
-bool parse_int(const std::string& s, i64& out) noexcept {
+bool parse_int(const cardinal::string& s, i64& out) noexcept {
     char* end = nullptr;
-    const long long v = std::strtoll(s.c_str(), &end, 0);
+    const long long v = cardinal::strtoll(s.c_str(), &end, 0);
     if (end == s.c_str()) return false;
     out = static_cast<i64>(v);
     return true;
 }
 
-bool parse_float(const std::string& s, f64& out) noexcept {
+bool parse_float(const cardinal::string& s, f64& out) noexcept {
     char* end = nullptr;
-    const double v = std::strtod(s.c_str(), &end);
+    const double v = cardinal::strtod(s.c_str(), &end);
     if (end == s.c_str()) return false;
     out = static_cast<f64>(v);
     return true;
@@ -106,7 +106,7 @@ bool Registry::register_cvar(CVar cv) {
     if (cv.name.empty()) return false;
     if (find_cvar(cv.name) != nullptr) return false;
     if (find_command(cv.name) != nullptr) return false;
-    cvars_.push_back(std::move(cv));
+    cvars_.push_back(cardinal::move(cv));
     return true;
 }
 
@@ -114,11 +114,11 @@ bool Registry::register_command(CCommand cc) {
     if (cc.name.empty() || cc.fn == nullptr) return false;
     if (find_cvar(cc.name) != nullptr) return false;
     if (find_command(cc.name) != nullptr) return false;
-    commands_.push_back(std::move(cc));
+    commands_.push_back(cardinal::move(cc));
     return true;
 }
 
-void Registry::unregister(const std::string& name) {
+void Registry::unregister(const cardinal::string& name) {
     for (auto it = cvars_.begin(); it != cvars_.end(); ++it) {
         if (ieq(it->name, name)) { cvars_.erase(it); return; }
     }
@@ -132,50 +132,50 @@ void Registry::clear() {
     commands_.clear();
 }
 
-const CVar* Registry::find_cvar(const std::string& name) const noexcept {
+const CVar* Registry::find_cvar(const cardinal::string& name) const noexcept {
     for (const auto& c : cvars_) if (ieq(c.name, name)) return &c;
     return nullptr;
 }
 
-const CCommand* Registry::find_command(const std::string& name) const noexcept {
+const CCommand* Registry::find_command(const cardinal::string& name) const noexcept {
     for (const auto& c : commands_) if (ieq(c.name, name)) return &c;
     return nullptr;
 }
 
-std::vector<const CVar*> Registry::all_cvars() const {
-    std::vector<const CVar*> out;
+cardinal::vector<const CVar*> Registry::all_cvars() const {
+    cardinal::vector<const CVar*> out;
     out.reserve(cvars_.size());
     for (const auto& c : cvars_) out.push_back(&c);
-    std::sort(out.begin(), out.end(),
+    cardinal::sort(out.begin(), out.end(),
               [](const CVar* a, const CVar* b) { return a->name < b->name; });
     return out;
 }
 
-std::vector<const CCommand*> Registry::all_commands() const {
-    std::vector<const CCommand*> out;
+cardinal::vector<const CCommand*> Registry::all_commands() const {
+    cardinal::vector<const CCommand*> out;
     out.reserve(commands_.size());
     for (const auto& c : commands_) out.push_back(&c);
-    std::sort(out.begin(), out.end(),
+    cardinal::sort(out.begin(), out.end(),
               [](const CCommand* a, const CCommand* b) { return a->name < b->name; });
     return out;
 }
 
-std::vector<std::string> Registry::complete(const std::string& prefix,
+cardinal::vector<cardinal::string> Registry::complete(const cardinal::string& prefix,
                                             usize max_results) const {
-    std::vector<std::string> out;
+    cardinal::vector<cardinal::string> out;
     out.reserve(max_results);
-    const std::string p = lower(prefix);
-    auto consider = [&](const std::string& name) {
+    const cardinal::string p = lower(prefix);
+    auto consider = [&](const cardinal::string& name) {
         if (out.size() >= max_results) return;
-        const std::string ln = lower(name);
+        const cardinal::string ln = lower(name);
         if (ln.size() < p.size()) return;
         if (ln.compare(0, p.size(), p) != 0) return;
         out.push_back(name);
     };
     for (const auto& c : cvars_)    consider(c.name);
     for (const auto& c : commands_) consider(c.name);
-    std::sort(out.begin(), out.end());
-    out.erase(std::unique(out.begin(), out.end()), out.end());
+    cardinal::sort(out.begin(), out.end());
+    out.erase(cardinal::unique(out.begin(), out.end()), out.end());
     if (out.size() > max_results) out.resize(max_results);
     return out;
 }
@@ -219,7 +219,7 @@ void print_cvar(const CVar& cv, Output& out) {
     }
 }
 
-bool apply_cvar(const CVar& cv, const std::string& raw_value, Output& out) {
+bool apply_cvar(const CVar& cv, const cardinal::string& raw_value, Output& out) {
     switch (cv.type) {
         case CVarType::Bool: {
             bool b{};
@@ -244,7 +244,7 @@ bool apply_cvar(const CVar& cv, const std::string& raw_value, Output& out) {
                     static_cast<long long>(v),
                     static_cast<long long>(lo),
                     static_cast<long long>(hi));
-                v = std::clamp(v, lo, hi);
+                v = cardinal::clamp(v, lo, hi);
             }
             if (cv.set_int) cv.set_int(v);
             return true;
@@ -258,7 +258,7 @@ bool apply_cvar(const CVar& cv, const std::string& raw_value, Output& out) {
             if (cv.min < cv.max && (v < cv.min || v > cv.max)) {
                 out("warning: clamping %.6g to [%.4g..%.4g]",
                     v, cv.min, cv.max);
-                v = std::clamp(v, cv.min, cv.max);
+                v = cardinal::clamp(v, cv.min, cv.max);
             }
             if (cv.set_float) cv.set_float(v);
             return true;
@@ -273,11 +273,11 @@ bool apply_cvar(const CVar& cv, const std::string& raw_value, Output& out) {
 
 }  // namespace
 
-bool Registry::execute(const std::string& input, Output& out) {
+bool Registry::execute(const cardinal::string& input, Output& out) {
     auto argv = tokenize(input);
     if (argv.empty()) return false;
 
-    const std::string& head = argv[0];
+    const cardinal::string& head = argv[0];
 
     // Built-in `help` / `?` — list categories or describe one entry. Handled
     // before lookup so users can `help` even when nothing else is bound.
@@ -288,7 +288,7 @@ bool Registry::execute(const std::string& input, Output& out) {
             out("Built-ins: help, ?, list, list cvars, list commands");
             return true;
         }
-        const std::string& q = argv[1];
+        const cardinal::string& q = argv[1];
         if (const auto* cv = find_cvar(q)) {
             print_cvar(*cv, out);
             return true;
@@ -322,7 +322,7 @@ bool Registry::execute(const std::string& input, Output& out) {
             print_cvar(*cv, out);
         } else {
             // Re-join args 1..N so set_string preserves the user's spaces.
-            std::string value;
+            cardinal::string value;
             for (usize i = 1; i < argv.size(); ++i) {
                 if (i > 1) value.push_back(' ');
                 value += argv[i];
