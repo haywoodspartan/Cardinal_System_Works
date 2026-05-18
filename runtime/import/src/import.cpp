@@ -12,13 +12,15 @@
 #include <cardinal/import/import.hpp>
 #include <cardinal/core/log.hpp>
 
-#include <algorithm>
-#include <cmath>
-#include <cstdlib>
-#include <cstring>
-#include <fstream>
-#include <sstream>
-#include <unordered_map>
+#include <cardinal/core/algorithm.hpp>    // cardinal::min/max/sort
+#include <cardinal/core/cctype.hpp>       // cardinal::tolower
+#include <cardinal/core/cmath.hpp>        // cardinal::sqrt
+#include <cardinal/core/cstdlib.hpp>      // cardinal::strtol
+#include <cardinal/core/cstring.hpp>      // cardinal raw byte ops
+#include <cardinal/core/fstream.hpp>      // cardinal::ifstream/ios/getline
+#include <cardinal/core/sstream.hpp>      // cardinal::istringstream/ostringstream
+#include <cardinal/core/utility.hpp>      // cardinal::move
+#include <cardinal/core/containers.hpp>   // cardinal::unordered_map/vector
 
 namespace cardinal::import {
 
@@ -36,25 +38,25 @@ const char* format_name(Format f) noexcept {
 
 namespace {
 
-std::string to_lower(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::tolower(
+cardinal::string to_lower(cardinal::string s) {
+    for (char& c : s) c = static_cast<char>(cardinal::tolower(
         static_cast<unsigned char>(c)));
     return s;
 }
-std::string ext_of(const std::string& path) {
+cardinal::string ext_of(const cardinal::string& path) {
     const auto dot = path.find_last_of('.');
-    if (dot == std::string::npos) return {};
+    if (dot == cardinal::string::npos) return {};
     return to_lower(path.substr(dot));
 }
-std::string dir_of(const std::string& path) {
+cardinal::string dir_of(const cardinal::string& path) {
     const auto s = path.find_last_of("/\\");
-    return (s == std::string::npos) ? std::string{} : path.substr(0, s + 1);
+    return (s == cardinal::string::npos) ? cardinal::string{} : path.substr(0, s + 1);
 }
 
 }  // namespace
 
-Format detect_format(const std::string& path) noexcept {
-    const std::string e = ext_of(path);
+Format detect_format(const cardinal::string& path) noexcept {
+    const cardinal::string e = ext_of(path);
     if (e == ".obj")  return Format::Obj;
     if (e == ".gltf") return Format::Gltf;
     if (e == ".glb")  return Format::Glb;
@@ -80,19 +82,19 @@ u32 ImportScene::total_triangles() const noexcept {
 // ---------------------------------------------------------------------------
 namespace {
 
-void parse_mtl(const std::string& mtl_path,
-               std::vector<ImportMaterial>& out,
-               std::unordered_map<std::string, int>& by_name) {
-    std::ifstream f(mtl_path, std::ios::binary);
+void parse_mtl(const cardinal::string& mtl_path,
+               cardinal::vector<ImportMaterial>& out,
+               cardinal::unordered_map<cardinal::string, int>& by_name) {
+    cardinal::ifstream f(mtl_path, cardinal::ios::binary);
     if (!f) return;
     ImportMaterial* cur = nullptr;
-    std::string line;
-    while (std::getline(f, line)) {
-        std::istringstream ls(line);
-        std::string tok;
+    cardinal::string line;
+    while (cardinal::getline(f, line)) {
+        cardinal::istringstream ls(line);
+        cardinal::string tok;
         if (!(ls >> tok) || tok.empty() || tok[0] == '#') continue;
         if (tok == "newmtl") {
-            std::string nm; ls >> nm;
+            cardinal::string nm; ls >> nm;
             ImportMaterial m; m.name = nm;
             by_name[nm] = static_cast<int>(out.size());
             out.push_back(m);
@@ -103,21 +105,21 @@ void parse_mtl(const std::string& mtl_path,
             ls >> cur->base_color.x >> cur->base_color.y >> cur->base_color.z;
         } else if (tok == "Ke") {
             ls >> cur->emission.x >> cur->emission.y >> cur->emission.z;
-            const float m = std::max({cur->emission.x, cur->emission.y,
+            const float m = cardinal::max({cur->emission.x, cur->emission.y,
                                       cur->emission.z});
             cur->emission_strength = (m > 0.0f) ? 1.0f : 0.0f;
         } else if (tok == "Ns") {
             float ns = 0.0f; ls >> ns;
             // Blinn-Phong exponent → GGX-ish roughness. Clamp off 0/1.
-            const float r = std::sqrt(2.0f / (std::max(ns, 0.0f) + 2.0f));
-            cur->roughness = std::min(1.0f, std::max(0.03f, r));
+            const float r = cardinal::sqrt(2.0f / (cardinal::max(ns, 0.0f) + 2.0f));
+            cur->roughness = cardinal::min(1.0f, cardinal::max(0.03f, r));
         } else if (tok == "Pr") {            // PBR ext: roughness
             ls >> cur->roughness;
         } else if (tok == "Pm") {            // PBR ext: metallic
             ls >> cur->metallic;
         } else if (tok == "map_Kd") {
             // Last whitespace token is the path (skip -options).
-            std::string last, t;
+            cardinal::string last, t;
             while (ls >> t) last = t;
             cur->base_color_texture = last;
         }
@@ -127,26 +129,26 @@ void parse_mtl(const std::string& mtl_path,
 // One face-vertex of an OBJ `f` token: 1-based v / vt / vn (0 = absent).
 struct FaceRef { long v{0}, vt{0}, vn{0}; };
 
-FaceRef parse_face_ref(const std::string& s) {
+FaceRef parse_face_ref(const cardinal::string& s) {
     FaceRef r;
     // forms: v   v/vt   v//vn   v/vt/vn
     long* slots[3] = { &r.v, &r.vt, &r.vn };
     int slot = 0;
-    std::size_t i = 0;
+    cardinal::size_t i = 0;
     while (i <= s.size() && slot < 3) {
-        std::size_t j = s.find('/', i);
-        const std::string part = (j == std::string::npos)
+        cardinal::size_t j = s.find('/', i);
+        const cardinal::string part = (j == cardinal::string::npos)
             ? s.substr(i) : s.substr(i, j - i);
-        if (!part.empty()) *slots[slot] = std::strtol(part.c_str(), nullptr, 10);
+        if (!part.empty()) *slots[slot] = cardinal::strtol(part.c_str(), nullptr, 10);
         ++slot;
-        if (j == std::string::npos) break;
+        if (j == cardinal::string::npos) break;
         i = j + 1;
     }
     return r;
 }
 
 // Resolve a possibly-negative/1-based OBJ index to 0-based, or -1.
-long resolve_idx(long idx, std::size_t count) {
+long resolve_idx(long idx, cardinal::size_t count) {
     if (idx > 0)  return idx - 1;
     if (idx < 0)  return static_cast<long>(count) + idx;   // relative
     return -1;                                             // absent
@@ -155,11 +157,11 @@ long resolve_idx(long idx, std::size_t count) {
 // Per-output-mesh de-dup of (v,vt,vn) triples → compact vertex+index.
 struct MeshBuilder {
     ImportMesh mesh;
-    std::unordered_map<u64, u32> dedup;
+    cardinal::unordered_map<u64, u32> dedup;
 
     u32 emit(const FaceRef& fr,
-             const std::vector<Vec3>& P, const std::vector<Vec3>& N,
-             const std::vector<Vec3>& C, const std::vector<Vec2>& T) {
+             const cardinal::vector<Vec3>& P, const cardinal::vector<Vec3>& N,
+             const cardinal::vector<Vec3>& C, const cardinal::vector<Vec2>& T) {
         const long vi = resolve_idx(fr.v,  P.size());
         const long ti = resolve_idx(fr.vt, T.size());
         const long ni = resolve_idx(fr.vn, N.size());
@@ -186,38 +188,38 @@ struct MeshBuilder {
 
 }  // namespace
 
-ImportScene import_obj(const std::string& path, std::string* error) {
+ImportScene import_obj(const cardinal::string& path, cardinal::string* error) {
     ImportScene scene;
     scene.source_format = "obj";
 
-    std::ifstream f(path, std::ios::binary);
+    cardinal::ifstream f(path, cardinal::ios::binary);
     if (!f) {
         if (error) *error = "cannot open '" + path + "'";
         scene.diagnostics = "OBJ: open failed";
         return scene;
     }
-    const std::string base = dir_of(path);
+    const cardinal::string base = dir_of(path);
 
-    std::vector<Vec3> P, N, C;     // C parallel to P (per-vertex colour)
-    std::vector<Vec2> T;
+    cardinal::vector<Vec3> P, N, C;     // C parallel to P (per-vertex colour)
+    cardinal::vector<Vec2> T;
     bool have_colors = false;
 
-    std::unordered_map<std::string, int> mtl_by_name;
+    cardinal::unordered_map<cardinal::string, int> mtl_by_name;
     auto flush = [&](MeshBuilder& mb) {
         if (!mb.mesh.positions.empty() && !mb.mesh.indices.empty())
-            scene.meshes.push_back(std::move(mb.mesh));
+            scene.meshes.push_back(cardinal::move(mb.mesh));
         mb = MeshBuilder{};
     };
     MeshBuilder mb;
     int  cur_mat   = -1;
     bool mesh_open = false;
-    std::string cur_name = "mesh";
+    cardinal::string cur_name = "mesh";
 
-    std::string line;
-    while (std::getline(f, line)) {
+    cardinal::string line;
+    while (cardinal::getline(f, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        std::istringstream ls(line);
-        std::string tok;
+        cardinal::istringstream ls(line);
+        cardinal::string tok;
         if (!(ls >> tok) || tok.empty() || tok[0] == '#') continue;
 
         if (tok == "v") {
@@ -237,10 +239,10 @@ ImportScene import_obj(const std::string& path, std::string* error) {
             mb.mesh.material = cur_mat;
             mesh_open = true;
         } else if (tok == "mtllib") {
-            std::string mp; ls >> mp;
+            cardinal::string mp; ls >> mp;
             parse_mtl(base + mp, scene.materials, mtl_by_name);
         } else if (tok == "usemtl") {
-            std::string mn; ls >> mn;
+            cardinal::string mn; ls >> mn;
             auto it = mtl_by_name.find(mn);
             cur_mat = (it != mtl_by_name.end()) ? it->second : -1;
             // Material change mid-group → split (one material per mesh).
@@ -253,11 +255,11 @@ ImportScene import_obj(const std::string& path, std::string* error) {
         } else if (tok == "f") {
             if (!mesh_open) { mb.mesh.name = cur_name;
                               mb.mesh.material = cur_mat; mesh_open = true; }
-            std::vector<FaceRef> fr;
-            std::string vtok;
+            cardinal::vector<FaceRef> fr;
+            cardinal::string vtok;
             while (ls >> vtok) fr.push_back(parse_face_ref(vtok));
             // Fan-triangulate the polygon.
-            for (std::size_t i = 2; i < fr.size(); ++i) {
+            for (cardinal::size_t i = 2; i < fr.size(); ++i) {
                 mb.mesh.indices.push_back(mb.emit(fr[0],     P, N, C, T));
                 mb.mesh.indices.push_back(mb.emit(fr[i - 1], P, N, C, T));
                 mb.mesh.indices.push_back(mb.emit(fr[i],     P, N, C, T));
@@ -275,15 +277,15 @@ ImportScene import_obj(const std::string& path, std::string* error) {
         return scene;
     }
     // Node per mesh (flat scene — OBJ has no hierarchy).
-    for (std::size_t i = 0; i < scene.meshes.size(); ++i) {
+    for (cardinal::size_t i = 0; i < scene.meshes.size(); ++i) {
         ImportNode nd;
         nd.name = scene.meshes[i].name;
         nd.meshes.push_back(static_cast<int>(i));
         scene.roots.push_back(static_cast<int>(scene.nodes.size()));
-        scene.nodes.push_back(std::move(nd));
+        scene.nodes.push_back(cardinal::move(nd));
     }
     scene.ok = true;
-    std::ostringstream d;
+    cardinal::ostringstream d;
     d << "OBJ: " << scene.meshes.size() << " mesh(es), "
       << scene.materials.size() << " material(s), "
       << scene.total_vertices() << " verts, "
@@ -296,7 +298,7 @@ ImportScene import_obj(const std::string& path, std::string* error) {
 
 // import_gltf() is implemented in import_gltf.cpp (glTF 2.0 / GLB).
 
-ImportScene import_file(const std::string& path, std::string* error) {
+ImportScene import_file(const cardinal::string& path, cardinal::string* error) {
     switch (detect_format(path)) {
         case Format::Obj:  return import_obj(path, error);
         case Format::Gltf:

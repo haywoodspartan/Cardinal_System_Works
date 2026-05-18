@@ -25,10 +25,9 @@
 // projects it onto the engine's runtime asset structs for immediate use.
 // =============================================================================
 
-#include <cardinal/core/types.hpp>   // foundation: string / u32 / …
+#include <cardinal/core/types.hpp>        // foundation: string / u32 / …
+#include <cardinal/core/containers.hpp>   // cardinal::vector
 #include <cardinal/scene/math.hpp>
-
-#include <vector>
 
 // NOTE: cardinal::import is deliberately core+scene only (NOT asset).
 // asset depends on cook, so an import→asset link would form an
@@ -53,11 +52,11 @@ Format      detect_format(const cardinal::string& path) noexcept;
 // ---------------------------------------------------------------------------
 struct ImportMesh {
     cardinal::string                        name;
-    std::vector<cardinal::scene::Vec3> positions;
-    std::vector<cardinal::scene::Vec3> normals;     // empty ⇒ flat-shade later
-    std::vector<cardinal::scene::Vec3> colors;      // empty ⇒ white
-    std::vector<Vec2>                  uvs;          // empty ⇒ none
-    std::vector<u32>                   indices;      // triangle list
+    cardinal::vector<cardinal::scene::Vec3> positions;
+    cardinal::vector<cardinal::scene::Vec3> normals;     // empty ⇒ flat-shade later
+    cardinal::vector<cardinal::scene::Vec3> colors;      // empty ⇒ white
+    cardinal::vector<Vec2>                  uvs;          // empty ⇒ none
+    cardinal::vector<u32>                   indices;      // triangle list
     int                                material{-1}; // into ImportScene.materials
 };
 
@@ -75,15 +74,15 @@ struct ImportMaterial {
 struct ImportNode {
     cardinal::string           name;
     cardinal::scene::Mat4 transform{cardinal::scene::Mat4::identity()};
-    std::vector<int>      meshes;     // indices into ImportScene.meshes
-    std::vector<int>      children;   // indices into ImportScene.nodes
+    cardinal::vector<int>      meshes;     // indices into ImportScene.meshes
+    cardinal::vector<int>      children;   // indices into ImportScene.nodes
 };
 
 struct ImportScene {
-    std::vector<ImportMesh>     meshes;
-    std::vector<ImportMaterial> materials;
-    std::vector<ImportNode>     nodes;
-    std::vector<int>            roots;       // root node indices
+    cardinal::vector<ImportMesh>     meshes;
+    cardinal::vector<ImportMaterial> materials;
+    cardinal::vector<ImportNode>     nodes;
+    cardinal::vector<int>            roots;       // root node indices
     cardinal::string                 source_format;
     cardinal::string                 diagnostics; // human-readable summary
     bool                        ok{false};

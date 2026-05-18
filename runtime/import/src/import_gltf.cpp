@@ -23,11 +23,15 @@
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/math.hpp>
 
-#include <cmath>
-#include <cstring>
-#include <fstream>
-#include <sstream>
-#include <unordered_map>
+#include <cardinal/core/algorithm.hpp>    // cardinal::min/max
+#include <cardinal/core/cctype.hpp>       // cardinal::isspace/isdigit
+#include <cardinal/core/cmath.hpp>        // cardinal scalar math
+#include <cardinal/core/cstdlib.hpp>      // cardinal::strtod/strtol
+#include <cardinal/core/cstring.hpp>      // cardinal::memcpy
+#include <cardinal/core/fstream.hpp>      // cardinal::ifstream/ios
+#include <cardinal/core/sstream.hpp>      // cardinal::stringstream
+#include <cardinal/core/utility.hpp>      // cardinal::move
+#include <cardinal/core/containers.hpp>   // cardinal::unordered_map/vector
 
 namespace cardinal::import {
 
@@ -44,9 +48,9 @@ struct JVal {
     enum class T { Null, Bool, Num, Str, Arr, Obj } t{T::Null};
     bool                                       b{false};
     double                                     n{0.0};
-    std::string                                s;
-    std::vector<JVal>                          arr;
-    std::unordered_map<std::string, JVal>      obj;
+    cardinal::string                                s;
+    cardinal::vector<JVal>                          arr;
+    cardinal::unordered_map<cardinal::string, JVal>      obj;
 
     bool is_obj() const { return t == T::Obj; }
     bool is_arr() const { return t == T::Arr; }
@@ -57,7 +61,7 @@ struct JVal {
     }
     double num(double dflt = 0.0) const { return t == T::Num ? n : dflt; }
     int    inum(int dflt = -1)    const { return t == T::Num ? static_cast<int>(n) : dflt; }
-    std::string str() const { return t == T::Str ? s : std::string{}; }
+    cardinal::string str() const { return t == T::Str ? s : cardinal::string{}; }
 };
 
 struct JParser {
@@ -86,10 +90,10 @@ struct JParser {
         if (p < e && *p == '}') { ++p; return v; }
         while (p < e) {
             ws();
-            std::string key = string();
+            cardinal::string key = string();
             ws();
             if (p < e && *p == ':') ++p;
-            v.obj.emplace(std::move(key), value());
+            v.obj.emplace(cardinal::move(key), value());
             ws();
             if (p < e && *p == ',') { ++p; continue; }
             if (p < e && *p == '}') { ++p; break; }
@@ -109,8 +113,8 @@ struct JParser {
         }
         return v;
     }
-    std::string string() {
-        std::string out;
+    cardinal::string string() {
+        cardinal::string out;
         if (p >= e || *p != '"') { ok = false; return out; }
         ++p;
         while (p < e && *p != '"') {
@@ -128,7 +132,7 @@ struct JParser {
                         // Basic-plane only; good enough for asset names.
                         if (e - p >= 4) {
                             int cp = static_cast<int>(
-                                std::strtol(std::string(p, p+4).c_str(),
+                                cardinal::strtol(cardinal::string(p, p+4).c_str(),
                                             nullptr, 16));
                             p += 4;
                             if (cp < 0x80) out += static_cast<char>(cp);
@@ -154,8 +158,8 @@ struct JParser {
     }
     JVal boolean() {
         JVal v; v.t = JVal::T::Bool;
-        if (e - p >= 4 && std::strncmp(p, "true", 4) == 0)  { v.b=true;  p+=4; }
-        else if (e - p >= 5 && std::strncmp(p,"false",5)==0){ v.b=false; p+=5; }
+        if (e - p >= 4 && cardinal::strncmp(p, "true", 4) == 0)  { v.b=true;  p+=4; }
+        else if (e - p >= 5 && cardinal::strncmp(p,"false",5)==0){ v.b=false; p+=5; }
         else ok = false;
         return v;
     }
@@ -164,7 +168,7 @@ struct JParser {
         while (p < e && (*p=='-'||*p=='+'||*p=='.'||*p=='e'||*p=='E'||
                          (*p>='0'&&*p<='9'))) ++p;
         JVal v; v.t = JVal::T::Num;
-        v.n = std::strtod(std::string(s, p).c_str(), nullptr);
+        v.n = cardinal::strtod(cardinal::string(s, p).c_str(), nullptr);
         return v;
     }
 };
@@ -172,7 +176,7 @@ struct JParser {
 // ---------------------------------------------------------------------------
 // base64 (for "data:...;base64," buffer URIs).
 // ---------------------------------------------------------------------------
-std::vector<u8> b64_decode(const std::string& in) {
+cardinal::vector<u8> b64_decode(const cardinal::string& in) {
     static const auto val = [](char c) -> int {
         if (c >= 'A' && c <= 'Z') return c - 'A';
         if (c >= 'a' && c <= 'z') return c - 'a' + 26;
@@ -181,7 +185,7 @@ std::vector<u8> b64_decode(const std::string& in) {
         if (c == '/') return 63;
         return -1;
     };
-    std::vector<u8> out;
+    cardinal::vector<u8> out;
     int bits = 0, acc = 0;
     for (char c : in) {
         if (c == '=') break;
@@ -194,17 +198,17 @@ std::vector<u8> b64_decode(const std::string& in) {
     return out;
 }
 
-std::string dir_of(const std::string& path) {
+cardinal::string dir_of(const cardinal::string& path) {
     const auto s = path.find_last_of("/\\");
-    return (s == std::string::npos) ? std::string{} : path.substr(0, s + 1);
+    return (s == cardinal::string::npos) ? cardinal::string{} : path.substr(0, s + 1);
 }
 
-std::vector<u8> read_file(const std::string& path) {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
+cardinal::vector<u8> read_file(const cardinal::string& path) {
+    cardinal::ifstream f(path, cardinal::ios::binary | cardinal::ios::ate);
     if (!f) return {};
-    const std::streamsize n = f.tellg();
+    const cardinal::streamsize n = f.tellg();
     f.seekg(0);
-    std::vector<u8> v(static_cast<std::size_t>(n));
+    cardinal::vector<u8> v(static_cast<cardinal::size_t>(n));
     if (n > 0) f.read(reinterpret_cast<char*>(v.data()), n);
     return v;
 }
@@ -213,7 +217,7 @@ std::vector<u8> read_file(const std::string& path) {
 constexpr int CT_BYTE=5120, CT_UBYTE=5121, CT_SHORT=5122,
               CT_USHORT=5123, CT_UINT=5125, CT_FLOAT=5126;
 
-int comp_count(const std::string& type) {
+int comp_count(const cardinal::string& type) {
     if (type == "SCALAR") return 1;
     if (type == "VEC2")   return 2;
     if (type == "VEC3")   return 3;
@@ -233,15 +237,15 @@ int comp_size(int ct) {
 // Read one normalized/float component as float.
 float read_comp(const u8* p, int ct, bool normalized) {
     switch (ct) {
-        case CT_FLOAT: { float f; std::memcpy(&f, p, 4); return f; }
+        case CT_FLOAT: { float f; cardinal::memcpy(&f, p, 4); return f; }
         case CT_UBYTE: { u8  u=*p;  return normalized ? u/255.0f   : float(u); }
-        case CT_BYTE:  { i8 s; std::memcpy(&s,p,1);
-                         return normalized ? std::max(s/127.0f,-1.0f) : float(s); }
-        case CT_USHORT:{ u16 u; std::memcpy(&u,p,2);
+        case CT_BYTE:  { i8 s; cardinal::memcpy(&s,p,1);
+                         return normalized ? cardinal::max(s/127.0f,-1.0f) : float(s); }
+        case CT_USHORT:{ u16 u; cardinal::memcpy(&u,p,2);
                          return normalized ? u/65535.0f : float(u); }
-        case CT_SHORT: { i16 s; std::memcpy(&s,p,2);
-                         return normalized ? std::max(s/32767.0f,-1.0f):float(s);}
-        case CT_UINT:  { u32 u; std::memcpy(&u,p,4); return float(u); }
+        case CT_SHORT: { i16 s; cardinal::memcpy(&s,p,2);
+                         return normalized ? cardinal::max(s/32767.0f,-1.0f):float(s);}
+        case CT_UINT:  { u32 u; cardinal::memcpy(&u,p,4); return float(u); }
         default:       return 0.0f;
     }
 }
@@ -249,19 +253,19 @@ float read_comp(const u8* p, int ct, bool normalized) {
 // Decoded buffers + the parsed doc, threaded through the readers.
 struct GltfCtx {
     JVal                          doc;
-    std::vector<std::vector<u8>>  buffers;   // by buffer index
+    cardinal::vector<cardinal::vector<u8>>  buffers;   // by buffer index
 };
 
 // accessor index → flat float array (count * ncomp), row per element.
-std::vector<float> read_accessor(const GltfCtx& g, int acc_idx, int& ncomp) {
-    std::vector<float> out;
+cardinal::vector<float> read_accessor(const GltfCtx& g, int acc_idx, int& ncomp) {
+    cardinal::vector<float> out;
     const JVal* accs = g.doc.find("accessors");
     const JVal* bvs  = g.doc.find("bufferViews");
     if (!accs || acc_idx < 0 || acc_idx >= (int)accs->arr.size()) return out;
     const JVal& a = accs->arr[acc_idx];
     const int ct  = a.find("componentType") ? a.find("componentType")->inum() : CT_FLOAT;
     const int cnt = a.find("count") ? a.find("count")->inum(0) : 0;
-    const std::string type = a.find("type") ? a.find("type")->str() : "SCALAR";
+    const cardinal::string type = a.find("type") ? a.find("type")->str() : "SCALAR";
     ncomp = comp_count(type);
     const bool norm = a.find("normalized") && a.find("normalized")->b;
     const int  a_off = a.find("byteOffset") ? a.find("byteOffset")->inum(0) : 0;
@@ -272,15 +276,15 @@ std::vector<float> read_accessor(const GltfCtx& g, int acc_idx, int& ncomp) {
     const int bv_off= bv.find("byteOffset") ? bv.find("byteOffset")->inum(0) : 0;
     const int stride= bv.find("byteStride") ? bv.find("byteStride")->inum(0) : 0;
     if (buf_i < 0 || buf_i >= (int)g.buffers.size()) return out;
-    const std::vector<u8>& buf = g.buffers[buf_i];
+    const cardinal::vector<u8>& buf = g.buffers[buf_i];
     const int csz   = comp_size(ct);
     const int estep = (stride > 0) ? stride : (csz * ncomp);
-    out.resize(static_cast<std::size_t>(cnt) * ncomp);
+    out.resize(static_cast<cardinal::size_t>(cnt) * ncomp);
     for (int i = 0; i < cnt; ++i) {
-        const std::size_t base = static_cast<std::size_t>(bv_off) + a_off
-                               + static_cast<std::size_t>(i) * estep;
+        const cardinal::size_t base = static_cast<cardinal::size_t>(bv_off) + a_off
+                               + static_cast<cardinal::size_t>(i) * estep;
         for (int c = 0; c < ncomp; ++c) {
-            const std::size_t off = base + static_cast<std::size_t>(c) * csz;
+            const cardinal::size_t off = base + static_cast<cardinal::size_t>(c) * csz;
             out[i * ncomp + c] = (off + csz <= buf.size())
                 ? read_comp(buf.data() + off, ct, norm) : 0.0f;
         }
@@ -317,12 +321,12 @@ Mat4 node_matrix(const JVal& nd) {
 
 }  // namespace
 
-ImportScene import_gltf(const std::string& path, std::string* error) {
+ImportScene import_gltf(const cardinal::string& path, cardinal::string* error) {
     ImportScene scene;
     const bool glb = (detect_format(path) == Format::Glb);
     scene.source_format = glb ? "glb" : "gltf";
 
-    std::vector<u8> file = read_file(path);
+    cardinal::vector<u8> file = read_file(path);
     if (file.empty()) {
         if (error) *error = "cannot open '" + path + "'";
         scene.diagnostics = "glTF: open failed";
@@ -330,20 +334,20 @@ ImportScene import_gltf(const std::string& path, std::string* error) {
     }
 
     GltfCtx g;
-    std::vector<u8> glb_bin;            // GLB embedded BIN chunk
-    std::string json_text;
+    cardinal::vector<u8> glb_bin;            // GLB embedded BIN chunk
+    cardinal::string json_text;
 
     if (glb) {
-        if (file.size() < 12 || std::memcmp(file.data(), "glTF", 4) != 0) {
+        if (file.size() < 12 || cardinal::memcmp(file.data(), "glTF", 4) != 0) {
             if (error) *error = "bad GLB header";
             scene.diagnostics = "glTF: invalid .glb";
             return scene;
         }
-        std::size_t off = 12;
+        cardinal::size_t off = 12;
         while (off + 8 <= file.size()) {
             u32 clen, ctype;
-            std::memcpy(&clen,  file.data()+off,   4);
-            std::memcpy(&ctype, file.data()+off+4, 4);
+            cardinal::memcpy(&clen,  file.data()+off,   4);
+            cardinal::memcpy(&ctype, file.data()+off+4, 4);
             off += 8;
             if (off + clen > file.size()) break;
             if (ctype == 0x4E4F534A)        // 'JSON'
@@ -365,14 +369,14 @@ ImportScene import_gltf(const std::string& path, std::string* error) {
     }
 
     // Resolve buffers (data-URI / external file / GLB BIN).
-    const std::string base = dir_of(path);
+    const cardinal::string base = dir_of(path);
     if (const JVal* bufs = g.doc.find("buffers")) {
         for (const JVal& b : bufs->arr) {
             const JVal* uri = b.find("uri");
             if (!uri) { g.buffers.push_back(glb_bin); continue; }
-            const std::string u = uri->str();
+            const cardinal::string u = uri->str();
             const auto comma = u.find(',');
-            if (u.rfind("data:", 0) == 0 && comma != std::string::npos)
+            if (u.rfind("data:", 0) == 0 && comma != cardinal::string::npos)
                 g.buffers.push_back(b64_decode(u.substr(comma + 1)));
             else
                 g.buffers.push_back(read_file(base + u));
@@ -380,7 +384,7 @@ ImportScene import_gltf(const std::string& path, std::string* error) {
     }
 
     // Materials → metallic-roughness PBR.
-    auto tex_uri = [&](int tex_idx) -> std::string {
+    auto tex_uri = [&](int tex_idx) -> cardinal::string {
         const JVal* texs = g.doc.find("textures");
         const JVal* imgs = g.doc.find("images");
         if (!texs || !imgs || tex_idx < 0 ||
@@ -389,7 +393,7 @@ ImportScene import_gltf(const std::string& path, std::string* error) {
                       ? texs->arr[tex_idx].find("source")->inum(-1) : -1;
         if (src < 0 || src >= (int)imgs->arr.size()) return {};
         const JVal* iu = imgs->arr[src].find("uri");
-        return iu ? iu->str() : std::string{};
+        return iu ? iu->str() : cardinal::string{};
     };
     if (const JVal* mats = g.doc.find("materials")) {
         for (const JVal& m : mats->arr) {
@@ -414,22 +418,22 @@ ImportScene import_gltf(const std::string& path, std::string* error) {
                 im.emission = { (float)ef->arr[0].num(),
                                 (float)ef->arr[1].num(),
                                 (float)ef->arr[2].num() };
-                const float mx = std::max({im.emission.x, im.emission.y,
+                const float mx = cardinal::max({im.emission.x, im.emission.y,
                                            im.emission.z});
                 im.emission_strength = (mx > 0.0f) ? 1.0f : 0.0f;
             }
-            scene.materials.push_back(std::move(im));
+            scene.materials.push_back(cardinal::move(im));
         }
     }
 
     // Meshes → one ImportMesh per triangle primitive.
     // gltf-mesh index → list of resulting ImportScene.meshes indices,
     // so nodes can map their `mesh` to the produced meshes.
-    std::vector<std::vector<int>> mesh_prims;
+    cardinal::vector<cardinal::vector<int>> mesh_prims;
     if (const JVal* meshes = g.doc.find("meshes")) {
         for (const JVal& mesh : meshes->arr) {
-            std::vector<int> produced;
-            const std::string mname =
+            cardinal::vector<int> produced;
+            const cardinal::string mname =
                 mesh.find("name") ? mesh.find("name")->str() : "mesh";
             const JVal* prims = mesh.find("primitives");
             if (prims) for (const JVal& pr : prims->arr) {
@@ -444,23 +448,23 @@ ImportScene import_gltf(const std::string& path, std::string* error) {
                 int nc = 0;
                 if (const JVal* a = attr->find("POSITION")) {
                     auto v = read_accessor(g, a->inum(-1), nc);
-                    for (std::size_t i = 0; i + 2 < v.size(); i += 3)
+                    for (cardinal::size_t i = 0; i + 2 < v.size(); i += 3)
                         im.positions.push_back({v[i], v[i+1], v[i+2]});
                 }
                 if (const JVal* a = attr->find("NORMAL")) {
                     auto v = read_accessor(g, a->inum(-1), nc);
-                    for (std::size_t i = 0; i + 2 < v.size(); i += 3)
+                    for (cardinal::size_t i = 0; i + 2 < v.size(); i += 3)
                         im.normals.push_back({v[i], v[i+1], v[i+2]});
                 }
                 if (const JVal* a = attr->find("TEXCOORD_0")) {
                     auto v = read_accessor(g, a->inum(-1), nc);
-                    for (std::size_t i = 0; i + 1 < v.size(); i += 2)
+                    for (cardinal::size_t i = 0; i + 1 < v.size(); i += 2)
                         im.uvs.push_back({v[i], v[i+1]});
                 }
                 if (const JVal* a = attr->find("COLOR_0")) {
                     auto v = read_accessor(g, a->inum(-1), nc);
                     if (nc >= 3)
-                        for (std::size_t i = 0; i + 2 < v.size(); i += nc)
+                        for (cardinal::size_t i = 0; i + 2 < v.size(); i += nc)
                             im.colors.push_back({v[i], v[i+1], v[i+2]});
                 }
                 if (const JVal* idx = pr.find("indices")) {
@@ -474,10 +478,10 @@ ImportScene import_gltf(const std::string& path, std::string* error) {
                 }
                 if (!im.positions.empty() && !im.indices.empty()) {
                     produced.push_back(static_cast<int>(scene.meshes.size()));
-                    scene.meshes.push_back(std::move(im));
+                    scene.meshes.push_back(cardinal::move(im));
                 }
             }
-            mesh_prims.push_back(std::move(produced));
+            mesh_prims.push_back(cardinal::move(produced));
         }
     }
 
@@ -495,7 +499,7 @@ ImportScene import_gltf(const std::string& path, std::string* error) {
             }
             if (const JVal* ch = nd.find("children"))
                 for (const JVal& c : ch->arr) in.children.push_back(c.inum(-1));
-            scene.nodes.push_back(std::move(in));
+            scene.nodes.push_back(cardinal::move(in));
         }
     }
     if (const JVal* scs = g.doc.find("scenes")) {
@@ -511,7 +515,7 @@ ImportScene import_gltf(const std::string& path, std::string* error) {
         return scene;
     }
     scene.ok = true;
-    std::ostringstream d;
+    cardinal::ostringstream d;
     d << "glTF: " << scene.meshes.size() << " mesh(es), "
       << scene.materials.size() << " material(s), "
       << scene.nodes.size() << " node(s), "
