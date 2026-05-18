@@ -9,19 +9,23 @@
 # cmake/cardinal_third_party.cmake is existence-gated, so the engine still
 # builds with third_party/ absent — see THIRD_PARTY.md to obtain the SDKs.
 # (If you ever add a genuinely redistributable third-party dep, un-ignore it
-#  explicitly, e.g.:  !third_party/<name>/ )
-third_party/
+#  explicitly, e.g.:  !/third_party/<name>/ )
+/third_party/
 
 # ---- Build outputs ---------------------------------------------------------
-build/
-out/
-cmake-build-*/
-vcpkg_installed/
+# ROOT-ANCHORED (leading slash) on purpose: a bare `dist/` / `out/` / `run/`
+# etc. matches a same-named dir at ANY depth and would silently swallow
+# source suites like tests/dist/. These outputs only ever live at the repo
+# root, so anchor them there.
+/build/
+/out/
+/cmake-build-*/
+/vcpkg_installed/
 # auto-generated launcher shortcuts (CMake) — no inline comments: git
 # only treats a line-leading '#' as a comment, never a trailing one.
-run/
-install/
-dist/
+/run/
+/install/
+/dist/
 
 # ---- CMake artifacts -------------------------------------------------------
 CMakeCache.txt
