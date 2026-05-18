@@ -17,7 +17,9 @@ build/
 out/
 cmake-build-*/
 vcpkg_installed/
-run/                      # auto-generated launcher shortcuts (CMake)
+# auto-generated launcher shortcuts (CMake) — no inline comments: git
+# only treats a line-leading '#' as a comment, never a trailing one.
+run/
 install/
 dist/
 
@@ -32,7 +34,11 @@ CMakeScripts/
 *.cmake.stamp
 compile_commands.json
 
-# ---- IDE / editor ----------------------------------------------------------
+# ---- Agent / IDE / editor --------------------------------------------------
+# Claude Code local working state (locks, session/scheduler artifacts).
+# Un-ignore specific shareables explicitly if ever needed,
+# e.g.:  !.claude/commands/
+.claude/
 .vs/
 .vscode/
 .idea/
@@ -90,8 +96,10 @@ shader_cache/
 *~
 *.swp
 *.swo
-core
-core.*
+# Unix core dumps — ROOT-ANCHORED + numeric suffix so these can NEVER
+# match the runtime/core/ source module (a bare `core` would ignore it).
+/core
+/core.[0-9]*
 perf.data*
 *.stackdump
 
