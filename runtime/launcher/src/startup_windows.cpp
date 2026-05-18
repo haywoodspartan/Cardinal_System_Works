@@ -35,11 +35,9 @@
 #include <gdiplus.h>
 #pragma comment(lib, "gdiplus.lib")
 
-#include <algorithm>
-#include <array>
-#include <cstdio>
-#include <cstring>
-#include <string>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/cstring.hpp>
 
 namespace cardinal::launcher {
 
@@ -50,7 +48,7 @@ namespace {
 // -----------------------------------------------------------------------------
 struct BackendStatus {
     bool        available{false};
-    std::string detail;
+    cardinal::string detail;
 };
 
 BackendStatus probe_vulkan() {
@@ -69,7 +67,7 @@ BackendStatus probe_vulkan() {
         uint32_t ver = 0;
         if (p_ver != nullptr && p_ver(&ver) == VK_SUCCESS) {
             char buf[64];
-            std::snprintf(buf, sizeof(buf), "Loader %u.%u.%u — recommended",
+            cardinal::snprintf(buf, sizeof(buf), "Loader %u.%u.%u — recommended",
                 VK_VERSION_MAJOR(ver), VK_VERSION_MINOR(ver), VK_VERSION_PATCH(ver));
             s.detail = buf;
         } else {
@@ -106,7 +104,7 @@ BackendStatus probe_d3d12() {
     return s;
 }
 
-std::string detect_primary_gpu() {
+cardinal::string detect_primary_gpu() {
     using namespace Microsoft::WRL;
     HMODULE dxgi = LoadLibraryA("dxgi.dll");
     if (dxgi == nullptr) return "(unknown GPU)";
@@ -130,7 +128,7 @@ std::string detect_primary_gpu() {
         const auto gb = static_cast<unsigned>(
             d.DedicatedVideoMemory / (1024ull * 1024ull * 1024ull));
         char out[256];
-        std::snprintf(out, sizeof(out), "%s (%u GB VRAM)", buf, gb);
+        cardinal::snprintf(out, sizeof(out), "%s (%u GB VRAM)", buf, gb);
         return out;
     }
     return "(no GPU enumerated)";
@@ -141,9 +139,9 @@ std::string detect_primary_gpu() {
 // -----------------------------------------------------------------------------
 struct Tile {
     BackendChoice choice;
-    std::string   title;
-    std::string   detail;
-    std::string   badge;       // "Available", "Coming soon", etc.
+    cardinal::string   title;
+    cardinal::string   detail;
+    cardinal::string   badge;       // "Available", "Coming soon", etc.
     bool          enabled{true};
 };
 
@@ -177,10 +175,10 @@ constexpr int kTileGap  = 12;
 
 struct DialogData {
     BackendChoice choice{BackendChoice::Cancel};
-    std::array<Tile, 3> tiles{};
+    cardinal::array<Tile, 3> tiles{};
 
-    std::string header;          // "Cardinal — Choose graphics backend"
-    std::string subheader;       // "GPU: NVIDIA RTX 4090 (24 GB VRAM)"
+    cardinal::string header;          // "Cardinal — Choose graphics backend"
+    cardinal::string subheader;       // "GPU: NVIDIA RTX 4090 (24 GB VRAM)"
 
     int   hover_index  {-1};
     int   focus_index  {0};
@@ -254,7 +252,7 @@ void draw_text(Gdiplus::Graphics& g, const char* utf8,
 {
     using namespace Gdiplus;
     const int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, nullptr, 0);
-    std::wstring w(static_cast<size_t>(wlen), L'\0');
+    cardinal::wstring w(static_cast<size_t>(wlen), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w.data(), wlen);
     if (!w.empty() && w.back() == L'\0') w.pop_back();
 
@@ -320,7 +318,7 @@ void paint_tile(Gdiplus::Graphics& g, const DialogData& s, int idx,
                               : s.theme.accent;
         // Measure the text quickly using DrawString with a measure layout.
         const int wlen = MultiByteToWideChar(CP_UTF8, 0, t.badge.c_str(), -1, nullptr, 0);
-        std::wstring w(static_cast<size_t>(wlen), L'\0');
+        cardinal::wstring w(static_cast<size_t>(wlen), L'\0');
         MultiByteToWideChar(CP_UTF8, 0, t.badge.c_str(), -1, w.data(), wlen);
         if (!w.empty() && w.back() == L'\0') w.pop_back();
         Font font(&family_bold, 8.5f, FontStyleBold, UnitPoint);
@@ -565,7 +563,7 @@ BackendChoice show_startup_menu(const StartupOptions& opts) {
                        "Let Cardinal pick the best available backend",
                        "RECOMMENDED", true };
 
-    s.header    = std::string(opts.app_title) + " — " + opts.subtitle;
+    s.header    = cardinal::string(opts.app_title) + " — " + opts.subtitle;
     s.subheader = "GPU: " + detect_primary_gpu();
 
     if (opts.skip_when_no_options && !vk.available && !dx.available) {
