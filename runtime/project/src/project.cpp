@@ -2,19 +2,21 @@
 
 #include <cardinal/core/log.hpp>
 
-#include <algorithm>
-#include <cstdio>
-#include <filesystem>
-#include <fstream>
-#include <sstream>
+#include <cardinal/core/algorithm.hpp>    // cardinal::sort/remove
+#include <cardinal/core/cstdio.hpp>       // cardinal::snprintf
+#include <cardinal/core/filesystem.hpp>   // cardinal::fs, error_code
+#include <cardinal/core/fstream.hpp>      // ifstream/ofstream/ios/getline
+#include <cardinal/core/sstream.hpp>      // cardinal::stringstream
+#include <cardinal/core/utility.hpp>      // cardinal::move
+#include <cardinal/core/containers.hpp>   // cardinal::vector
 
-namespace fs = std::filesystem;
+namespace fs = cardinal::fs;
 
 namespace cardinal::project {
 
 namespace {
 
-void fill_dirs(const std::string& root, ProjectDirs& d) {
+void fill_dirs(const cardinal::string& root, ProjectDirs& d) {
     d.root         = root;
     d.src          = root + "/src";
     d.assets       = root + "/assets";
@@ -25,8 +27,8 @@ void fill_dirs(const std::string& root, ProjectDirs& d) {
     d.save         = root + "/save";
 }
 
-bool make_dirs(const ProjectDirs& d, std::string* err) {
-    std::error_code ec;
+bool make_dirs(const ProjectDirs& d, cardinal::string* err) {
+    cardinal::error_code ec;
     fs::create_directories(d.root,         ec); if (ec) { if (err) *err = ec.message(); return false; }
     fs::create_directories(d.src,          ec);
     fs::create_directories(d.assets,       ec);
@@ -38,7 +40,7 @@ bool make_dirs(const ProjectDirs& d, std::string* err) {
     return true;
 }
 
-std::string trim(std::string s) {
+cardinal::string trim(cardinal::string s) {
     while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.erase(s.begin());
     while (!s.empty() && (s.back()  == ' ' || s.back()  == '\t' || s.back() == '\r' || s.back() == '\n')) s.pop_back();
     if (s.size() >= 2 && s.front() == '"' && s.back() == '"') s = s.substr(1, s.size() - 2);
@@ -74,11 +76,11 @@ const char* template_kind_description(TemplateKind k) noexcept {
 // ---------------------------------------------------------------------------
 // Project create / open / save
 // ---------------------------------------------------------------------------
-std::shared_ptr<Project> Project::create_at(const std::string& root,
+cardinal::shared_ptr<Project> Project::create_at(const cardinal::string& root,
                                             const ProjectInfo& info,
-                                            std::string* err)
+                                            cardinal::string* err)
 {
-    auto p = std::shared_ptr<Project>(new Project());
+    auto p = cardinal::shared_ptr<Project>(new Project());
     p->info_ = info;
     fill_dirs(root, p->dirs_);
     if (!make_dirs(p->dirs_, err)) return nullptr;
@@ -88,23 +90,23 @@ std::shared_ptr<Project> Project::create_at(const std::string& root,
     return p;
 }
 
-std::shared_ptr<Project> Project::open(const std::string& root, std::string* err) {
-    const std::string path = root + "/" + kManifestFilename;
-    std::ifstream f(path);
+cardinal::shared_ptr<Project> Project::open(const cardinal::string& root, cardinal::string* err) {
+    const cardinal::string path = root + "/" + kManifestFilename;
+    cardinal::ifstream f(path);
     if (!f) {
         if (err) *err = "no project manifest at " + path;
         return nullptr;
     }
-    auto p = std::shared_ptr<Project>(new Project());
+    auto p = cardinal::shared_ptr<Project>(new Project());
     fill_dirs(root, p->dirs_);
-    std::string line;
-    while (std::getline(f, line)) {
+    cardinal::string line;
+    while (cardinal::getline(f, line)) {
         line = trim(line);
         if (line.empty() || line.front() == '#') continue;
         const auto eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        const std::string key = trim(line.substr(0, eq));
-        const std::string val = trim(line.substr(eq + 1));
+        if (eq == cardinal::string::npos) continue;
+        const cardinal::string key = trim(line.substr(0, eq));
+        const cardinal::string val = trim(line.substr(eq + 1));
         if (key == "name")            p->info_.name = val;
         else if (key == "engine")     p->info_.engine_version = val;
         else if (key == "author")     p->info_.author = val;
@@ -117,9 +119,9 @@ std::shared_ptr<Project> Project::open(const std::string& root, std::string* err
     return p;
 }
 
-bool Project::save(std::string* err) const {
-    const std::string path = dirs_.root + "/" + kManifestFilename;
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+bool Project::save(cardinal::string* err) const {
+    const cardinal::string path = dirs_.root + "/" + kManifestFilename;
+    cardinal::ofstream f(path, cardinal::ios::binary | cardinal::ios::trunc);
     if (!f) {
         if (err) *err = "could not open " + path + " for write";
         return false;
@@ -135,22 +137,22 @@ bool Project::save(std::string* err) const {
     return true;
 }
 
-std::vector<std::string> Project::list_source_assets() const {
-    std::vector<std::string> out;
-    std::error_code ec;
+cardinal::vector<cardinal::string> Project::list_source_assets() const {
+    cardinal::vector<cardinal::string> out;
+    cardinal::error_code ec;
     if (!fs::exists(dirs_.assets, ec)) return out;
     for (auto& e : fs::recursive_directory_iterator(dirs_.assets, ec)) {
         if (ec) break;
         if (!e.is_regular_file()) continue;
         out.push_back(fs::relative(e.path(), dirs_.assets).string());
     }
-    std::sort(out.begin(), out.end());
+    cardinal::sort(out.begin(), out.end());
     return out;
 }
 
-std::vector<std::string> Project::list_cooked_assets() const {
-    std::vector<std::string> out;
-    std::error_code ec;
+cardinal::vector<cardinal::string> Project::list_cooked_assets() const {
+    cardinal::vector<cardinal::string> out;
+    cardinal::error_code ec;
     if (!fs::exists(dirs_.cooked, ec)) return out;
     for (auto& e : fs::recursive_directory_iterator(dirs_.cooked, ec)) {
         if (ec) break;
@@ -158,7 +160,7 @@ std::vector<std::string> Project::list_cooked_assets() const {
         if (e.path().extension() != ".cooked") continue;
         out.push_back(fs::relative(e.path(), dirs_.cooked).string());
     }
-    std::sort(out.begin(), out.end());
+    cardinal::sort(out.begin(), out.end());
     return out;
 }
 
@@ -209,10 +211,10 @@ float4 PSMain(VSOut i) : SV_TARGET {
 
 }  // namespace
 
-std::shared_ptr<Project> instantiate_template(const InstantiateOptions& opts,
-                                              std::string* err)
+cardinal::shared_ptr<Project> instantiate_template(const InstantiateOptions& opts,
+                                              cardinal::string* err)
 {
-    std::error_code ec;
+    cardinal::error_code ec;
     if (fs::exists(opts.root) && !opts.overwrite_existing) {
         // Allow when the directory is empty.
         bool empty = true;
@@ -228,10 +230,10 @@ std::shared_ptr<Project> instantiate_template(const InstantiateOptions& opts,
     if (p == nullptr) return nullptr;
 
     // Drop template files. Switch on `kind` here for richer scaffolds.
-    auto write_text = [&](const std::string& path, const std::string& text) {
-        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    auto write_text = [&](const cardinal::string& path, const cardinal::string& text) {
+        cardinal::ofstream f(path, cardinal::ios::binary | cardinal::ios::trunc);
         if (!f) return false;
-        f.write(text.data(), static_cast<std::streamsize>(text.size()));
+        f.write(text.data(), static_cast<cardinal::streamsize>(text.size()));
         return true;
     };
 
@@ -250,26 +252,26 @@ std::shared_ptr<Project> instantiate_template(const InstantiateOptions& opts,
 // ---------------------------------------------------------------------------
 // RecentProjects
 // ---------------------------------------------------------------------------
-RecentProjects::RecentProjects(std::string store_path)
-    : store_(std::move(store_path)) {}
+RecentProjects::RecentProjects(cardinal::string store_path)
+    : store_(cardinal::move(store_path)) {}
 
-void RecentProjects::add(const std::string& root) {
-    entries_.erase(std::remove(entries_.begin(), entries_.end(), root), entries_.end());
+void RecentProjects::add(const cardinal::string& root) {
+    entries_.erase(cardinal::remove(entries_.begin(), entries_.end(), root), entries_.end());
     entries_.insert(entries_.begin(), root);
     if (entries_.size() > 16) entries_.resize(16);
 }
-void RecentProjects::remove(const std::string& root) {
-    entries_.erase(std::remove(entries_.begin(), entries_.end(), root), entries_.end());
+void RecentProjects::remove(const cardinal::string& root) {
+    entries_.erase(cardinal::remove(entries_.begin(), entries_.end(), root), entries_.end());
 }
 void RecentProjects::load() {
     entries_.clear();
-    std::ifstream f(store_);
+    cardinal::ifstream f(store_);
     if (!f) return;
-    std::string line;
-    while (std::getline(f, line)) if (!line.empty()) entries_.push_back(line);
+    cardinal::string line;
+    while (cardinal::getline(f, line)) if (!line.empty()) entries_.push_back(line);
 }
 void RecentProjects::save() const {
-    std::ofstream f(store_, std::ios::binary | std::ios::trunc);
+    cardinal::ofstream f(store_, cardinal::ios::binary | cardinal::ios::trunc);
     for (const auto& e : entries_) f << e << "\n";
 }
 

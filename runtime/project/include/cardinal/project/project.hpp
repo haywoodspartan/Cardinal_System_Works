@@ -18,12 +18,8 @@
 // directory and they expand into a working starter project.
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
-
-#include <functional>
-#include <memory>
-#include <string>
-#include <vector>
+#include <cardinal/core/types.hpp>        // function/memory/string
+#include <cardinal/core/containers.hpp>   // cardinal::vector
 
 namespace cardinal::project {
 
@@ -34,45 +30,45 @@ inline constexpr const char* kManifestMagic    = "# Cardinal project v1";
 // Project — the in-memory representation of a project root.
 // ---------------------------------------------------------------------------
 struct ProjectDirs {
-    std::string root;          // absolute path
-    std::string src;           // root + "/src"
-    std::string assets;        // root + "/assets"
-    std::string cooked;        // root + "/cooked"
-    std::string pack;          // root + "/pack"
-    std::string shaders;       // root + "/shaders"
-    std::string shader_cache;  // root + "/shaders/cache"
-    std::string save;          // root + "/save"
+    cardinal::string root;          // absolute path
+    cardinal::string src;           // root + "/src"
+    cardinal::string assets;        // root + "/assets"
+    cardinal::string cooked;        // root + "/cooked"
+    cardinal::string pack;          // root + "/pack"
+    cardinal::string shaders;       // root + "/shaders"
+    cardinal::string shader_cache;  // root + "/shaders/cache"
+    cardinal::string save;          // root + "/save"
 };
 
 struct ProjectInfo {
-    std::string name;          // human-readable
-    std::string engine_version;// default "0.1.0"
-    std::string author;
-    std::string description;
+    cardinal::string name;          // human-readable
+    cardinal::string engine_version;// default "0.1.0"
+    cardinal::string author;
+    cardinal::string description;
 
     // Build settings.
-    std::string default_pack_name {"main"};   // produces "pack/main.cpk"
+    cardinal::string default_pack_name {"main"};   // produces "pack/main.cpk"
     bool        cook_on_save      {true};
     bool        pack_on_cook      {true};
 };
 
 class Project {
 public:
-    static std::shared_ptr<Project> create_at(const std::string& root,
+    static cardinal::shared_ptr<Project> create_at(const cardinal::string& root,
                                               const ProjectInfo& info,
-                                              std::string* error_out = nullptr);
-    static std::shared_ptr<Project> open(const std::string& root,
-                                         std::string* error_out = nullptr);
+                                              cardinal::string* error_out = nullptr);
+    static cardinal::shared_ptr<Project> open(const cardinal::string& root,
+                                         cardinal::string* error_out = nullptr);
 
-    bool save(std::string* error_out = nullptr) const;
+    bool save(cardinal::string* error_out = nullptr) const;
 
     const ProjectInfo& info() const noexcept { return info_; }
     ProjectInfo&       info()       noexcept { return info_; }
     const ProjectDirs& dirs() const noexcept { return dirs_; }
 
     // Walk an asset directory; returns relative paths (root-relative).
-    std::vector<std::string> list_source_assets() const;
-    std::vector<std::string> list_cooked_assets() const;
+    cardinal::vector<cardinal::string> list_source_assets() const;
+    cardinal::vector<cardinal::string> list_cooked_assets() const;
 
 private:
     Project() = default;
@@ -89,7 +85,7 @@ const char* template_kind_name(TemplateKind k) noexcept;
 const char* template_kind_description(TemplateKind k) noexcept;
 
 struct InstantiateOptions {
-    std::string  root;             // absolute target dir (must not exist or empty)
+    cardinal::string  root;             // absolute target dir (must not exist or empty)
     ProjectInfo  info;
     TemplateKind kind{TemplateKind::Blank};
     bool         overwrite_existing{false};
@@ -97,8 +93,8 @@ struct InstantiateOptions {
 
 // Returns the new Project on success. Creates the directory tree, drops a
 // template `main.cpp`, a sample `material.hlsl`, and an empty `assets/`.
-std::shared_ptr<Project> instantiate_template(const InstantiateOptions& opts,
-                                              std::string* error_out = nullptr);
+cardinal::shared_ptr<Project> instantiate_template(const InstantiateOptions& opts,
+                                              cardinal::string* error_out = nullptr);
 
 // ---------------------------------------------------------------------------
 // Recent projects — small registry stored in the user's home so Studio can
@@ -106,18 +102,18 @@ std::shared_ptr<Project> instantiate_template(const InstantiateOptions& opts,
 // ---------------------------------------------------------------------------
 class RecentProjects {
 public:
-    explicit RecentProjects(std::string store_path);
+    explicit RecentProjects(cardinal::string store_path);
 
-    void add(const std::string& root);
-    void remove(const std::string& root);
+    void add(const cardinal::string& root);
+    void remove(const cardinal::string& root);
     void load();
     void save() const;
 
-    const std::vector<std::string>& entries() const noexcept { return entries_; }
+    const cardinal::vector<cardinal::string>& entries() const noexcept { return entries_; }
 
 private:
-    std::string              store_;
-    std::vector<std::string> entries_;
+    cardinal::string              store_;
+    cardinal::vector<cardinal::string> entries_;
 };
 
 }  // namespace cardinal::project
