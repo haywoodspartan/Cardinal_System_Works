@@ -66,6 +66,20 @@ EngineDesc::Backend parse_backend_arg(int argc, char** argv) {
 // =============================================================================
 class EngineImpl final : public Engine {
 public:
+    ~EngineImpl() override {
+        // Release the process-static asset catalog WHILE the rhi::Device is
+        // still alive. The catalog's AssetFactory closures capture
+        // shared_ptr<Mesh>, and each Mesh owns a device-bound rhi::Buffer.
+        // Left to C-runtime static teardown, those buffers free after the
+        // device is gone and ~VulkanBuffer dereferences freed VulkanDevice
+        // memory — the 0xC0000005 READ access violation seen when the
+        // Vulkan-backed editor exits. This destructor body runs before any
+        // member (device_ included) is destroyed, so the buffers are torn
+        // down against a live device. Symmetric with the
+        // register_default_assets() call in initialize().
+        scene::AssetCatalog::instance().clear();
+    }
+
     bool initialize(const EngineDesc& desc) {
         desc_ = desc;
 

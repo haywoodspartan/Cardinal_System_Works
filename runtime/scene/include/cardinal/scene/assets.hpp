@@ -79,6 +79,16 @@ public:
     // the id is unknown.
     AssetSpawnResult spawn(const char* id, const AssetSpawnContext& ctx) const;
 
+    // Drop every registered asset. CRITICAL for shutdown ordering: each
+    // AssetFactory is a closure capturing shared_ptr<Mesh>, and a Mesh owns
+    // a device-bound rhi::Buffer. The catalog is a process-static singleton,
+    // so without an explicit clear() those buffers are released during
+    // C-runtime static teardown — AFTER the rhi::Device is destroyed — and
+    // ~VulkanBuffer then dereferences the freed device (0xC0000005 READ on
+    // Vulkan exit). The engine calls this during shutdown while the device
+    // is still alive. Idempotent; safe to call when already empty.
+    void clear() noexcept;
+
 private:
     AssetCatalog();
     AssetCatalog(const AssetCatalog&)            = delete;

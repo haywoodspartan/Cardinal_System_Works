@@ -57,6 +57,14 @@ const AssetDesc* AssetCatalog::find(const char* id) const noexcept {
     return nullptr;
 }
 
+void AssetCatalog::clear() noexcept {
+    // Releases every AssetDesc — and with it every AssetFactory closure and
+    // the shared_ptr<Mesh> (device-bound rhi::Buffer) each one captured.
+    // Must be driven from engine shutdown while the rhi::Device is still
+    // alive; see the header comment for the static-teardown UAF this avoids.
+    p_->entries.clear();
+}
+
 cardinal::vector<cardinal::string> AssetCatalog::categories() const {
     cardinal::vector<cardinal::string> out;
     cardinal::unordered_set<cardinal::string> seen;
