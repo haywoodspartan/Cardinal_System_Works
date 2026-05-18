@@ -1,8 +1,8 @@
 #include <cardinal/input/input.hpp>
 
-#include <algorithm>
-#include <cstring>
-#include <mutex>
+#include <cardinal/core/algorithm.hpp>   // cardinal::sort
+#include <cardinal/core/cstring.hpp>     // cardinal::strcmp
+#include <cardinal/core/thread.hpp>      // cardinal::mutex/lock_guard
 
 namespace cardinal::input {
 
@@ -50,7 +50,7 @@ KeyCode key_code_from_string(const char* s) noexcept {
     }
     for (u32 i = 1; i < static_cast<u32>(KeyCode::Count); ++i) {
         const auto k = static_cast<KeyCode>(i);
-        if (std::strcmp(s, key_code_name(k)) == 0) return k;
+        if (cardinal::strcmp(s, key_code_name(k)) == 0) return k;
     }
     return KeyCode::Unknown;
 }
@@ -59,20 +59,20 @@ KeyCode key_code_from_string(const char* s) noexcept {
 // Impl
 // ---------------------------------------------------------------------------
 struct Manager::Impl {
-    std::array<ButtonState, static_cast<usize>(KeyCode::Count)>      keys{};
+    cardinal::array<ButtonState, static_cast<usize>(KeyCode::Count)>      keys{};
     MouseState                                                       mouse{};
-    std::unordered_map<std::string, Action>                          actions;
-    std::unordered_map<std::string, AxisBinding>                     axes;
-    std::vector<Binding>                                             empty_bindings;
-    std::mutex                                                       mtx;        // OS hook is multi-threaded on some backends
+    cardinal::unordered_map<cardinal::string, Action>                          actions;
+    cardinal::unordered_map<cardinal::string, AxisBinding>                     axes;
+    cardinal::vector<Binding>                                             empty_bindings;
+    cardinal::mutex                                                       mtx;        // OS hook is multi-threaded on some backends
     void*                                                            window_ptr{nullptr};
     u64                                                              events_processed{0};
 
     // Pending input from the OS hook — drained by begin_frame.
     struct PendKey   { KeyCode k; bool down; };
     struct PendMouse { MouseButton b; bool down; };
-    std::vector<PendKey>   pend_keys;
-    std::vector<PendMouse> pend_mouse;
+    cardinal::vector<PendKey>   pend_keys;
+    cardinal::vector<PendMouse> pend_mouse;
     int  pend_mouse_x{-1}, pend_mouse_y{-1};
     int  pend_mouse_wheel{0};
 
@@ -84,24 +84,24 @@ struct Manager::Impl {
     bool gameplay_active{true};
 };
 
-std::shared_ptr<Manager> Manager::create() {
-    return std::shared_ptr<Manager>(new Manager());
+cardinal::shared_ptr<Manager> Manager::create() {
+    return cardinal::shared_ptr<Manager>(new Manager());
 }
 
 Manager::Manager() : impl_(new Impl{}) {}
 Manager::~Manager() { delete impl_; }
 
 void Manager::attach_to_window(void* window_ptr) noexcept {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     impl_->window_ptr = window_ptr;
 }
 void Manager::detach_from_window() noexcept {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     impl_->window_ptr = nullptr;
 }
 
 void Manager::begin_frame(float dt) noexcept {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
 
     // Pre-pass: copy current "down" → "was_down" via the held_time logic.
     for (auto& k : impl_->keys) {
@@ -175,26 +175,26 @@ const MouseState& Manager::mouse_state() const noexcept {
     return impl_->mouse;
 }
 
-void Manager::bind_action(const std::string& name, Binding b) {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+void Manager::bind_action(const cardinal::string& name, Binding b) {
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     impl_->actions[name].name = name;
     impl_->actions[name].bindings.push_back(b);
 }
-void Manager::bind_axis(const std::string& name, Binding b) {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+void Manager::bind_axis(const cardinal::string& name, Binding b) {
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     impl_->axes[name].name = name;
     impl_->axes[name].contributions.push_back(b);
 }
-void Manager::clear_action(const std::string& name) {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+void Manager::clear_action(const cardinal::string& name) {
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     impl_->actions.erase(name);
 }
-void Manager::clear_axis(const std::string& name) {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+void Manager::clear_axis(const cardinal::string& name) {
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     impl_->axes.erase(name);
 }
 void Manager::reset_bindings() noexcept {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     impl_->actions.clear();
     impl_->axes.clear();
 }
@@ -212,7 +212,7 @@ const ButtonState& binding_state(const Manager& m, const Binding& b) noexcept {
 }
 }
 
-bool Manager::action_down(const std::string& name) const {
+bool Manager::action_down(const cardinal::string& name) const {
     if (!impl_->gameplay_active) return false;
     auto it = impl_->actions.find(name);
     if (it == impl_->actions.end()) return false;
@@ -220,7 +220,7 @@ bool Manager::action_down(const std::string& name) const {
         if (binding_state(*this, b).down) return true;
     return false;
 }
-bool Manager::action_pressed(const std::string& name) const {
+bool Manager::action_pressed(const cardinal::string& name) const {
     if (!impl_->gameplay_active) return false;
     auto it = impl_->actions.find(name);
     if (it == impl_->actions.end()) return false;
@@ -228,7 +228,7 @@ bool Manager::action_pressed(const std::string& name) const {
         if (binding_state(*this, b).pressed) return true;
     return false;
 }
-bool Manager::action_released(const std::string& name) const {
+bool Manager::action_released(const cardinal::string& name) const {
     if (!impl_->gameplay_active) return false;
     auto it = impl_->actions.find(name);
     if (it == impl_->actions.end()) return false;
@@ -237,7 +237,7 @@ bool Manager::action_released(const std::string& name) const {
     return false;
 }
 
-float Manager::axis(const std::string& name) const {
+float Manager::axis(const cardinal::string& name) const {
     if (!impl_->gameplay_active) return 0.0f;
     auto it = impl_->axes.find(name);
     if (it == impl_->axes.end()) return 0.0f;
@@ -252,48 +252,48 @@ float Manager::axis(const std::string& name) const {
 }
 
 void Manager::set_gameplay_active(bool active) noexcept {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     impl_->gameplay_active = active;
 }
 bool Manager::is_gameplay_active() const noexcept {
     return impl_->gameplay_active;
 }
 
-std::vector<std::string> Manager::action_names() const {
-    std::vector<std::string> r;
+cardinal::vector<cardinal::string> Manager::action_names() const {
+    cardinal::vector<cardinal::string> r;
     for (const auto& [n, _] : impl_->actions) r.push_back(n);
-    std::sort(r.begin(), r.end());
+    cardinal::sort(r.begin(), r.end());
     return r;
 }
-std::vector<std::string> Manager::axis_names() const {
-    std::vector<std::string> r;
+cardinal::vector<cardinal::string> Manager::axis_names() const {
+    cardinal::vector<cardinal::string> r;
     for (const auto& [n, _] : impl_->axes) r.push_back(n);
-    std::sort(r.begin(), r.end());
+    cardinal::sort(r.begin(), r.end());
     return r;
 }
-const std::vector<Binding>& Manager::action_bindings(const std::string& name) const {
+const cardinal::vector<Binding>& Manager::action_bindings(const cardinal::string& name) const {
     auto it = impl_->actions.find(name);
     return it == impl_->actions.end() ? impl_->empty_bindings : it->second.bindings;
 }
-const std::vector<Binding>& Manager::axis_bindings(const std::string& name) const {
+const cardinal::vector<Binding>& Manager::axis_bindings(const cardinal::string& name) const {
     auto it = impl_->axes.find(name);
     return it == impl_->axes.end() ? impl_->empty_bindings : it->second.contributions;
 }
 
 void Manager::push_key(KeyCode k, bool down) noexcept {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     impl_->pend_keys.push_back({k, down});
 }
 void Manager::push_mouse_button(MouseButton b, bool down) noexcept {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     impl_->pend_mouse.push_back({b, down});
 }
 void Manager::push_mouse_move(int x, int y) noexcept {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     impl_->pend_mouse_x = x; impl_->pend_mouse_y = y;
 }
 void Manager::push_mouse_wheel(int delta) noexcept {
-    std::lock_guard<std::mutex> lg(impl_->mtx);
+    cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
     impl_->pend_mouse_wheel += delta;
 }
 

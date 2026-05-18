@@ -21,13 +21,8 @@
 // gameplay code is platform-agnostic.
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
-
-#include <array>
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <vector>
+#include <cardinal/core/types.hpp>        // cardinal::string/shared_ptr
+#include <cardinal/core/containers.hpp>   // array/unordered_map/vector
 
 namespace cardinal::input {
 
@@ -89,7 +84,7 @@ struct MouseState {
     int  x{0}, y{0};
     int  dx{0}, dy{0};       // delta since last frame
     int  wheel{0};           // accumulated this frame
-    std::array<ButtonState, static_cast<usize>(MouseButton::Count)> buttons{};
+    cardinal::array<ButtonState, static_cast<usize>(MouseButton::Count)> buttons{};
 };
 
 // ---------------------------------------------------------------------------
@@ -105,13 +100,13 @@ struct Binding {
 };
 
 struct Action {
-    std::string          name;
-    std::vector<Binding> bindings;
+    cardinal::string          name;
+    cardinal::vector<Binding> bindings;
 };
 
 struct AxisBinding {
-    std::string          name;
-    std::vector<Binding> contributions;
+    cardinal::string          name;
+    cardinal::vector<Binding> contributions;
 };
 
 // ---------------------------------------------------------------------------
@@ -121,7 +116,7 @@ struct AxisBinding {
 // ---------------------------------------------------------------------------
 class Manager {
 public:
-    static std::shared_ptr<Manager> create();
+    static cardinal::shared_ptr<Manager> create();
     ~Manager();
     Manager(const Manager&) = delete;
     Manager& operator=(const Manager&) = delete;
@@ -151,16 +146,16 @@ public:
     bool  mouse_pressed (MouseButton b) const noexcept { return mouse(b).pressed; }
 
     // ----- Action map -----------------------------------------------
-    void  bind_action(const std::string& name, Binding b);
-    void  bind_axis  (const std::string& name, Binding b);
-    void  clear_action(const std::string& name);
-    void  clear_axis  (const std::string& name);
+    void  bind_action(const cardinal::string& name, Binding b);
+    void  bind_axis  (const cardinal::string& name, Binding b);
+    void  clear_action(const cardinal::string& name);
+    void  clear_axis  (const cardinal::string& name);
     void  reset_bindings() noexcept;
 
-    bool  action_down    (const std::string& name) const;
-    bool  action_pressed (const std::string& name) const;
-    bool  action_released(const std::string& name) const;
-    float axis(const std::string& name) const;
+    bool  action_down    (const cardinal::string& name) const;
+    bool  action_pressed (const cardinal::string& name) const;
+    bool  action_released(const cardinal::string& name) const;
+    float axis(const cardinal::string& name) const;
 
     // ----- Gameplay gate (Play-In-Editor pattern) ------------------
     // When the studio is hosting an editor session, gameplay code shouldn't
@@ -177,10 +172,10 @@ public:
     bool  is_gameplay_active() const noexcept;
 
     // Inspection — used by the Studio Input panel.
-    std::vector<std::string>           action_names() const;
-    std::vector<std::string>           axis_names()   const;
-    const std::vector<Binding>&        action_bindings(const std::string& name) const;
-    const std::vector<Binding>&        axis_bindings  (const std::string& name) const;
+    cardinal::vector<cardinal::string>           action_names() const;
+    cardinal::vector<cardinal::string>           axis_names()   const;
+    const cardinal::vector<Binding>&        action_bindings(const cardinal::string& name) const;
+    const cardinal::vector<Binding>&        axis_bindings  (const cardinal::string& name) const;
 
     // ----- Producer side (OS-hook) ---------------------------------
     // Called by the platform message pump. Idempotent — last-event-wins.
