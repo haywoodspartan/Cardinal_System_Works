@@ -31,12 +31,8 @@
 #include <cardinal/core/handle.hpp>
 #include <cardinal/core/math.hpp>
 #include <cardinal/core/spatial.hpp>
-#include <cardinal/core/types.hpp>
-
-#include <functional>
-#include <memory>
-#include <string>
-#include <vector>
+#include <cardinal/core/types.hpp>        // function/memory/string
+#include <cardinal/core/containers.hpp>   // cardinal::vector
 
 namespace cardinal::physics {
 
@@ -168,7 +164,7 @@ struct RayHit {
 // World — top-level physics container.
 class World {
 public:
-    static std::unique_ptr<World> create();
+    static cardinal::unique_ptr<World> create();
     virtual ~World() = default;
     World(const World&)            = delete;
     World& operator=(const World&) = delete;
@@ -220,7 +216,7 @@ public:
     virtual void step(f32 wall_dt) = 0;
 
     // Per-step contact events (cleared at the next step start).
-    virtual const std::vector<ContactEvent>& last_contacts() const noexcept = 0;
+    virtual const cardinal::vector<ContactEvent>& last_contacts() const noexcept = 0;
 
     // Single-ray query against every body's collider. Returns the closest hit.
     virtual RayHit raycast(const Ray& r, f32 max_distance = 1e6f,
@@ -230,7 +226,7 @@ public:
     // crosses. The callback returns false to stop iteration early. Returns
     // the total number of hits enumerated. Hits are NOT sorted — sort
     // yourself if you need front-to-back order.
-    using RaycastCallback = std::function<bool(const RayHit&)>;
+    using RaycastCallback = cardinal::function<bool(const RayHit&)>;
     virtual usize raycast_all(const Ray& r, f32 max_distance,
                               u32 layer_mask,
                               const RaycastCallback& cb) const = 0;
@@ -247,7 +243,7 @@ public:
     // returning false from `cb` aborts iteration early. Returns the total
     // number of bodies enumerated. Layer-mask filtering follows the same
     // convention as raycast (`(body.layer & layer_mask) != 0`).
-    using OverlapCallback = std::function<bool(BodyHandle)>;
+    using OverlapCallback = cardinal::function<bool(BodyHandle)>;
     virtual usize overlap_sphere(const Vec3& center, f32 radius,
                                  u32 layer_mask,
                                  const OverlapCallback& cb) const = 0;
@@ -264,7 +260,7 @@ public:
     virtual Vec3 closest_point_on_body(BodyHandle, const Vec3& query) const = 0;
 
     // Optional broadcast: invoked once per ContactEvent during step().
-    using ContactCallback = std::function<void(const ContactEvent&)>;
+    using ContactCallback = cardinal::function<void(const ContactEvent&)>;
     virtual void set_contact_callback(ContactCallback cb) = 0;
 
     // ---- Joints ------------------------------------------------------

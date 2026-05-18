@@ -3,9 +3,9 @@
 // =============================================================================
 #include <cardinal/physics/exotic.hpp>
 
-#include <algorithm>
-#include <cmath>
-#include <limits>
+#include <cardinal/core/algorithm.hpp>   // cardinal::min/max/clamp
+#include <cardinal/core/cmath.hpp>       // cardinal scalar math
+#include <cardinal/core/limits.hpp>      // cardinal::numeric_limits
 
 namespace cardinal::physics {
 
@@ -47,13 +47,13 @@ namespace spatial {
 
 Vec3 slerp(const Vec3& a, const Vec3& b, f32 t) noexcept {
     f32 d = dot(a, b);
-    d = std::max(-1.0f, std::min(1.0f, d));
-    const f32 theta = std::acos(d);
+    d = cardinal::max(-1.0f, cardinal::min(1.0f, d));
+    const f32 theta = cardinal::acos(d);
     // Qualify to disambiguate from cardinal::core::lerp (visible via ADL).
     if (theta < 1e-6f) return cardinal::physics::spatial::lerp(a, b, t);
-    const f32 inv_sin = 1.0f / std::sin(theta);
-    const f32 s_a = std::sin((1.0f - t) * theta) * inv_sin;
-    const f32 s_b = std::sin(t * theta) * inv_sin;
+    const f32 inv_sin = 1.0f / cardinal::sin(theta);
+    const f32 s_a = cardinal::sin((1.0f - t) * theta) * inv_sin;
+    const f32 s_b = cardinal::sin(t * theta) * inv_sin;
     return Vec3{ a.x * s_a + b.x * s_b,
                  a.y * s_a + b.y * s_b,
                  a.z * s_a + b.z * s_b };
@@ -71,7 +71,7 @@ Vec3 refract(const Vec3& v, const Vec3& n, f32 eta) noexcept {
     const f32 d  = dot(v, n);
     const f32 k  = 1.0f - eta * eta * (1.0f - d * d);
     if (k < 0.0f) return Vec3{0, 0, 0};   // total internal reflection
-    const f32 c  = eta * d + std::sqrt(k);
+    const f32 c  = eta * d + cardinal::sqrt(k);
     return Vec3{ eta * v.x - c * n.x,
                  eta * v.y - c * n.y,
                  eta * v.z - c * n.z };
@@ -80,24 +80,24 @@ Vec3 refract(const Vec3& v, const Vec3& n, f32 eta) noexcept {
 Vec3 golden_spiral_point(u32 i, u32 N) noexcept {
     if (N == 0) return Vec3{0, 1, 0};
     const f64 ga    = cardinal::constants::golden_angle_rad;
-    const f64 phi   = std::acos(1.0 - 2.0 * (static_cast<f64>(i) + 0.5)
+    const f64 phi   = cardinal::acos(1.0 - 2.0 * (static_cast<f64>(i) + 0.5)
                                           / static_cast<f64>(N));
     const f64 theta = ga * static_cast<f64>(i);
-    const f64 sp    = std::sin(phi);
-    return Vec3{ static_cast<f32>(std::cos(theta) * sp),
-                 static_cast<f32>(std::cos(phi)),
-                 static_cast<f32>(std::sin(theta) * sp) };
+    const f64 sp    = cardinal::sin(phi);
+    return Vec3{ static_cast<f32>(cardinal::cos(theta) * sp),
+                 static_cast<f32>(cardinal::cos(phi)),
+                 static_cast<f32>(cardinal::sin(theta) * sp) };
 }
 
 Vec3 golden_disc_point(u32 i, u32 N) noexcept {
     if (N == 0) return Vec3{0, 0, 0};
     const f64 ga    = cardinal::constants::golden_angle_rad;
-    const f64 r     = std::sqrt((static_cast<f64>(i) + 0.5)
+    const f64 r     = cardinal::sqrt((static_cast<f64>(i) + 0.5)
                                 / static_cast<f64>(N));
     const f64 theta = ga * static_cast<f64>(i);
-    return Vec3{ static_cast<f32>(r * std::cos(theta)),
+    return Vec3{ static_cast<f32>(r * cardinal::cos(theta)),
                  0.0f,
-                 static_cast<f32>(r * std::sin(theta)) };
+                 static_cast<f32>(r * cardinal::sin(theta)) };
 }
 
 }  // namespace spatial
@@ -110,8 +110,8 @@ namespace time {
 f64 lorentz_factor(f64 v_mps) noexcept {
     const f64 c   = cardinal::constants::light_speed_mps;
     const f64 b2  = (v_mps * v_mps) / (c * c);
-    if (b2 >= 1.0) return std::numeric_limits<f64>::infinity();
-    return 1.0 / std::sqrt(1.0 - b2);
+    if (b2 >= 1.0) return cardinal::numeric_limits<f64>::infinity();
+    return 1.0 / cardinal::sqrt(1.0 - b2);
 }
 
 f64 add_velocities(f64 u, f64 v) noexcept {
@@ -123,7 +123,7 @@ f64 add_velocities(f64 u, f64 v) noexcept {
 f64 relativistic_doppler(f64 src_hz, f64 v_recede) noexcept {
     const f64 beta = v_recede / cardinal::constants::light_speed_mps;
     if (beta <= -1.0 || beta >= 1.0) return 0.0;
-    return src_hz * std::sqrt((1.0 - beta) / (1.0 + beta));
+    return src_hz * cardinal::sqrt((1.0 - beta) / (1.0 + beta));
 }
 
 }  // namespace time

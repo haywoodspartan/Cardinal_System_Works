@@ -23,10 +23,10 @@
 #include <cardinal/core/simd_math.hpp>
 #include <cardinal/core/typedefs.hpp>
 
-#include <algorithm>
-#include <cmath>
-#include <unordered_map>
-#include <unordered_set>
+#include <cardinal/core/algorithm.hpp>    // cardinal::min/max/swap
+#include <cardinal/core/cmath.hpp>        // cardinal::sqrt/fabs/floor/pow
+#include <cardinal/core/containers.hpp>   // unordered_map/unordered_set
+#include <cardinal/core/utility.hpp>      // cardinal::move/pair
 
 namespace cardinal::physics {
 
@@ -37,10 +37,10 @@ namespace cardinal::physics {
 
 namespace {
 inline Vec3 vmin(const Vec3& a, const Vec3& b) noexcept {
-    return { std::min(a.x,b.x), std::min(a.y,b.y), std::min(a.z,b.z) };
+    return { cardinal::min(a.x,b.x), cardinal::min(a.y,b.y), cardinal::min(a.z,b.z) };
 }
 inline Vec3 vmax(const Vec3& a, const Vec3& b) noexcept {
-    return { std::max(a.x,b.x), std::max(a.y,b.y), std::max(a.z,b.z) };
+    return { cardinal::max(a.x,b.x), cardinal::max(a.y,b.y), cardinal::max(a.z,b.z) };
 }
 inline f32 clamp(f32 x, f32 lo, f32 hi) noexcept {
     return x < lo ? lo : (x > hi ? hi : x);
@@ -164,9 +164,9 @@ static AABB body_aabb(const Body& b) noexcept {
             // absolute value of the rotation matrix).
             const Mat3 R = quat_to_mat3(b.orientation);
             Vec3 e{
-                std::fabs(R.m[0][0])*he.x + std::fabs(R.m[0][1])*he.y + std::fabs(R.m[0][2])*he.z,
-                std::fabs(R.m[1][0])*he.x + std::fabs(R.m[1][1])*he.y + std::fabs(R.m[1][2])*he.z,
-                std::fabs(R.m[2][0])*he.x + std::fabs(R.m[2][1])*he.y + std::fabs(R.m[2][2])*he.z,
+                cardinal::fabs(R.m[0][0])*he.x + cardinal::fabs(R.m[0][1])*he.y + cardinal::fabs(R.m[0][2])*he.z,
+                cardinal::fabs(R.m[1][0])*he.x + cardinal::fabs(R.m[1][1])*he.y + cardinal::fabs(R.m[1][2])*he.z,
+                cardinal::fabs(R.m[2][0])*he.x + cardinal::fabs(R.m[2][1])*he.y + cardinal::fabs(R.m[2][2])*he.z,
             };
             out.min = b.position - e;
             out.max = b.position + e;
@@ -218,7 +218,7 @@ static bool sphere_sphere(const Body& a, const Body& b, ContactEvent& out) {
     const f32 dist2 = dot(d, d);
     const f32 r = ra + rb;
     if (dist2 >= r * r) return false;
-    const f32 dist = std::sqrt(dist2);
+    const f32 dist = cardinal::sqrt(dist2);
     out.normal      = (dist > 1e-6f) ? d * (1.0f / dist) : Vec3{0, 1, 0};
     out.penetration = r - dist;
     out.point       = a.position + out.normal * (ra - out.penetration * 0.5f);
@@ -252,7 +252,7 @@ static bool sphere_box(const Body& s, const Body& bx, ContactEvent& out) {
     if (d2 >= r * r) return false;
     const Vec3 c_world = bx.position + R * c_local;
     const Vec3 diff_world = R * diff_local;
-    const f32  dist = std::sqrt(d2);
+    const f32  dist = cardinal::sqrt(d2);
     out.normal      = (dist > 1e-6f) ? diff_world * (-1.0f / dist) : Vec3{0, 1, 0};
     out.penetration = (dist > 1e-6f) ? (r - dist) : r;
     out.point       = c_world;
@@ -285,13 +285,13 @@ static bool box_box(const Body& a, const Body& b, ContactEvent& out) {
         const f32 ll = length(L);
         if (ll < 1e-6f) return true;   // degenerate axis — skip
         L = L * (1.0f / ll);
-        const f32 ra = std::fabs(dot(ax_a[0], L)) * he_a.x
-                     + std::fabs(dot(ax_a[1], L)) * he_a.y
-                     + std::fabs(dot(ax_a[2], L)) * he_a.z;
-        const f32 rb = std::fabs(dot(ax_b[0], L)) * he_b.x
-                     + std::fabs(dot(ax_b[1], L)) * he_b.y
-                     + std::fabs(dot(ax_b[2], L)) * he_b.z;
-        const f32 dist = std::fabs(dot(t, L));
+        const f32 ra = cardinal::fabs(dot(ax_a[0], L)) * he_a.x
+                     + cardinal::fabs(dot(ax_a[1], L)) * he_a.y
+                     + cardinal::fabs(dot(ax_a[2], L)) * he_a.z;
+        const f32 rb = cardinal::fabs(dot(ax_b[0], L)) * he_b.x
+                     + cardinal::fabs(dot(ax_b[1], L)) * he_b.y
+                     + cardinal::fabs(dot(ax_b[2], L)) * he_b.z;
+        const f32 dist = cardinal::fabs(dot(t, L));
         const f32 overlap = (ra + rb) - dist;
         if (overlap < 0.0f) return false;     // separating axis found
         if (overlap < best_overlap) {
@@ -323,9 +323,9 @@ static bool box_plane(const Body& bx, const Body& p, ContactEvent& out) {
         { R.m[0][1], R.m[1][1], R.m[2][1] },
         { R.m[0][2], R.m[1][2], R.m[2][2] },
     };
-    const f32  proj = std::fabs(dot(ax[0], n)) * he.x
-                    + std::fabs(dot(ax[1], n)) * he.y
-                    + std::fabs(dot(ax[2], n)) * he.z;
+    const f32  proj = cardinal::fabs(dot(ax[0], n)) * he.x
+                    + cardinal::fabs(dot(ax[1], n)) * he.y
+                    + cardinal::fabs(dot(ax[2], n)) * he.z;
     const f32  dist = dot(n, bx.position) + p.collider.plane.d;
     if (dist >= proj) return false;
     out.normal      = -n;
@@ -376,10 +376,10 @@ static bool sphere_capsule(const Body& s, const Body& cap, ContactEvent& out) {
     const f32  d2 = dot(d, d);
     const f32  r  = sr + cr;
     if (d2 >= r * r) return false;
-    const f32 dist = std::sqrt(d2);
+    const f32 dist = cardinal::sqrt(d2);
     out.normal      = (dist > 1e-6f) ? d * (-1.0f / dist) : Vec3{0, 1, 0};
     out.penetration = r - dist;
-    out.point       = cp + (d * (sr / std::max(dist, 1e-6f)));
+    out.point       = cp + (d * (sr / cardinal::max(dist, 1e-6f)));
     return true;
 }
 
@@ -389,7 +389,7 @@ static bool capsule_plane(const Body& cap, const Body& p, ContactEvent& out) {
     const Vec3 n = p.collider.plane.normal;
     const f32 d0 = dot(n, a0) + p.collider.plane.d;
     const f32 d1 = dot(n, a1) + p.collider.plane.d;
-    const f32 dist = std::min(d0, d1);
+    const f32 dist = cardinal::min(d0, d1);
     if (dist >= r) return false;
     out.normal      = -n;
     out.penetration = r - dist;
@@ -408,7 +408,7 @@ static bool capsule_capsule(const Body& a, const Body& b, ContactEvent& out) {
     const f32  d2 = dot(d, d);
     const f32  r  = ra + rb;
     if (d2 >= r * r) return false;
-    const f32 dist = std::sqrt(d2);
+    const f32 dist = cardinal::sqrt(d2);
     out.normal      = (dist > 1e-6f) ? d * (1.0f / dist) : Vec3{0, 1, 0};
     out.penetration = r - dist;
     out.point       = cpa + out.normal * ra;
@@ -463,7 +463,7 @@ static bool ray_sphere(const Ray& r, const Body& s, f32& t_out) {
     const f32  c  = dot(oc, oc) - R * R;
     const f32  disc = b * b - c;
     if (disc < 0.0f) return false;
-    const f32 sq = std::sqrt(disc);
+    const f32 sq = cardinal::sqrt(disc);
     const f32 t0 = -b - sq;
     const f32 t1 = -b + sq;
     const f32 t  = (t0 > 0.0f) ? t0 : ((t1 > 0.0f) ? t1 : -1.0f);
@@ -474,7 +474,7 @@ static bool ray_sphere(const Ray& r, const Body& s, f32& t_out) {
 static bool ray_plane(const Ray& r, const Body& p, f32& t_out) {
     const Vec3 n = p.collider.plane.normal;
     const f32  denom = dot(n, r.direction);
-    if (std::fabs(denom) < 1e-6f) return false;
+    if (cardinal::fabs(denom) < 1e-6f) return false;
     const f32 t = -(dot(n, r.origin) + p.collider.plane.d) / denom;
     if (t < 0.0f) return false;
     t_out = t;
@@ -492,13 +492,13 @@ static bool ray_box(const Ray& r, const Body& b, f32& t_out) {
         const f32 rd = (&rd_local.x)[i];
         const f32 lo = -(&he.x)[i];
         const f32 hi =  (&he.x)[i];
-        if (std::fabs(rd) < 1e-6f) {
+        if (cardinal::fabs(rd) < 1e-6f) {
             if (ro < lo || ro > hi) return false;
         } else {
             const f32 inv = 1.0f / rd;
             f32 t1 = (lo - ro) * inv;
             f32 t2 = (hi - ro) * inv;
-            if (t1 > t2) std::swap(t1, t2);
+            if (t1 > t2) cardinal::swap(t1, t2);
             if (t1 > tmin) tmin = t1;
             if (t2 < tmax) tmax = t2;
             if (tmin > tmax) return false;
@@ -525,7 +525,7 @@ static bool ray_capsule(const Ray& r, const Body& cap, f32& t_out) {
     const f32  c    = baba * oaoa - baoa * baoa - R2 * baba;
     const f32  h    = b * b - a * c;
     if (h < 0.0f) return false;
-    const f32 t = (-b - std::sqrt(h)) / std::max(a, 1e-6f);
+    const f32 t = (-b - cardinal::sqrt(h)) / cardinal::max(a, 1e-6f);
     const f32 y = baoa + t * bard;
     if (y > 0.0f && y < baba) {
         if (t < 0.0f) return false;
@@ -537,7 +537,7 @@ static bool ray_capsule(const Ray& r, const Body& cap, f32& t_out) {
     const f32 c2 = dot(oc, oc) - R2;
     const f32 h2 = b2 * b2 - c2;
     if (h2 < 0.0f) return false;
-    const f32 t2 = -b2 - std::sqrt(h2);
+    const f32 t2 = -b2 - cardinal::sqrt(h2);
     if (t2 < 0.0f) return false;
     t_out = t2; return true;
 }
@@ -563,10 +563,10 @@ public:
     void set_gravity(Vec3 g) noexcept override { gravity_ = g; }
     Vec3 gravity() const noexcept    override { return gravity_; }
     void set_fixed_timestep(f32 dt) noexcept override {
-        fixed_dt_ = std::max(1e-4f, dt);
+        fixed_dt_ = cardinal::max(1e-4f, dt);
     }
     f32  fixed_timestep() const noexcept    override { return fixed_dt_; }
-    void set_solver_iterations(u32 n) noexcept override { solver_iters_ = std::max<u32>(1, n); }
+    void set_solver_iterations(u32 n) noexcept override { solver_iters_ = cardinal::max<u32>(1, n); }
     u32  solver_iterations() const noexcept    override { return solver_iters_; }
 
     BodyHandle create_body(const BodyDesc& desc) override {
@@ -720,11 +720,11 @@ public:
     usize joint_count() const noexcept override { return joint_pool_.live_count(); }
 
     // -- Broad-phase config --
-    void set_broadphase_cell_size(f32 cell) noexcept override { broad_cell_ = std::max(0.0f, cell); }
+    void set_broadphase_cell_size(f32 cell) noexcept override { broad_cell_ = cardinal::max(0.0f, cell); }
     f32  broadphase_cell_size() const noexcept override { return broad_cell_; }
 
     // -- Time scale (slow-mo / fast-forward / pause) --
-    void set_time_scale(f32 s) noexcept override { time_scale_ = std::max(0.0f, s); }
+    void set_time_scale(f32 s) noexcept override { time_scale_ = cardinal::max(0.0f, s); }
     f32  time_scale() const noexcept override    { return time_scale_; }
 
     // -- Force fields --
@@ -760,7 +760,7 @@ public:
         }
     }
 
-    const std::vector<ContactEvent>& last_contacts() const noexcept override {
+    const cardinal::vector<ContactEvent>& last_contacts() const noexcept override {
         return contacts_;
     }
 
@@ -891,7 +891,7 @@ public:
     }
 
     void set_contact_callback(ContactCallback cb) override {
-        contact_cb_ = std::move(cb);
+        contact_cb_ = cardinal::move(cb);
     }
 
 private:
@@ -927,7 +927,7 @@ private:
     // Spatial-hash broad-phase: bucket bodies by AABB cell range, emit
     // unique pairs within each cell. cell_size <= 0 → fall back to N²
     // pair test (correct, just slower for large N).
-    void broad_phase_pairs(std::vector<std::pair<u32, u32>>& out) {
+    void broad_phase_pairs(cardinal::vector<cardinal::pair<u32, u32>>& out) {
         out.clear();
         if (broad_cell_ <= 0.0f) {
             for (u32 i = 0; i < bodies_.size(); ++i) {
@@ -956,7 +956,7 @@ private:
                 return a.x == b.x && a.y == b.y && a.z == b.z;
             }
         };
-        std::unordered_map<Cell, std::vector<u32>, CellHash, CellEq> grid;
+        cardinal::unordered_map<Cell, cardinal::vector<u32>, CellHash, CellEq> grid;
         const f32 inv = 1.0f / broad_cell_;
         for (u32 i = 0; i < bodies_.size(); ++i) {
             if (!bodies_[i].live) continue;
@@ -964,21 +964,21 @@ private:
             // Plane bodies have huge AABB → skip insertion; pair them
             // against every dynamic separately.
             if (bodies_[i].collider.kind == ShapeKind::Plane) continue;
-            const i32 x0 = static_cast<i32>(std::floor(a.min.x * inv));
-            const i32 x1 = static_cast<i32>(std::floor(a.max.x * inv));
-            const i32 y0 = static_cast<i32>(std::floor(a.min.y * inv));
-            const i32 y1 = static_cast<i32>(std::floor(a.max.y * inv));
-            const i32 z0 = static_cast<i32>(std::floor(a.min.z * inv));
-            const i32 z1 = static_cast<i32>(std::floor(a.max.z * inv));
+            const i32 x0 = static_cast<i32>(cardinal::floor(a.min.x * inv));
+            const i32 x1 = static_cast<i32>(cardinal::floor(a.max.x * inv));
+            const i32 y0 = static_cast<i32>(cardinal::floor(a.min.y * inv));
+            const i32 y1 = static_cast<i32>(cardinal::floor(a.max.y * inv));
+            const i32 z0 = static_cast<i32>(cardinal::floor(a.min.z * inv));
+            const i32 z1 = static_cast<i32>(cardinal::floor(a.max.z * inv));
             for (i32 z = z0; z <= z1; ++z)
                 for (i32 y = y0; y <= y1; ++y)
                     for (i32 x = x0; x <= x1; ++x)
                         grid[{x, y, z}].push_back(i);
         }
-        std::unordered_set<u64> seen;
+        cardinal::unordered_set<u64> seen;
         seen.reserve(grid.size() * 4);
         auto pack = [](u32 a, u32 b) -> u64 {
-            if (a > b) std::swap(a, b);
+            if (a > b) cardinal::swap(a, b);
             return (static_cast<u64>(a) << 32) | b;
         };
         for (const auto& kv : grid) {
@@ -1000,7 +1000,7 @@ private:
             for (u32 j = 0; j < bodies_.size(); ++j) {
                 if (j == i || !bodies_[j].live) continue;
                 if (bodies_[j].collider.kind == ShapeKind::Plane) continue;
-                out.push_back({ std::min(i, j), std::max(i, j) });
+                out.push_back({ cardinal::min(i, j), cardinal::max(i, j) });
             }
         }
     }
@@ -1032,9 +1032,9 @@ private:
             b.torque_accum = {};
             // Damping (exponential per-step approx).
             if (b.linear_damping > 0.0f)
-                b.velocity         *= std::max(0.0f, 1.0f - b.linear_damping  * dt);
+                b.velocity         *= cardinal::max(0.0f, 1.0f - b.linear_damping  * dt);
             if (b.angular_damping > 0.0f)
-                b.angular_velocity *= std::max(0.0f, 1.0f - b.angular_damping * dt);
+                b.angular_velocity *= cardinal::max(0.0f, 1.0f - b.angular_damping * dt);
         }
 
         // 2. Broad phase.
@@ -1085,7 +1085,7 @@ private:
                     + dot(rb_x_n, B.inv_inertia_world * rb_x_n);
                 if (inv_eff <= 0.0f) continue;
 
-                const f32 e  = std::min(A.material.restitution, B.material.restitution);
+                const f32 e  = cardinal::min(A.material.restitution, B.material.restitution);
                 const f32 jn = -(1.0f + e) * vn / inv_eff;
                 const Vec3 imp = ev.normal * jn;
                 A.velocity         -= imp * A.inv_mass;
@@ -1106,8 +1106,8 @@ private:
                         + dot(rb_x_t, B.inv_inertia_world * rb_x_t);
                     if (inv_eff_t > 0.0f) {
                         const f32 jt = -dot(rv, t) / inv_eff_t;
-                        const f32 mu = std::sqrt(A.material.friction * B.material.friction);
-                        const f32 jt_clamp = std::max(-jn * mu, std::min(jt, jn * mu));
+                        const f32 mu = cardinal::sqrt(A.material.friction * B.material.friction);
+                        const f32 jt_clamp = cardinal::max(-jn * mu, cardinal::min(jt, jn * mu));
                         const Vec3 ti = t * jt_clamp;
                         A.velocity         -= ti * A.inv_mass;
                         A.angular_velocity -= A.inv_inertia_world * cross(ra, ti);
@@ -1147,7 +1147,7 @@ private:
                 const f32 bias  = -0.2f * c / dt;
                 const f32 j_imp = j.stiffness * (-(vn + bias)) / inv_eff;
                 const Vec3 imp  = dir * j_imp;
-                if (j.break_on_overforce && std::fabs(j_imp / dt) > j.break_force) {
+                if (j.break_on_overforce && cardinal::fabs(j_imp / dt) > j.break_force) {
                     j.live = false;
                     continue;
                 }
@@ -1167,7 +1167,7 @@ private:
             if (A.is_sensor || B.is_sensor) continue;
             const f32 inv_sum = A.inv_mass + B.inv_mass;
             if (inv_sum <= 0.0f) continue;
-            const f32 corr = std::max(ev.penetration - kSlop, 0.0f) / inv_sum * kBaumgarte;
+            const f32 corr = cardinal::max(ev.penetration - kSlop, 0.0f) / inv_sum * kBaumgarte;
             const Vec3 push = ev.normal * corr;
             A.position -= push * A.inv_mass;
             B.position += push * B.inv_mass;
@@ -1292,11 +1292,11 @@ private:
                         const Vec3 d = fr.f.centre - b.position;
                         const f32 r2 = dot(d, d);
                         if (fr.f.radius > 0.0f && r2 > fr.f.radius * fr.f.radius) break;
-                        const f32 r = std::sqrt(std::max(r2, 1e-6f));
+                        const f32 r = cardinal::sqrt(cardinal::max(r2, 1e-6f));
                         const Vec3 n = d * (1.0f / r);
                         const f32 fall = (fr.f.falloff_exp <= 0.0f)
                             ? 1.0f
-                            : std::pow(std::max(r, 1e-3f), -fr.f.falloff_exp);
+                            : cardinal::pow(cardinal::max(r, 1e-3f), -fr.f.falloff_exp);
                         b.velocity += n * (fr.f.strength * fall * dt);
                         break;
                     }
@@ -1305,7 +1305,7 @@ private:
                             const Vec3 d = fr.f.centre - b.position;
                             if (dot(d, d) > fr.f.radius * fr.f.radius) break;
                         }
-                        b.velocity *= std::max(0.0f,
+                        b.velocity *= cardinal::max(0.0f,
                                                1.0f - fr.f.strength * dt);
                         break;
                     }
@@ -1337,21 +1337,21 @@ private:
     f32                                 broad_cell_{0.0f};       // 0 = N² fallback
     f32                                 time_scale_{1.0f};
     cardinal::core::SlotPool<BodyTag>   pool_;
-    std::vector<Body>                   bodies_;
-    std::vector<ContactEvent>           contacts_;
-    std::vector<std::pair<u32, u32>>    broad_pairs_;
+    cardinal::vector<Body>                   bodies_;
+    cardinal::vector<ContactEvent>           contacts_;
+    cardinal::vector<cardinal::pair<u32, u32>>    broad_pairs_;
     cardinal::core::SlotPool<JointTag>  joint_pool_;
-    std::vector<DistanceJoint>          joints_;
+    cardinal::vector<DistanceJoint>          joints_;
     cardinal::core::SlotPool<FieldTag>  field_pool_;
-    std::vector<FieldRecord>            fields_;
+    cardinal::vector<FieldRecord>            fields_;
     ContactCallback                     contact_cb_{};
 };
 
-std::unique_ptr<World> World::create() {
+cardinal::unique_ptr<World> World::create() {
     cardinal::log::infof("physics",
         "World online — gravity y=-9.81, fixed dt=1/120, 4 iters, "
         "OBB+capsule, sleeping, joints");
-    return std::make_unique<WorldImpl>();
+    return cardinal::make_unique<WorldImpl>();
 }
 
 // =============================================================================
@@ -1389,7 +1389,7 @@ Vec3 closest_point_on_collider(const Collider& c, const ShapeTransform& t,
             const f32  d2  = dot(d, d);
             const f32  r   = c.sphere.radius;
             if (d2 <= r * r) return q;
-            const f32 inv = 1.0f / std::sqrt(d2);
+            const f32 inv = 1.0f / cardinal::sqrt(d2);
             return t.position + d * (r * inv);
         }
         case ShapeKind::Box: {
@@ -1416,7 +1416,7 @@ Vec3 closest_point_on_collider(const Collider& c, const ShapeTransform& t,
             const f32  l2 = dot(d, d);
             const f32  r  = c.capsule.radius;
             if (l2 <= r * r) return q;
-            return cp + d * (r / std::sqrt(l2));
+            return cp + d * (r / cardinal::sqrt(l2));
         }
     }
     return q;
@@ -1428,7 +1428,7 @@ f32 distance_to_collider(const Collider& c, const ShapeTransform& t,
     const Vec3 cp = closest_point_on_collider(c, t, q);
     const Vec3 d  = q - cp;
     const f32  l2 = dot(d, d);
-    return l2 > 0.0f ? std::sqrt(l2) : 0.0f;
+    return l2 > 0.0f ? cardinal::sqrt(l2) : 0.0f;
 }
 
 AABB collider_world_aabb(const Collider& c, const ShapeTransform& t) noexcept {

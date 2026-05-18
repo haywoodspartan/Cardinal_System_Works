@@ -20,9 +20,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
+#include <cardinal/core/cmath.hpp>   // cardinal scalar math
 #include <cardinal/physics/physics.hpp>
-
-#include <cmath>
 
 namespace cardinal::physics {
 
