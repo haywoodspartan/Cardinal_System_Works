@@ -2,7 +2,9 @@
 
 #include <cardinal/core/log.hpp>
 
-#include <algorithm>
+#include <cardinal/core/algorithm.hpp>   // cardinal::clamp
+#include <cardinal/core/traits.hpp>      // cardinal::decay_t/is_same_v
+// cardinal::visit arrives via cine.hpp (core/utility.hpp)
 
 namespace cardinal::cine {
 
@@ -21,7 +23,7 @@ void Player::stop()  noexcept {
 }
 void Player::seek(float t) {
     if (seq_ == nullptr) return;
-    seq_->play_head_s = std::clamp(t, 0.0f, seq_->duration_s);
+    seq_->play_head_s = cardinal::clamp(t, 0.0f, seq_->duration_s);
     prev_time_s_      = seq_->play_head_s;
 }
 
@@ -37,15 +39,15 @@ void Player::tick(float dt) {
             seq_->play_head_s = seq_->duration_s;
             // Apply tracks for the tail of this lap.
             for (auto& tv : seq_->tracks) {
-                std::visit([&](auto& tr) {
-                    using TT = std::decay_t<decltype(tr)>;
-                    if constexpr (std::is_same_v<TT, AnimationTrack>) {
+                cardinal::visit([&](auto& tr) {
+                    using TT = cardinal::decay_t<decltype(tr)>;
+                    if constexpr (cardinal::is_same_v<TT, AnimationTrack>) {
                         if (tr.player) tr.player->tick(0.0f);
-                    } else if constexpr (std::is_same_v<TT, CameraTrack>) {
+                    } else if constexpr (cardinal::is_same_v<TT, CameraTrack>) {
                         for (const auto& sh : tr.shots)
                             if (sh.time_s > prev && sh.time_s <= seq_->duration_s)
                                 if (on_camera_) on_camera_(sh.camera_actor_id, sh.blend_seconds);
-                    } else if constexpr (std::is_same_v<TT, AudioTrack>) {
+                    } else if constexpr (cardinal::is_same_v<TT, AudioTrack>) {
                         for (const auto& ev : tr.events)
                             if (ev.time_s > prev && ev.time_s <= seq_->duration_s) {
                                 if (audio_) {
@@ -53,7 +55,7 @@ void Player::tick(float dt) {
                                     else          audio_->play_2d(ev.cue_id, ev.channel, ev.volume);
                                 }
                             }
-                    } else if constexpr (std::is_same_v<TT, EventTrack>) {
+                    } else if constexpr (cardinal::is_same_v<TT, EventTrack>) {
                         for (const auto& ev : tr.events)
                             if (ev.time_s > prev && ev.time_s <= seq_->duration_s)
                                 if (on_event_) on_event_(ev.event_name, ev.payload);
@@ -72,9 +74,9 @@ void Player::tick(float dt) {
 
     // Apply tracks for [prev, t].
     for (auto& tv : seq_->tracks) {
-        std::visit([&](auto& tr) {
-            using TT = std::decay_t<decltype(tr)>;
-            if constexpr (std::is_same_v<TT, AnimationTrack>) {
+        cardinal::visit([&](auto& tr) {
+            using TT = cardinal::decay_t<decltype(tr)>;
+            if constexpr (cardinal::is_same_v<TT, AnimationTrack>) {
                 if (tr.player) {
                     const float local_t = t - tr.start_time_s;
                     if (local_t >= 0.0f && local_t <= tr.length_s) {
@@ -82,11 +84,11 @@ void Player::tick(float dt) {
                         tr.player->tick(0.0f);   // apply current pose
                     }
                 }
-            } else if constexpr (std::is_same_v<TT, CameraTrack>) {
+            } else if constexpr (cardinal::is_same_v<TT, CameraTrack>) {
                 for (const auto& sh : tr.shots)
                     if (sh.time_s > prev_time_s_ && sh.time_s <= t)
                         if (on_camera_) on_camera_(sh.camera_actor_id, sh.blend_seconds);
-            } else if constexpr (std::is_same_v<TT, AudioTrack>) {
+            } else if constexpr (cardinal::is_same_v<TT, AudioTrack>) {
                 for (const auto& ev : tr.events)
                     if (ev.time_s > prev_time_s_ && ev.time_s <= t) {
                         if (audio_) {
@@ -94,7 +96,7 @@ void Player::tick(float dt) {
                             else          audio_->play_2d(ev.cue_id, ev.channel, ev.volume);
                         }
                     }
-            } else if constexpr (std::is_same_v<TT, EventTrack>) {
+            } else if constexpr (cardinal::is_same_v<TT, EventTrack>) {
                 for (const auto& ev : tr.events)
                     if (ev.time_s > prev_time_s_ && ev.time_s <= t)
                         if (on_event_) on_event_(ev.event_name, ev.payload);

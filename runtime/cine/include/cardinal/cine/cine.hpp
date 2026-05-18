@@ -24,13 +24,9 @@
 
 #include <cardinal/anim/anim.hpp>
 #include <cardinal/audio/audio.hpp>
-#include <cardinal/core/types.hpp>
-
-#include <functional>
-#include <memory>
-#include <string>
-#include <variant>
-#include <vector>
+#include <cardinal/core/types.hpp>        // function/string/shared_ptr
+#include <cardinal/core/utility.hpp>      // cardinal::variant, cardinal::move
+#include <cardinal/core/containers.hpp>   // cardinal::vector
 
 namespace cardinal::cine {
 
@@ -38,27 +34,27 @@ namespace cardinal::cine {
 // Tracks
 // ---------------------------------------------------------------------------
 struct AnimationTrack {
-    std::string                       name;
-    std::shared_ptr<cardinal::anim::Player> player;
+    cardinal::string                       name;
+    cardinal::shared_ptr<cardinal::anim::Player> player;
     float                             start_time_s{0.0f};
     float                             length_s   {1.0f};
 };
 
 struct CameraShot {
-    std::string label;
+    cardinal::string label;
     float       time_s{0.0f};
     u32         camera_actor_id{0};
     float       blend_seconds{0.5f};   // 0 = cut
 };
 
 struct CameraTrack {
-    std::string             name;
-    std::vector<CameraShot> shots;     // sorted by time
+    cardinal::string             name;
+    cardinal::vector<CameraShot> shots;     // sorted by time
 };
 
 struct AudioCueEvent {
     float       time_s{0.0f};
-    std::string cue_id;
+    cardinal::string cue_id;
     cardinal::audio::ChannelId channel{cardinal::audio::kChannelMusic};
     float       volume{1.0f};
     bool        is_3d{false};
@@ -66,34 +62,34 @@ struct AudioCueEvent {
 };
 
 struct AudioTrack {
-    std::string                 name;
-    std::vector<AudioCueEvent>  events;     // sorted by time
+    cardinal::string                 name;
+    cardinal::vector<AudioCueEvent>  events;     // sorted by time
 };
 
 struct EventCall {
     float       time_s{0.0f};
-    std::string event_name;
-    std::string payload;
+    cardinal::string event_name;
+    cardinal::string payload;
 };
 
 struct EventTrack {
-    std::string             name;
-    std::vector<EventCall>  events;
+    cardinal::string             name;
+    cardinal::vector<EventCall>  events;
 };
 
-using Track = std::variant<AnimationTrack, CameraTrack, AudioTrack, EventTrack>;
+using Track = cardinal::variant<AnimationTrack, CameraTrack, AudioTrack, EventTrack>;
 
 // ---------------------------------------------------------------------------
 // Markers + regions
 // ---------------------------------------------------------------------------
 struct Marker {
-    std::string label;
+    cardinal::string label;
     float       time_s{0.0f};
     u32         color_rgba{0xFFFFFFFFu};
 };
 
 struct Region {
-    std::string label;
+    cardinal::string label;
     float       start_s{0.0f};
     float       end_s  {1.0f};
     u32         color_rgba{0x80808080u};
@@ -103,7 +99,7 @@ struct Region {
 // Render config
 // ---------------------------------------------------------------------------
 struct RenderConfig {
-    std::string output_path{"capture/sequence_%04u.png"};
+    cardinal::string output_path{"capture/sequence_%04u.png"};
     float       start_time_s{0.0f};
     float       end_time_s  {5.0f};
     u32         fps         {30};
@@ -115,11 +111,11 @@ struct RenderConfig {
 // Sequence
 // ---------------------------------------------------------------------------
 struct Sequence {
-    std::string         name;
+    cardinal::string         name;
     float               duration_s{5.0f};
-    std::vector<Track>  tracks;
-    std::vector<Marker> markers;
-    std::vector<Region> regions;
+    cardinal::vector<Track>  tracks;
+    cardinal::vector<Marker> markers;
+    cardinal::vector<Region> regions;
     RenderConfig        render;
 
     // Editor playback state
@@ -143,10 +139,10 @@ public:
 
     Sequence* sequence() noexcept { return seq_; }
 
-    using EventDispatch = std::function<void(const std::string&, const std::string&)>;
-    using CameraSwitch  = std::function<void(u32 actor_id, float blend_seconds)>;
-    void set_event_dispatch(EventDispatch fn) { on_event_  = std::move(fn); }
-    void set_camera_switch(CameraSwitch fn)   { on_camera_ = std::move(fn); }
+    using EventDispatch = cardinal::function<void(const cardinal::string&, const cardinal::string&)>;
+    using CameraSwitch  = cardinal::function<void(u32 actor_id, float blend_seconds)>;
+    void set_event_dispatch(EventDispatch fn) { on_event_  = cardinal::move(fn); }
+    void set_camera_switch(CameraSwitch fn)   { on_camera_ = cardinal::move(fn); }
 
     void play()  noexcept;
     void pause() noexcept;
