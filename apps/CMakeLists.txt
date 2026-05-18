@@ -1,0 +1,2 @@
+add_subdirectory(cardinal_launcher)
+add_subdirectory(cardinal_sandbox_runner)

@@ -1,0 +1,300 @@
+// =============================================================================
+// Cardinal — deterministic simulation-orchestrator regression suite.
+//
+// SimWorld::tick is the fixed-timestep heartbeat behind all gameplay /
+// replay determinism. Pinned, with default parallel_handlers=false so
+// dispatch is sequential (no JobSystem dependency → fully pure):
+//
+//   * real_dt clamp [0, max_real_dt]; time-scale (incl. negative→0);
+//   * the physics accumulator: carry-over remainder across ticks and a
+//     hard sub-step cap (spiral-of-death guard) — fixed_dt = 0.10 so the
+//     math is hand-exact;
+//   * pause / resume / single-step (exactly one advancing tick then
+//     re-frozen) / start_paused;
+//   * strict tick-group order PreUpdate→PrePhysics→[physics]→PostPhysics
+//     →Update→LateUpdate→Render, Render running even while paused, and
+//     the quirk that TickGroup::Physics user handlers are NEVER invoked
+//     (integrate_physics_ replaces that slot);
+//   * monotonic handler ids, remove, stats.
+//
+// Exit 0 = all pass.
+// =============================================================================
+
+#include <cardinal/sim/sim.hpp>
+#include <cardinal/core/log.hpp>
+
+#include <string>
+#include <vector>
+
+namespace {
+
+namespace sm = cardinal::sim;
+using TG = sm::TickGroup;
+
+int g_checks = 0;
+int g_fail   = 0;
+
+void check_impl(bool ok, const char* expr, int line) {
+    ++g_checks;
+    if (!ok) {
+        ++g_fail;
+        cardinal::log::errorf("simtest", "FAIL  L%d  %s", line, expr);
+    }
+}
+#define CHECK(x) ::check_impl(static_cast<bool>(x), #x, __LINE__)
+
+bool ap(float a, float b, float e = 1e-4f) {
+    const float d = (a > b) ? (a - b) : (b - a);
+    return d <= e;
+}
+bool apd(double a, double b, double e = 1e-5) {
+    const double d = (a > b) ? (a - b) : (b - a);
+    return d <= e;
+}
+cardinal::usize sz(int n) { return static_cast<cardinal::usize>(n); }
+bool streq(const char* a, const char* b) { return std::string(a) == b; }
+
+sm::SimDesc accum_desc() {
+    sm::SimDesc d;
+    d.fixed_dt     = 0.10f;     // hand-exact accumulator math
+    d.max_real_dt  = 1.0f;
+    d.max_substeps = 4u;
+    return d;
+}
+
+// ---- tick_group_name ----------------------------------------------
+void test_group_names() {
+    CHECK(streq(sm::tick_group_name(TG::PreUpdate),   "PreUpdate"));
+    CHECK(streq(sm::tick_group_name(TG::PrePhysics),  "PrePhysics"));
+    CHECK(streq(sm::tick_group_name(TG::Physics),     "Physics"));
+    CHECK(streq(sm::tick_group_name(TG::PostPhysics), "PostPhysics"));
+    CHECK(streq(sm::tick_group_name(TG::Update),      "Update"));
+    CHECK(streq(sm::tick_group_name(TG::LateUpdate),  "LateUpdate"));
+    CHECK(streq(sm::tick_group_name(TG::Render),      "Render"));
+    CHECK(streq(sm::tick_group_name(TG::Count),       "(count)"));
+    CHECK(streq(sm::tick_group_name(static_cast<TG>(99u)), "?"));
+}
+
+// ---- accumulator: carry-over + sub-step cap + clamps --------------
+void test_accumulator() {
+    // Carry-over: half-fixed real_dt ⇒ substeps cadence 0,1,0,1.
+    {
+        sm::SimWorld w(accum_desc());
+        w.tick(0.05f);
+        CHECK(w.stats().physics_substeps_last == static_cast<cardinal::u64>(0));
+        w.tick(0.05f);                                   // accum 0.10 → 1
+        CHECK(w.stats().physics_substeps_last == static_cast<cardinal::u64>(1));
+        w.tick(0.05f);
+        CHECK(w.stats().physics_substeps_last == static_cast<cardinal::u64>(0));
+        w.tick(0.05f);
+        CHECK(w.stats().physics_substeps_last == static_cast<cardinal::u64>(1));
+        CHECK(w.stats().total_ticks == static_cast<cardinal::u64>(4));
+    }
+    // Exactly fixed_dt every tick ⇒ exactly one substep.
+    {
+        sm::SimWorld w(accum_desc());
+        w.tick(0.10f);
+        CHECK(w.stats().physics_substeps_last == static_cast<cardinal::u64>(1));
+        w.tick(0.10f);
+        CHECK(w.stats().physics_substeps_last == static_cast<cardinal::u64>(1));
+    }
+    // 3×fixed in one tick (under the cap) ⇒ exactly 3 substeps.
+    {
+        sm::SimWorld w(accum_desc());
+        w.tick(0.30f);
+        CHECK(w.stats().physics_substeps_last == static_cast<cardinal::u64>(3));
+    }
+    // Spiral-of-death guard: big real_dt is capped at max_substeps.
+    {
+        sm::SimWorld w(accum_desc());
+        w.tick(0.45f);                                   // 4.5 steps → cap 4
+        CHECK(w.stats().physics_substeps_last == static_cast<cardinal::u64>(4));
+    }
+    // real_dt clamped to max_real_dt (1.0) before anything else.
+    {
+        sm::SimWorld w(accum_desc());
+        const float ret = w.tick(1.0e9f);
+        CHECK(ap(ret, 1.0f));                             // scaled by ts 1
+        CHECK(apd(w.stats().real_time_seconds, 1.0));     // clamped sum
+        CHECK(w.stats().physics_substeps_last == static_cast<cardinal::u64>(4));
+    }
+    // Negative real_dt → 0: advancing tick, but no time, no substeps.
+    {
+        sm::SimWorld w(accum_desc());
+        const float ret = w.tick(-0.5f);
+        CHECK(ap(ret, 0.0f));
+        CHECK(apd(w.stats().real_time_seconds, 0.0));
+        CHECK(w.stats().physics_substeps_last == static_cast<cardinal::u64>(0));
+        CHECK(w.stats().total_ticks == static_cast<cardinal::u64>(1)); // advanced
+    }
+}
+
+// ---- pause / single-step / start_paused ---------------------------
+void test_pause_step() {
+    sm::SimWorld w;                                       // default desc
+    int uc = 0, rc = 0;
+    w.add_handler(TG::Update, [&](float){ ++uc; });
+    w.add_handler(TG::Render, [&](float){ ++rc; });
+
+    w.tick(1.0f / 60.0f);                                 // advance
+    CHECK(uc == 1 && rc == 1);
+    CHECK(w.stats().total_ticks == static_cast<cardinal::u64>(1));
+    CHECK(!w.paused());
+
+    w.pause();
+    CHECK(w.paused());
+    const float r = w.tick(1.0f / 60.0f);                 // frozen
+    CHECK(ap(r, 0.0f));
+    CHECK(uc == 1);                                       // Update skipped
+    CHECK(rc == 2);                                       // Render still runs
+    CHECK(w.stats().total_ticks == static_cast<cardinal::u64>(1));
+    const double rt_after_pause = w.stats().real_time_seconds;
+    CHECK(rt_after_pause > 0.0);                          // real time advances
+
+    w.step_one_frame();
+    CHECK(w.paused());                                    // step keeps paused
+    w.tick(1.0f / 60.0f);                                 // the one step
+    CHECK(uc == 2);
+    CHECK(w.stats().total_ticks == static_cast<cardinal::u64>(2));
+    w.tick(1.0f / 60.0f);                                 // re-frozen
+    CHECK(uc == 2);
+    CHECK(w.stats().total_ticks == static_cast<cardinal::u64>(2));
+
+    w.resume();
+    CHECK(!w.paused());
+    w.tick(1.0f / 60.0f);
+    CHECK(uc == 3);
+    CHECK(w.stats().total_ticks == static_cast<cardinal::u64>(3));
+
+    // start_paused.
+    sm::SimDesc sp; sp.start_paused = true;
+    sm::SimWorld w2(sp);
+    CHECK(w2.paused());
+    w2.tick(1.0f / 60.0f);
+    CHECK(w2.stats().total_ticks == static_cast<cardinal::u64>(0));
+}
+
+// ---- time scale (incl. negative clamp) ----------------------------
+void test_time_scale() {
+    sm::SimWorld w;
+    float last_dt = -1.0f;
+    w.add_handler(TG::Update, [&](float dt){ last_dt = dt; });
+
+    CHECK(ap(w.time_scale(), 1.0f));
+    w.set_time_scale(2.0f);
+    CHECK(ap(w.time_scale(), 2.0f));
+    CHECK(ap(w.tick(0.01f), 0.02f));
+    CHECK(ap(last_dt, 0.02f));
+
+    w.set_time_scale(0.5f);
+    CHECK(ap(w.tick(0.02f), 0.01f));
+    CHECK(ap(last_dt, 0.01f));
+
+    // Negative scale clamps to 0: still an advancing tick, but dt 0.
+    w.set_time_scale(-3.0f);
+    CHECK(ap(w.time_scale(), 0.0f));
+    const cardinal::u64 t0 = w.stats().total_ticks;
+    CHECK(ap(w.tick(0.05f), 0.0f));
+    CHECK(ap(last_dt, 0.0f));
+    CHECK(w.stats().total_ticks == t0 + static_cast<cardinal::u64>(1));
+    CHECK(ap(w.stats().time_scale, 0.0f));
+}
+
+// ---- handlers: ids, group order, Physics-never, remove ------------
+void test_handlers() {
+    sm::SimWorld w;                                       // not paused
+    std::vector<std::string> seq;
+
+    const auto h1 = w.add_handler(TG::PreUpdate,   [&](float){ seq.push_back("A"); });
+    const auto h2 = w.add_handler(TG::PrePhysics,  [&](float){ seq.push_back("B"); });
+    const auto h3 = w.add_handler(TG::PostPhysics, [&](float){ seq.push_back("C"); });
+    const auto h4 = w.add_handler(TG::Update,      [&](float){ seq.push_back("D"); });
+    const auto h5 = w.add_handler(TG::LateUpdate,  [&](float){ seq.push_back("E"); });
+    const auto h6 = w.add_handler(TG::Render,      [&](float){ seq.push_back("F"); });
+    const auto h7 = w.add_handler(TG::Physics,     [&](float){ seq.push_back("X"); });
+    CHECK(h1 == 1u && h2 == 2u && h3 == 3u && h4 == 4u);
+    CHECK(h5 == 5u && h6 == 6u && h7 == 7u);              // monotonic from 1
+
+    w.tick(1.0f / 60.0f);
+    CHECK(seq.size() == sz(6));
+    CHECK(seq.size() == sz(6) &&
+          seq[0]=="A" && seq[1]=="B" && seq[2]=="C" &&
+          seq[3]=="D" && seq[4]=="E" && seq[5]=="F");
+    // The Physics user-handler is NEVER invoked (engine-internal slot).
+    bool saw_x = false;
+    for (const auto& s : seq) if (s == "X") saw_x = true;
+    CHECK(!saw_x);
+
+    // Two handlers in one group run in insertion order.
+    w.add_handler(TG::Update, [&](float){ seq.push_back("D2"); });
+    seq.clear();
+    w.tick(1.0f / 60.0f);
+    CHECK(seq.size() == sz(7));
+    CHECK(seq[3] == "D" && seq[4] == "D2");
+
+    // remove_handler drops just that one; unknown id is a safe no-op.
+    w.remove_handler(h4);                                  // removes "D"
+    w.remove_handler(9999u);                               // no-op
+    seq.clear();
+    w.tick(1.0f / 60.0f);
+    bool saw_d = false, saw_d2 = false;
+    for (const auto& s : seq) { if (s=="D") saw_d=true; if (s=="D2") saw_d2=true; }
+    CHECK(!saw_d && saw_d2);
+
+    // Render runs even when paused; the rest don't.
+    w.pause();
+    seq.clear();
+    w.tick(1.0f / 60.0f);
+    CHECK(seq.size() == sz(1) && seq[0] == "F");
+}
+
+// ---- stats + desc -------------------------------------------------
+void test_stats_desc() {
+    sm::SimWorld w;
+    sm::SimStats s0 = w.stats();
+    CHECK(s0.total_ticks == static_cast<cardinal::u64>(0));
+    CHECK(s0.physics_substeps_last == static_cast<cardinal::u64>(0));
+    CHECK(apd(s0.sim_time_seconds, 0.0) && apd(s0.real_time_seconds, 0.0));
+    CHECK(ap(s0.time_scale, 1.0f));
+    CHECK(!s0.paused && !s0.single_step_armed);
+
+    // desc() echoes the construction descriptor (defaults here).
+    CHECK(ap(w.desc().fixed_dt, 1.0f / 60.0f));
+    CHECK(w.desc().max_substeps == 4u);
+    CHECK(ap(w.desc().max_real_dt, 0.10f));
+    CHECK(!w.desc().parallel_handlers);
+
+    // sim_time accrues scaled_dt on advance; real_time accrues clamped
+    // real_dt always; single_step_armed stays false throughout.
+    w.tick(0.02f);
+    w.tick(0.02f);
+    sm::SimStats s1 = w.stats();
+    CHECK(s1.total_ticks == static_cast<cardinal::u64>(2));
+    CHECK(apd(s1.sim_time_seconds,  0.04));
+    CHECK(apd(s1.real_time_seconds, 0.04));
+    CHECK(!s1.single_step_armed);
+
+    w.step_one_frame();
+    CHECK(!w.stats().single_step_armed);                  // never set true
+    w.tick(0.02f);                                        // consumes the step
+    CHECK(!w.stats().single_step_armed);
+}
+
+}  // namespace
+
+int main() {
+    test_group_names();
+    test_accumulator();
+    test_pause_step();
+    test_time_scale();
+    test_handlers();
+    test_stats_desc();
+
+    if (g_fail == 0) {
+        cardinal::log::infof("simtest", "OK  %d checks passed", g_checks);
+        return 0;
+    }
+    cardinal::log::errorf("simtest", "%d / %d checks FAILED",
+                          g_fail, g_checks);
+    return 1;
+}

@@ -1,0 +1,141 @@
+#pragma once
+
+// =============================================================================
+// Cardinal — Runtime asset registry.
+//
+// What game code talks to. Loads cooked + packed assets on demand,
+// caches them, hands out typed handles (MeshAsset / TextureAsset /
+// MaterialAsset / ShaderAsset).
+//
+// Backing store can be either a directory of `.cooked` files (development
+// mode) or one or more pack::Archive (shipping mode). Both expose the same
+// `find(key) -> bytes` interface; the Registry doesn't care.
+// =============================================================================
+
+#include <cardinal/core/types.hpp>
+#include <cardinal/cook/cook.hpp>
+#include <cardinal/scene/math.hpp>
+
+#include <functional>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace cardinal::pack { class Archive; }
+
+namespace cardinal::asset {
+
+// ---------------------------------------------------------------------------
+// Typed asset structures. These are *runtime* views over the cooked bytes
+// (the cook module produces them in known formats, see cook.cpp).
+// ---------------------------------------------------------------------------
+struct TextureAsset {
+    u32             width{0};
+    u32             height{0};
+    u32             channels{4};
+    std::vector<u8> rgba;          // size = width*height*channels
+};
+
+struct MeshVertex {
+    cardinal::scene::Vec3 position{0,0,0};
+    cardinal::scene::Vec3 normal  {0,1,0};
+    cardinal::scene::Vec3 color   {1,1,1};
+};
+
+struct MeshAsset {
+    std::vector<MeshVertex> vertices;
+    std::vector<u32>        indices;     // triangle list
+};
+
+struct ShaderAsset {
+    u32              stage{0};            // shader::Stage as u32
+    std::string      entry_point;
+    std::vector<u8>  bytecode;            // SPIR-V or DXIL
+};
+
+// PBR-ish material properties. Renderer's "Solid" mode multiplies these
+// into the per-fragment shading.
+struct MaterialAsset {
+    cardinal::scene::Vec3 base_color {0.8f, 0.8f, 0.8f};
+    float                 metallic   {0.0f};
+    float                 roughness  {0.5f};
+    cardinal::scene::Vec3 emission   {0.0f, 0.0f, 0.0f};
+    float                 emission_strength{0.0f};
+    std::string           base_color_texture;     // asset key (optional)
+};
+
+// ---------------------------------------------------------------------------
+// Registry — what game code calls.
+// ---------------------------------------------------------------------------
+class Registry {
+public:
+    static std::shared_ptr<Registry> create();
+    ~Registry();
+
+    // ----- Backing-store mounts -------------------------------------
+    void mount_directory(const std::string& cooked_dir);
+    void mount_archive  (std::shared_ptr<cardinal::pack::Archive> archive);
+    void clear_mounts() noexcept;
+
+    // ----- Existence query ------------------------------------------
+    bool                       contains(const std::string& key) const;
+    cook::AssetType            type_of(const std::string& key) const;
+    std::vector<std::string>   keys() const;
+
+    // ----- Typed loaders -------------------------------------------
+    // Each returns a shared_ptr cached by key. If the asset is missing or
+    // the cooked blob doesn't decode as the expected type, returns null.
+    std::shared_ptr<TextureAsset>  load_texture (const std::string& key);
+    std::shared_ptr<MeshAsset>     load_mesh    (const std::string& key);
+    std::shared_ptr<ShaderAsset>   load_shader  (const std::string& key);
+    std::shared_ptr<MaterialAsset> load_material(const std::string& key);
+
+    // Generic raw-bytes loader (still indirects through cooked-blob unwrap).
+    bool load_raw(const std::string& key, std::vector<u8>& out_bytes);
+
+    // ----- Material registration / overrides ------------------------
+    // Materials are tiny, so we keep them in-memory (no disk round-trip
+    // unless explicitly cooked). register_material lets game/editor code
+    // create runtime materials that look the same as cooked ones.
+    void register_material(const std::string& key, MaterialAsset m);
+
+    struct Stats {
+        u32 mount_dirs{0};
+        u32 mount_archives{0};
+        u32 cached_textures{0};
+        u32 cached_meshes{0};
+        u32 cached_shaders{0};
+        u32 cached_materials{0};
+        u64 bytes_resident{0};
+    };
+    Stats stats() const noexcept;
+
+private:
+    Registry() = default;
+    bool fetch_raw_(const std::string& key, std::vector<u8>& out_bytes,
+                    cook::AssetType* out_type);
+
+    std::vector<std::string>                                    dirs_;
+    std::vector<std::shared_ptr<cardinal::pack::Archive>>       archives_;
+    std::unordered_map<std::string, std::shared_ptr<TextureAsset>>  tex_cache_;
+    std::unordered_map<std::string, std::shared_ptr<MeshAsset>>     mesh_cache_;
+    std::unordered_map<std::string, std::shared_ptr<ShaderAsset>>   shader_cache_;
+    std::unordered_map<std::string, std::shared_ptr<MaterialAsset>> mat_cache_;
+};
+
+// ---------------------------------------------------------------------------
+// Helpers — typed serialise/deserialise of the cook payloads.
+// ---------------------------------------------------------------------------
+namespace codec {
+    std::vector<u8>  encode_texture (const TextureAsset& t);
+    bool             decode_texture (const std::vector<u8>& bytes, TextureAsset& out);
+    std::vector<u8>  encode_mesh    (const MeshAsset& m);
+    bool             decode_mesh    (const std::vector<u8>& bytes, MeshAsset& out);
+    std::vector<u8>  encode_shader  (const ShaderAsset& s);
+    bool             decode_shader  (const std::vector<u8>& bytes, ShaderAsset& out);
+    std::vector<u8>  encode_material(const MaterialAsset& m);
+    bool             decode_material(const std::vector<u8>& bytes, MaterialAsset& out);
+}
+
+}  // namespace cardinal::asset

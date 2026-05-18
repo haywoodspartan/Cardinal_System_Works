@@ -1,0 +1,68 @@
+Cardinal System Works License, Version 1.0
+A permissive, MIT-style license with a trust-based 1% revenue share.
+
+Copyright (c) 2026 Cardinal System Works
+
+SPDX-License-Identifier: LicenseRef-Cardinal-Trust-1.0
+
+-------------------------------------------------------------------------------
+
+Permission is hereby granted, free of charge, to any person or entity
+obtaining a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including without
+limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom
+the Software is furnished to do so, subject to the following conditions:
+
+1. ATTRIBUTION
+
+   The above copyright notice and this permission notice shall be included in
+   all copies or substantial portions of the Software.
+
+2. TRUST-BASED REVENUE SHARE (HONOR SYSTEM)
+
+   If you or your organization earn Revenue that is directly and materially
+   attributable to the Software -- including derivative works, or products
+   and services that incorporate a substantial portion of the Software -- you
+   are kindly asked, in good faith, to contribute one percent (1%) of that
+   attributable Revenue to the copyright holder, for as long as such Revenue
+   continues.
+
+   This is a request made on trust. It is a moral and community expectation,
+   NOT a legal condition of this License, and NOT a fee, royalty, or
+   obligation enforceable under this Agreement. Your rights under this License
+   are granted IN FULL whether or not you choose to contribute. There is no
+   audit right, no reporting requirement, no interest or penalty, and no
+   suspension or termination of any right for non-contribution.
+
+   "Revenue" means gross revenue actually received and clearly traceable to
+   the Software. It excludes taxes, refunds and chargebacks, and any revenue
+   from unrelated products or services. Contributions may be estimated and
+   rounded reasonably and in good faith, and may be made by any reasonable
+   means arranged with the copyright holder.
+
+   Personal, hobby, educational, academic-research, evaluation, and
+   non-profit use are always exempt and free.
+
+3. NO ADDITIONAL RESTRICTIONS
+
+   You may not apply legal terms or technological measures that legally
+   restrict others from doing anything this License permits, except that you
+   may license your own original derivative contributions under any terms you
+   choose, provided this notice and Section 1 are preserved for the portions
+   that remain covered by this License.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-------------------------------------------------------------------------------
+Note: The 1% revenue share in Section 2 is intentionally trust-based and
+non-binding so that this License remains as permissive and predictable as the
+MIT License. If you would like the revenue share to be a legally enforceable
+condition instead, that is a materially different license and you should have
+it reviewed by a qualified attorney.

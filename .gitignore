@@ -1,0 +1,121 @@
+# =============================================================================
+# Cardinal System Works — .gitignore
+# C++ / CMake / Ninja / vcpkg project. Safe for a public GitHub upload.
+# =============================================================================
+
+# ---- Third-party SDKs (NVIDIA — NOT redistributable) -----------------------
+# ALL vendored NVIDIA SDKs are external and must NEVER be committed/uploaded.
+# The entire third_party/ tree is ignored. The CMake integration in
+# cmake/cardinal_third_party.cmake is existence-gated, so the engine still
+# builds with third_party/ absent — see THIRD_PARTY.md to obtain the SDKs.
+# (If you ever add a genuinely redistributable third-party dep, un-ignore it
+#  explicitly, e.g.:  !third_party/<name>/ )
+third_party/
+
+# ---- Build outputs ---------------------------------------------------------
+build/
+out/
+cmake-build-*/
+vcpkg_installed/
+run/                      # auto-generated launcher shortcuts (CMake)
+install/
+dist/
+
+# ---- CMake artifacts -------------------------------------------------------
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+CMakeScripts/
+*.cmake.stamp
+compile_commands.json
+
+# ---- IDE / editor ----------------------------------------------------------
+.vs/
+.vscode/
+.idea/
+.fleet/
+.cache/
+.ccls-cache/
+.clangd/
+*.user
+*.suo
+*.sln.docstates
+*.vcxproj.user
+*.code-workspace
+*-CMakeLists.txt.user
+*.sublime-workspace
+.qtc_clangd/
+
+# ---- Compiled / generated --------------------------------------------------
+*.obj
+*.o
+*.lo
+*.slo
+*.lib
+*.a
+*.la
+*.dll
+*.dll.a
+*.so
+*.so.*
+*.dylib
+*.exe
+*.out
+*.app
+*.pdb
+*.ilk
+*.exp
+*.idb
+*.map
+*.gch
+*.pch
+
+# ---- Shader cache ----------------------------------------------------------
+*.spv.cache
+shader_cache/
+
+# ---- Local scratch logs ----------------------------------------------------
+# Ad-hoc build/test capture files live at the repo root as *.txt. Ignore every
+# root-level .txt EXCEPT the real top-level CMakeLists.txt. (Sub-directory
+# CMakeLists.txt are unaffected — the leading slash anchors to the root only.)
+/*.txt
+!/CMakeLists.txt
+*.log
+*.tmp
+*.bak
+*.orig
+*~
+*.swp
+*.swo
+core
+core.*
+perf.data*
+*.stackdump
+
+# ---- Secrets / local config ------------------------------------------------
+.env
+.env.*
+*.local
+secrets.*
+
+# ---- OS junk ---------------------------------------------------------------
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+# Linux
+.fuse_hidden*
+.directory
+.nfs*

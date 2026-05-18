@@ -1,0 +1,155 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": { "major": 3, "minor": 27, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+            }
+        },
+        {
+            "name": "windows-msvc",
+            "hidden": true,
+            "inherits": "base",
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "cl",
+                "CMAKE_CXX_COMPILER": "cl"
+            }
+        },
+        {
+            "name": "windows-msvc-debug",
+            "inherits": "windows-msvc",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+        },
+        {
+            "name": "windows-msvc-release",
+            "inherits": "windows-msvc",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+        },
+        {
+            "name": "windows-msvc-debug-arm64",
+            "inherits": "windows-msvc",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_SYSTEM_PROCESSOR": "ARM64"
+            }
+        },
+        {
+            "name": "windows-msvc-release-arm64",
+            "inherits": "windows-msvc",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_SYSTEM_PROCESSOR": "ARM64"
+            }
+        },
+        {
+            "name": "windows-clang",
+            "hidden": true,
+            "inherits": "base",
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang-cl",
+                "CMAKE_CXX_COMPILER": "clang-cl"
+            }
+        },
+        {
+            "name": "windows-clang-debug",
+            "inherits": "windows-clang",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+        },
+        {
+            "name": "windows-clang-release",
+            "inherits": "windows-clang",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+        },
+        {
+            "name": "windows-clang-debug-arm64",
+            "inherits": "windows-clang",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_SYSTEM_PROCESSOR": "ARM64"
+            }
+        },
+        {
+            "name": "windows-clang-release-arm64",
+            "inherits": "windows-clang",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_SYSTEM_PROCESSOR": "ARM64"
+            }
+        },
+        {
+            "name": "linux-clang",
+            "hidden": true,
+            "inherits": "base",
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++"
+            }
+        },
+        {
+            "name": "linux-clang-debug",
+            "inherits": "linux-clang",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+        },
+        {
+            "name": "linux-clang-release",
+            "inherits": "linux-clang",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+        },
+        {
+            "name": "linux-clang-debug-arm64",
+            "inherits": "linux-clang",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_SYSTEM_PROCESSOR": "aarch64",
+                "CMAKE_C_COMPILER_TARGET": "aarch64-linux-gnu",
+                "CMAKE_CXX_COMPILER_TARGET": "aarch64-linux-gnu"
+            }
+        },
+        {
+            "name": "linux-clang-release-arm64",
+            "inherits": "linux-clang",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_SYSTEM_PROCESSOR": "aarch64",
+                "CMAKE_C_COMPILER_TARGET": "aarch64-linux-gnu",
+                "CMAKE_CXX_COMPILER_TARGET": "aarch64-linux-gnu"
+            }
+        },
+        {
+            "name": "default",
+            "displayName": "Default (host MSVC/Clang, RelWithDebInfo, x64)",
+            "inherits": "windows-msvc-release",
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+        },
+        {
+            "name": "default-linux",
+            "displayName": "Default (Linux Clang, RelWithDebInfo, x64)",
+            "inherits": "linux-clang-release",
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+        }
+    ],
+    "buildPresets": [
+        { "name": "windows-msvc-debug",          "configurePreset": "windows-msvc-debug" },
+        { "name": "windows-msvc-release",         "configurePreset": "windows-msvc-release" },
+        { "name": "windows-msvc-debug-arm64",     "configurePreset": "windows-msvc-debug-arm64" },
+        { "name": "windows-msvc-release-arm64",   "configurePreset": "windows-msvc-release-arm64" },
+        { "name": "windows-clang-debug",          "configurePreset": "windows-clang-debug" },
+        { "name": "windows-clang-release",        "configurePreset": "windows-clang-release" },
+        { "name": "windows-clang-debug-arm64",    "configurePreset": "windows-clang-debug-arm64" },
+        { "name": "windows-clang-release-arm64",  "configurePreset": "windows-clang-release-arm64" },
+        { "name": "linux-clang-debug",            "configurePreset": "linux-clang-debug" },
+        { "name": "linux-clang-release",          "configurePreset": "linux-clang-release" },
+        { "name": "linux-clang-debug-arm64",      "configurePreset": "linux-clang-debug-arm64" },
+        { "name": "linux-clang-release-arm64",    "configurePreset": "linux-clang-release-arm64" },
+        { "name": "default",                      "configurePreset": "default" },
+        { "name": "default-linux",                "configurePreset": "default-linux" }
+    ]
+}

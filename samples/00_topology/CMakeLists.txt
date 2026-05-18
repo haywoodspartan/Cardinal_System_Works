@@ -1,0 +1,3 @@
+add_executable(Cardinal_System_Topology main.cpp)
+target_link_libraries(Cardinal_System_Topology PRIVATE cardinal::core cardinal::compile_flags)
+set_target_properties(Cardinal_System_Topology PROPERTIES FOLDER samples)
