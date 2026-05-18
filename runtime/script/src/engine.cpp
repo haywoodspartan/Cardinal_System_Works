@@ -23,15 +23,14 @@ extern "C" {
     #include <Windows.h>
 #endif
 
-#include <cstdio>
-#include <cstring>
-#include <fstream>
-#include <set>
-#include <sstream>
-#include <string>
-#include <thread>
-#include <utility>
-#include <vector>
+#include <cardinal/core/chrono.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/fstream.hpp>
+#include <cardinal/core/sstream.hpp>
+#include <cardinal/core/thread.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::script {
 
@@ -68,9 +67,9 @@ void register_bindings(lua_State* L) {
     lua_setglobal(L, "cardinal");
 }
 
-std::string pop_error(lua_State* L) {
+cardinal::string pop_error(lua_State* L) {
     const char* msg = lua_tostring(L, -1);
-    std::string out = msg ? msg : "(no error message)";
+    cardinal::string out = msg ? msg : "(no error message)";
     lua_pop(L, 1);
     return out;
 }
@@ -78,7 +77,7 @@ std::string pop_error(lua_State* L) {
 // Return the canonical "source name" used by breakpoint matching. Lua
 // stores `lua_Debug::source` like "@path/to/file.lua" for files and
 // "=[chunk name]" for in-memory chunks; we strip the leading sigil.
-std::string canonical_source(const lua_Debug& ar) {
+cardinal::string canonical_source(const lua_Debug& ar) {
     if (ar.source == nullptr) return {};
     if (ar.source[0] == '@' || ar.source[0] == '=') return ar.source + 1;
     return ar.source;
@@ -101,9 +100,9 @@ public:
     }
     ~EngineImpl() override { if (L_) lua_close(L_); }
 
-    std::string run_string(const char* code, const char* chunk_name) override {
+    cardinal::string run_string(const char* code, const char* chunk_name) override {
         if (L_ == nullptr) return "Lua engine not initialised";
-        if (luaL_loadbuffer(L_, code, std::strlen(code),
+        if (luaL_loadbuffer(L_, code, cardinal::strlen(code),
                             chunk_name ? chunk_name : "=chunk") != LUA_OK) {
             return pop_error(L_);
         }
@@ -113,11 +112,11 @@ public:
         return {};
     }
 
-    std::string repl_eval(const char* line) override {
+    cardinal::string repl_eval(const char* line) override {
         if (L_ == nullptr) return "(no engine)";
         if (line == nullptr || *line == '\0') return {};
 
-        std::string expr = "return ("; expr += line; expr += ")";
+        cardinal::string expr = "return ("; expr += line; expr += ")";
         const int top0 = lua_gettop(L_);
         bool returned_value = false;
         if (luaL_loadbuffer(L_, expr.data(), expr.size(), "=repl") == LUA_OK &&
@@ -126,7 +125,7 @@ public:
             returned_value = true;
         } else {
             lua_settop(L_, top0);
-            if (luaL_loadbuffer(L_, line, std::strlen(line), "=repl") != LUA_OK) {
+            if (luaL_loadbuffer(L_, line, cardinal::strlen(line), "=repl") != LUA_OK) {
                 return pop_error(L_);
             }
             if (lua_pcall(L_, 0, LUA_MULTRET, 0) != LUA_OK) {
@@ -135,9 +134,9 @@ public:
         }
 
         const int n = lua_gettop(L_) - top0;
-        if (n <= 0) return returned_value ? std::string("nil") : std::string{};
+        if (n <= 0) return returned_value ? cardinal::string("nil") : cardinal::string{};
 
-        std::string out;
+        cardinal::string out;
         for (int i = 0; i < n; ++i) {
             const char* s = luaL_tolstring(L_, top0 + 1 + i, nullptr);
             if (i) out += "\t";
@@ -148,16 +147,16 @@ public:
         return out;
     }
 
-    std::string run_file(const char* path) override {
+    cardinal::string run_file(const char* path) override {
         if (L_ == nullptr) return "Lua engine not initialised";
-        std::ifstream f(path);
+        cardinal::ifstream f(path);
         if (!f.good()) {
-            std::string err = "cannot open: ";
+            cardinal::string err = "cannot open: ";
             err += path ? path : "(null)";
             return err;
         }
-        std::stringstream ss; ss << f.rdbuf();
-        std::string src = ss.str();
+        cardinal::stringstream ss; ss << f.rdbuf();
+        cardinal::string src = ss.str();
         return run_string(src.c_str(), path);
     }
 
@@ -183,7 +182,7 @@ public:
         breakpoints_.erase({source ? source : "", line});
     }
     void clear_breakpoints() override { breakpoints_.clear(); }
-    std::vector<std::pair<std::string, u32>> breakpoints() const override {
+    cardinal::vector<cardinal::pair<cardinal::string, u32>> breakpoints() const override {
         return { breakpoints_.begin(), breakpoints_.end() };
     }
 
@@ -196,9 +195,9 @@ public:
         state_           = (mode == StepMode::Continue) ? DebugState::Idle : DebugState::Stepping;
     }
 
-    std::vector<DebugFrame> stack() const override { return paused_stack_; }
-    std::vector<DebugVar>   locals() const override { return paused_locals_; }
-    std::vector<DebugVar>   upvalues() const override { return paused_upvalues_; }
+    cardinal::vector<DebugFrame> stack() const override { return paused_stack_; }
+    cardinal::vector<DebugVar>   locals() const override { return paused_locals_; }
+    cardinal::vector<DebugVar>   upvalues() const override { return paused_upvalues_; }
 
 private:
     static EngineImpl* from_state(lua_State* L) {
@@ -218,7 +217,7 @@ private:
             ++call_depth_;
             lua_getinfo(L, "nS", ar);
             const char* name = ar->name ? ar->name :
-                              (ar->what && std::strcmp(ar->what, "main") == 0 ? "<main>" : "?");
+                              (ar->what && cardinal::strcmp(ar->what, "main") == 0 ? "<main>" : "?");
             cardinal::trace::Timeline::instance().push(
                 name, "lua", cardinal::trace::EventKind::Call, call_depth_);
             return;
@@ -256,7 +255,7 @@ private:
         // Breakpoint match.
         if (!breakpoints_.empty()) {
             lua_getinfo(L, "Sl", ar);
-            const std::string src = canonical_source(*ar);
+            const cardinal::string src = canonical_source(*ar);
             if (breakpoints_.count({src, static_cast<u32>(ar->currentline)})) {
                 pause_here(L, ar);
             }
@@ -280,7 +279,7 @@ private:
 
         // Spin-wait. Sleep briefly between checks so we don't pin a core.
         while (state_ == DebugState::AtBreakpoint) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            cardinal::this_thread::sleep_for(cardinal::chrono::milliseconds(2));
         }
     }
 
@@ -297,7 +296,7 @@ private:
             f.current_line = static_cast<u32>(d.currentline);
             f.what         = d.what  ? d.what  : "";
             f.name         = d.name  ? d.name  : "";
-            paused_stack_.push_back(std::move(f));
+            paused_stack_.push_back(cardinal::move(f));
         }
         if (!paused_stack_.empty() && lua_getstack(L, 0, &d)) {
             // Locals at frame 0.
@@ -334,7 +333,7 @@ private:
 
     // Debugger state
     bool                                            debug_enabled_{false};
-    std::set<std::pair<std::string, u32>>           breakpoints_;
+    cardinal::set<cardinal::pair<cardinal::string, u32>>           breakpoints_;
     DebugState                                      state_{DebugState::Idle};
     StepMode                                        step_mode_{StepMode::Continue};
     u32                                             call_depth_{0};
@@ -342,13 +341,13 @@ private:
     u32                                             step_base_depth_{0};
 
     // Snapshot for the panel
-    std::vector<DebugFrame>                         paused_stack_;
-    std::vector<DebugVar>                           paused_locals_;
-    std::vector<DebugVar>                           paused_upvalues_;
+    cardinal::vector<DebugFrame>                         paused_stack_;
+    cardinal::vector<DebugVar>                           paused_locals_;
+    cardinal::vector<DebugVar>                           paused_upvalues_;
 };
 
 }  // namespace
 
-std::unique_ptr<Engine> Engine::create() { return std::make_unique<EngineImpl>(); }
+cardinal::unique_ptr<Engine> Engine::create() { return cardinal::make_unique<EngineImpl>(); }
 
 }  // namespace cardinal::script
