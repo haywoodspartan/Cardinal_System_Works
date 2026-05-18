@@ -17,9 +17,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-
-#include <string>
-#include <vector>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::hud {
 
@@ -43,7 +41,7 @@ public:
 
     // ---- Text ------------------------------------------------------
     // Optional `wrap_w` 0 = no wrap.
-    void text(float x, float y, const std::string& s, Color c = {255,255,255,255}) noexcept;
+    void text(float x, float y, const cardinal::string& s, Color c = {255,255,255,255}) noexcept;
 
     // ---- Bars (HP / mana / stamina / progress) --------------------
     // Filled fraction 0..1. Optional border + label.
@@ -53,7 +51,7 @@ public:
              Color bg = {30, 30, 30, 200}) noexcept;
     void bar_with_label(float x, float y, float w, float h,
                         float fill_fraction,
-                        const std::string& label,
+                        const cardinal::string& label,
                         Color fg = {0, 200, 60, 255}) noexcept;
 
     // ---- Reticles / crosshairs -------------------------------------
@@ -79,7 +77,7 @@ public:
     void minimap(float x, float y, float side_px,
                  float world_origin_x, float world_origin_y,
                  float world_size,
-                 const std::vector<MapMarker>& markers,
+                 const cardinal::vector<MapMarker>& markers,
                  Color border = {200, 200, 200, 220},
                  Color bg     = { 10,  10,  20, 180}) noexcept;
 
@@ -90,7 +88,7 @@ public:
         float duration_s{2.5f};
         Color color{255, 255, 255, 255};
     };
-    void push_toast(const std::string& message, ToastOpts opts = {});
+    void push_toast(const cardinal::string& message, ToastOpts opts = {});
     void tick_toasts(float dt) noexcept;
     void render_toasts(float anchor_x, float anchor_y) noexcept;   // top-right of group
 
@@ -102,7 +100,7 @@ public:
 
 private:
     struct Toast {
-        std::string message;
+        cardinal::string message;
         float       remaining{0.0f};
         float       duration {0.0f};
         Color       color    {255, 255, 255, 255};
@@ -118,13 +116,13 @@ private:
         float    g{}, h{};
         Color    col{};
         float    thickness{1.0f};
-        std::string text;
+        cardinal::string text;
     };
 
     u32                screen_w_{0};
     u32                screen_h_{0};
-    std::vector<Prim>  prims_;
-    std::vector<Toast> toasts_;
+    cardinal::vector<Prim>  prims_;
+    cardinal::vector<Toast> toasts_;
 };
 
 }  // namespace cardinal::hud
