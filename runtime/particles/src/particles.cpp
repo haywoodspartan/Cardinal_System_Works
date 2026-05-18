@@ -1,7 +1,8 @@
 #include <cardinal/particles/particles.hpp>
 
-#include <algorithm>
-#include <cmath>
+#include <cardinal/core/algorithm.hpp>   // cardinal::clamp/remove_if
+#include <cardinal/core/cmath.hpp>       // cardinal scalar math
+#include <cardinal/core/utility.hpp>     // cardinal::move
 
 namespace cardinal::particles {
 
@@ -42,7 +43,7 @@ inline u32 lerp_rgba(u32 a, u32 b, float t) noexcept {
 // Emitter
 // ---------------------------------------------------------------------------
 Emitter::Emitter(EmitterDesc desc)
-    : desc_(std::move(desc)), rng_state_(desc_.rng_seed)
+    : desc_(cardinal::move(desc)), rng_state_(desc_.rng_seed)
 {
     live_.reserve(desc_.max_particles);
 }
@@ -77,7 +78,7 @@ void Emitter::tick(float dt) noexcept {
 
     // 2) Integrate live particles. Iterate index-style so we can swap-pop
     //    on death without invalidating iterators.
-    const float damp = std::clamp(1.0f - desc_.drag * dt, 0.0f, 1.0f);
+    const float damp = cardinal::clamp(1.0f - desc_.drag * dt, 0.0f, 1.0f);
     usize i = 0;
     while (i < live_.size()) {
         Particle& p = live_[i];
@@ -92,7 +93,7 @@ void Emitter::tick(float dt) noexcept {
         p.position.z += p.velocity.z * dt;
         p.age        += dt;
         const float t = (p.lifetime > 0.0f)
-            ? std::clamp(p.age / p.lifetime, 0.0f, 1.0f) : 1.0f;
+            ? cardinal::clamp(p.age / p.lifetime, 0.0f, 1.0f) : 1.0f;
         p.color_rgba = lerp_rgba(desc_.start_rgba, desc_.end_rgba, t);
 
         if (p.age >= p.lifetime) {
@@ -113,18 +114,18 @@ void Emitter::clear() noexcept {
 // ---------------------------------------------------------------------------
 // System
 // ---------------------------------------------------------------------------
-std::shared_ptr<System> System::create() {
-    return std::shared_ptr<System>(new System());
+cardinal::shared_ptr<System> System::create() {
+    return cardinal::shared_ptr<System>(new System());
 }
 
 Emitter* System::add(EmitterDesc desc) {
-    emitters_.push_back(std::make_unique<Emitter>(std::move(desc)));
+    emitters_.push_back(cardinal::make_unique<Emitter>(cardinal::move(desc)));
     return emitters_.back().get();
 }
 
 void System::remove(Emitter* e) {
-    emitters_.erase(std::remove_if(emitters_.begin(), emitters_.end(),
-        [e](const std::unique_ptr<Emitter>& u){ return u.get() == e; }),
+    emitters_.erase(cardinal::remove_if(emitters_.begin(), emitters_.end(),
+        [e](const cardinal::unique_ptr<Emitter>& u){ return u.get() == e; }),
         emitters_.end());
 }
 

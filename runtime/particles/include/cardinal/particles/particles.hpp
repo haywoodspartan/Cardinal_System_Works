@@ -4,7 +4,7 @@
 // Cardinal — CPU Particle system.
 //
 // A System owns N Emitters; each Emitter has an EmitterDesc (rate, lifetime,
-// initial conditions) and a flat std::vector<Particle> pool. Per tick:
+// initial conditions) and a flat cardinal::vector<Particle> pool. Per tick:
 //
 //   1. Spawn — emit ceil(rate * dt) new particles, picking start position
 //              + velocity + size + color from the desc's RNG ranges
@@ -20,12 +20,9 @@
 // first lifetime cycle, so steady-state allocation is zero.
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
+#include <cardinal/core/types.hpp>        // cardinal::string/shared_ptr/unique_ptr
+#include <cardinal/core/containers.hpp>   // cardinal::vector
 #include <cardinal/scene/math.hpp>
-
-#include <memory>
-#include <string>
-#include <vector>
 
 namespace cardinal::particles {
 
@@ -48,7 +45,7 @@ struct Particle {
 // _min/_max each spawn; set min == max for a fixed value.
 // ---------------------------------------------------------------------------
 struct EmitterDesc {
-    std::string name;
+    cardinal::string name;
 
     cardinal::scene::Vec3 origin{0, 0, 0};
 
@@ -87,7 +84,7 @@ public:
     EmitterDesc&       desc()       noexcept { return desc_; }
     const EmitterDesc& desc() const noexcept { return desc_; }
 
-    const std::vector<Particle>& particles() const noexcept { return live_; }
+    const cardinal::vector<Particle>& particles() const noexcept { return live_; }
     usize live_count() const noexcept { return live_.size(); }
     u64   total_spawned() const noexcept { return total_spawned_; }
 
@@ -95,7 +92,7 @@ private:
     void spawn_one_() noexcept;
 
     EmitterDesc            desc_;
-    std::vector<Particle>  live_;
+    cardinal::vector<Particle>  live_;
     float                  spawn_accum_{0.0f};
     u32                    rng_state_  {0};
     u64                    total_spawned_{0};
@@ -107,7 +104,7 @@ private:
 // ---------------------------------------------------------------------------
 class System {
 public:
-    static std::shared_ptr<System> create();
+    static cardinal::shared_ptr<System> create();
 
     Emitter* add(EmitterDesc desc);
     void     remove(Emitter* e);
@@ -115,7 +112,7 @@ public:
 
     void tick(float dt);
 
-    const std::vector<std::unique_ptr<Emitter>>& emitters() const noexcept { return emitters_; }
+    const cardinal::vector<cardinal::unique_ptr<Emitter>>& emitters() const noexcept { return emitters_; }
 
     struct Stats {
         u32 emitters_active{0};
@@ -125,7 +122,7 @@ public:
     Stats stats() const noexcept;
 
 private:
-    std::vector<std::unique_ptr<Emitter>> emitters_;
+    cardinal::vector<cardinal::unique_ptr<Emitter>> emitters_;
 };
 
 }  // namespace cardinal::particles
