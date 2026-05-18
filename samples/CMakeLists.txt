@@ -12,3 +12,6 @@ add_subdirectory(09_studio_engine)
 # Capability-sandboxed bytecode VM, end to end (verify -> child process ->
 # tick -> host-call over the pipe).
 add_subdirectory(10_vm_sandbox)
+# Codebase stress world — heavy actor/sim/game + PlayerController +
+# particles + virtual texturing + net loopback + navmesh every frame.
+add_subdirectory(11_stress_world)
