@@ -1,6 +1,7 @@
 #include <cardinal/game/game.hpp>
 
 #include <cardinal/core/log.hpp>
+#include <cardinal/core/utility.hpp>
 #include <cardinal/game/reflection.hpp>
 
 namespace cardinal::game {
@@ -79,8 +80,8 @@ void Game::resume_play() {
     if (on_change_) on_change_(GameState::Paused, state_);
 }
 
-cardinal::actor::Actor* Game::spawn_class(const std::string& class_name,
-                                         const std::string& actor_name)
+cardinal::actor::Actor* Game::spawn_class(const cardinal::string& class_name,
+                                         const cardinal::string& actor_name)
 {
     const ClassDef* def = ClassRegistry::instance().find(class_name);
     if (def == nullptr || !def->create) {
@@ -97,9 +98,9 @@ cardinal::actor::Actor* Game::spawn_class(const std::string& class_name,
     // Replace the placeholder with the real instance — we own components_
     // through the unique_ptr factory, so swap:
     // (Simpler: append the typed instance directly.)
-    auto& comps = const_cast<std::vector<std::unique_ptr<cardinal::actor::Component>>&>(a->components());
+    auto& comps = const_cast<cardinal::vector<cardinal::unique_ptr<cardinal::actor::Component>>&>(a->components());
     comps.pop_back();   // remove the placeholder we just appended
-    comps.push_back(std::move(inst));
+    comps.push_back(cardinal::move(inst));
     raw->on_attach(*a);
     if (state_ == GameState::Playing) {
         // Spawned mid-game: fire begin_play right away.

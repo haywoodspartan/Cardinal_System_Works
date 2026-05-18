@@ -28,12 +28,9 @@
 
 #include <cardinal/actor/world.hpp>
 #include <cardinal/core/types.hpp>
+#include <cardinal/core/utility.hpp>
 #include <cardinal/game/game_actor.hpp>
 #include <cardinal/sim/sim.hpp>
-
-#include <functional>
-#include <memory>
-#include <string>
 
 namespace cardinal::game {
 
@@ -65,12 +62,12 @@ public:
     // spawn_class(class_name) creates a fresh actor::Actor wrapped around
     // a GameActor instance produced by the registered ClassDef. Returns
     // the host actor, or nullptr if the class isn't registered.
-    cardinal::actor::Actor* spawn_class(const std::string& class_name,
-                                       const std::string& actor_name = "");
+    cardinal::actor::Actor* spawn_class(const cardinal::string& class_name,
+                                       const cardinal::string& actor_name = "");
 
     // ---- State-change subscription ---------------------------------
-    using OnStateChange = std::function<void(GameState old_, GameState now)>;
-    void set_on_state_change(OnStateChange cb) { on_change_ = std::move(cb); }
+    using OnStateChange = cardinal::function<void(GameState old_, GameState now)>;
+    void set_on_state_change(OnStateChange cb) { on_change_ = cardinal::move(cb); }
 
     // ---- Per-frame -------------------------------------------------
     // Drives the SimWorld with the right tick-group gating. Hosts call

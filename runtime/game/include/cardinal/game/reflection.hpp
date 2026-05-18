@@ -31,12 +31,9 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/utility.hpp>
 #include <cardinal/scene/math.hpp>
-
-#include <functional>
-#include <memory>
-#include <string>
-#include <vector>
 
 namespace cardinal::game {
 
@@ -47,8 +44,8 @@ enum class PropertyKind : u32 {
 };
 
 struct PropertyDef {
-    std::string  name;
-    std::string  tooltip;
+    cardinal::string  name;
+    cardinal::string  tooltip;
     PropertyKind kind{PropertyKind::Float};
     void*        ptr{nullptr};        // typed pointer into the instance
     float        fmin{0.0f}, fmax{1.0f};
@@ -56,11 +53,11 @@ struct PropertyDef {
 };
 
 struct ClassDef {
-    std::string  name;                // "TurretActor"
-    std::string  category;            // "AI/Turret" - slash-separated for the picker
+    cardinal::string  name;                // "TurretActor"
+    cardinal::string  category;            // "AI/Turret" - slash-separated for the picker
     // Factory + property descriptor pair. Both bind the same instance.
-    std::function<std::unique_ptr<GameActor>()>            create;
-    std::function<std::vector<PropertyDef>(GameActor*)>    describe_properties;
+    cardinal::function<cardinal::unique_ptr<GameActor>()>            create;
+    cardinal::function<cardinal::vector<PropertyDef>(GameActor*)>    describe_properties;
 };
 
 class ClassRegistry {
@@ -68,14 +65,14 @@ public:
     static ClassRegistry& instance();
 
     void                      register_class(ClassDef def);
-    const ClassDef*           find(const std::string& name) const;
-    std::vector<std::string>  all_names() const;
-    std::vector<const ClassDef*> all_in_category(const std::string& cat_prefix) const;
+    const ClassDef*           find(const cardinal::string& name) const;
+    cardinal::vector<cardinal::string>  all_names() const;
+    cardinal::vector<const ClassDef*> all_in_category(const cardinal::string& cat_prefix) const;
     usize                     size() const noexcept;
 
 private:
     ClassRegistry() = default;
-    std::vector<ClassDef> classes_;
+    cardinal::vector<ClassDef> classes_;
 };
 
 // ---------------------------------------------------------------------------
@@ -98,20 +95,20 @@ private:
                 ::cardinal::game::ClassDef d;                               \
                 d.name     = #Type;                                         \
                 d.category = (Category);                                    \
-                d.create   = []() -> std::unique_ptr<                       \
+                d.create   = []() -> cardinal::unique_ptr<                       \
                     ::cardinal::game::GameActor> {                          \
-                    return std::make_unique<Type>();                        \
+                    return cardinal::make_unique<Type>();                        \
                 };                                                          \
                 d.describe_properties = [](::cardinal::game::GameActor*     \
                                             base) {                         \
                     auto* self = static_cast<Type*>(base);                  \
                     (void)self;                                             \
-                    std::vector<::cardinal::game::PropertyDef> props;       \
+                    cardinal::vector<::cardinal::game::PropertyDef> props;       \
                     __VA_ARGS__                                             \
                     return props;                                           \
                 };                                                          \
                 ::cardinal::game::ClassRegistry::instance()                 \
-                    .register_class(std::move(d));                          \
+                    .register_class(cardinal::move(d));                          \
             }                                                               \
         } CARDINAL_GAME_REG_NAME_(__LINE__){};                              \
     }
@@ -123,7 +120,7 @@ private:
         p.kind = ::cardinal::game::PropertyKind::Float;                     \
         p.ptr  = static_cast<void*>(&self->field);                          \
         p.fmin = (fmin_); p.fmax = (fmax_);                                 \
-        props.push_back(std::move(p));                                      \
+        props.push_back(cardinal::move(p));                                      \
     }
 
 #define PROP_INT(field, imin_, imax_, tooltip_)                             \
@@ -133,7 +130,7 @@ private:
         p.kind = ::cardinal::game::PropertyKind::Int;                       \
         p.ptr  = static_cast<void*>(&self->field);                          \
         p.imin = (imin_); p.imax = (imax_);                                 \
-        props.push_back(std::move(p));                                      \
+        props.push_back(cardinal::move(p));                                      \
     }
 
 #define PROP_BOOL(field, tooltip_)                                          \
@@ -142,7 +139,7 @@ private:
         p.name = #field; p.tooltip = (tooltip_);                            \
         p.kind = ::cardinal::game::PropertyKind::Bool;                      \
         p.ptr  = static_cast<void*>(&self->field);                          \
-        props.push_back(std::move(p));                                      \
+        props.push_back(cardinal::move(p));                                      \
     }
 
 #define PROP_VEC3(field, tooltip_)                                          \
@@ -151,7 +148,7 @@ private:
         p.name = #field; p.tooltip = (tooltip_);                            \
         p.kind = ::cardinal::game::PropertyKind::Vec3;                      \
         p.ptr  = static_cast<void*>(&self->field);                          \
-        props.push_back(std::move(p));                                      \
+        props.push_back(cardinal::move(p));                                      \
     }
 
 #define PROP_COLOR(field, tooltip_)                                         \
@@ -160,7 +157,7 @@ private:
         p.name = #field; p.tooltip = (tooltip_);                            \
         p.kind = ::cardinal::game::PropertyKind::Color;                     \
         p.ptr  = static_cast<void*>(&self->field);                          \
-        props.push_back(std::move(p));                                      \
+        props.push_back(cardinal::move(p));                                      \
     }
 
 #define PROP_STRING(field, tooltip_)                                        \
@@ -169,7 +166,7 @@ private:
         p.name = #field; p.tooltip = (tooltip_);                            \
         p.kind = ::cardinal::game::PropertyKind::String;                    \
         p.ptr  = static_cast<void*>(&self->field);                          \
-        props.push_back(std::move(p));                                      \
+        props.push_back(cardinal::move(p));                                      \
     }
 
 }  // namespace cardinal::game

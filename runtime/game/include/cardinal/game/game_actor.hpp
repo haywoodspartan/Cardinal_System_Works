@@ -18,6 +18,7 @@
 
 #include <cardinal/actor/component.hpp>
 #include <cardinal/core/types.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::game {
 
@@ -36,8 +37,8 @@ public:
 
     // Class name — set by Game::spawn_class so the inspector can find the
     // ClassDef and its property descriptors.
-    const std::string& class_name() const noexcept { return class_name_; }
-    void set_class_name(std::string n) { class_name_ = std::move(n); }
+    const cardinal::string& class_name() const noexcept { return class_name_; }
+    void set_class_name(cardinal::string n) { class_name_ = cardinal::move(n); }
 
     bool playing() const noexcept { return playing_; }
 
@@ -56,7 +57,7 @@ public:
 private:
     cardinal::actor::Actor* owner_   {nullptr};
     bool                    playing_ {false};
-    std::string             class_name_;
+    cardinal::string             class_name_;
 };
 
 }  // namespace cardinal::game
