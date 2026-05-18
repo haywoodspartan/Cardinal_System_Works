@@ -11,7 +11,7 @@ target_link_libraries(Cardinal_System_Studio PRIVATE
     cardinal::pack cardinal::shader cardinal::asset
     # HAL + IO Dispatcher + Geometry math live inside cardinal::core now.
     cardinal::partition cardinal::level cardinal::mass
-    cardinal::navmesh cardinal::ai
+    cardinal::navmesh cardinal::ai cardinal::net
     cardinal::compile_flags)
 set_target_properties(Cardinal_System_Studio PROPERTIES FOLDER samples)
 

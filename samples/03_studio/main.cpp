@@ -37,6 +37,8 @@
 #include <cardinal/cine/cine.hpp>
 #include <cardinal/game/game.hpp>
 #include <cardinal/game/game_actor.hpp>
+#include <cardinal/net/net.hpp>
+#include <cardinal/net/replication.hpp>
 #include <cardinal/game/reflection.hpp>
 #include <cardinal/sky/sky.hpp>
 #include <cardinal/scene/light.hpp>
@@ -643,6 +645,18 @@ int main(int argc, char** argv) {
     // fly-cam back from the player's eye on Stop).
     cardinal::actor::ActorId player_id{0};
     bool was_possessing{false};
+
+    // Optional "play as a CLIENT player": route the possessed pawn's
+    // transform through the real net stack in-process (loopback) — the
+    // exact server_broadcast -> transport -> client_ingest path an MMO
+    // build takes, just with create_loopback() instead of create_udp().
+    // Off by default (local possession); toggled live from View -> "Net
+    // Loopback (client player)". Lazily created on first enable.
+    cardinal::unique_ptr<cardinal::net::Transport>  net_loop;
+    cardinal::unique_ptr<cardinal::net::Replicator> net_repl;
+    cardinal::vector<cardinal::net::NetEvent>       net_events;
+    cardinal::vector<cardinal::net::RepState>       net_tx, net_rx;
+    bool net_loopback{false};
 
     // Editor tool — what an LMB click in the viewport does.
     //   Select     : pick the entity under the cursor
@@ -1698,6 +1712,7 @@ int main(int argc, char** argv) {
                 ImGui::MenuItem("Virtual Textures",    nullptr, &show_vt);
                 ImGui::Separator();
                 ImGui::MenuItem("Game",                nullptr, &show_game);
+                ImGui::MenuItem("Net Loopback (client player)", nullptr, &net_loopback);
                 ImGui::MenuItem("Game Classes",        nullptr, &show_classes);
                 ImGui::MenuItem("Sky / Time of Day",   nullptr, &show_sky);
                 ImGui::MenuItem("Simulation",          nullptr, &show_sim);
@@ -1905,6 +1920,62 @@ int main(int argc, char** argv) {
                 scene.camera().position = pc->camera_eye();
                 scene.camera().target   = pc->camera_target();
                 scene.camera().up       = {0.0f, 1.0f, 0.0f};
+
+                // ---- Optional: play as a *client* player ------------
+                // Route the pawn transform through the real netcode the
+                // exact way an MMO build does — server_broadcast over the
+                // transport, then client_ingest back — only the factory
+                // differs (create_loopback vs create_udp). Lossless
+                // loopback, so the round-tripped transform == authored;
+                // the point is to exercise + prove the client path live.
+                if (net_loopback) {
+                    if (!net_loop) {
+                        net_loop = cardinal::net::Transport::create_loopback();
+                        if (net_loop) {
+                            net_loop->listen(0);
+                            net_repl = cardinal::make_unique<
+                                cardinal::net::Replicator>(*net_loop);
+                        }
+                    }
+                    if (net_repl) {
+                        if (auto* pa = aworld.find(player_id)) {
+                            auto* tr = pa->get_component<
+                                cardinal::actor::TransformComponent>();
+                            if (tr != nullptr) {
+                                // Receive last frame's snapshot (client).
+                                net_events.clear();
+                                net_loop->poll(net_events);
+                                net_rx.clear();
+                                if (net_repl->client_ingest(net_events,
+                                                            net_rx) > 0) {
+                                    for (const auto& rs : net_rx) {
+                                        if (rs.id != player_id) continue;
+                                        tr->translation    = rs.position;
+                                        tr->rotation_euler = rs.rotation_euler;
+                                        tr->scale          = rs.scale;
+                                    }
+                                    scene.camera().position = {
+                                        tr->translation.x,
+                                        tr->translation.y + pc->eye_height,
+                                        tr->translation.z };
+                                }
+                                // Broadcast this frame's authoritative
+                                // state (server) for next tick.
+                                net_tx.clear();
+                                cardinal::net::RepState s;
+                                s.id             = player_id;
+                                s.position       = tr->translation;
+                                s.rotation_euler = tr->rotation_euler;
+                                s.scale          = tr->scale;
+                                net_tx.push_back(s);
+                                net_repl->server_broadcast(net_tx);
+                            }
+                        }
+                    }
+                } else if (net_loop) {
+                    net_repl.reset();   // toggled off — tear loopback down
+                    net_loop.reset();
+                }
             } else {
                 // ---- Editor fly-cam (unchanged behaviour) -----------
                 scn::FlyInput in{};
