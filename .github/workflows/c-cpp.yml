@@ -1,0 +1,59 @@
+name: C/C++ CI
+
+# Cardinal is a CMake + Ninja + vcpkg(manifest) project — NOT autotools.
+# This builds the verified Windows/MSVC path (windows-msvc-release preset)
+# and runs the deterministic CTest suite. The renderer/runtime is currently
+# Windows-first (vcpkg pulls imgui[win32-binding] + directx-dxc), so CI
+# targets windows-latest. CMake >= 3.27 and Ninja are required.
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Activates cl.exe + the VS2022 toolchain/SDK on PATH (the CI
+      # equivalent of build.bat's VsDevCmd call).
+      - name: Set up MSVC (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # The preset's "Ninja" generator needs ninja on PATH.
+      - name: Install Ninja
+        run: choco install ninja --no-progress -y
+
+      # Root CMakeLists wires the vcpkg toolchain only when VCPKG_ROOT is
+      # set. windows-latest ships vcpkg at VCPKG_INSTALLATION_ROOT (C:\vcpkg).
+      - name: Point CMake at the runner's vcpkg
+        shell: pwsh
+        run: |
+          $root = $env:VCPKG_INSTALLATION_ROOT
+          if ([string]::IsNullOrEmpty($root)) { $root = "C:\vcpkg" }
+          "VCPKG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # vcpkg manifest mode rebuilds the deps from vcpkg.json; cache the
+      # binary archives so subsequent runs are fast. Key on the manifest.
+      - name: Cache vcpkg binary archives
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-
+
+      - name: Configure
+        run: cmake --preset windows-msvc-release
+
+      - name: Build
+        run: cmake --build --preset windows-msvc-release
+
+      - name: Test (CTest)
+        run: ctest --test-dir build/windows-msvc-release --output-on-failure --parallel 4
