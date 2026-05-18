@@ -35,15 +35,10 @@
 //       hash         u64
 // =============================================================================
 
-#include <cardinal/core/types.hpp>
+#include <cardinal/core/types.hpp>        // function/memory/string
+#include <cardinal/core/future.hpp>       // cardinal::future/promise
+#include <cardinal/core/containers.hpp>   // unordered_map/vector
 #include <cardinal/cook/cook.hpp>
-
-#include <functional>
-#include <future>
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <vector>
 
 namespace cardinal::pack {
 
@@ -52,7 +47,7 @@ inline constexpr char kPackMagic[4]       = {'C','P','K','1'};
 inline constexpr u32  kPackHeaderBytes    = 32;
 
 struct PackEntryDesc {
-    std::string         key;            // logical name (path or id)
+    cardinal::string         key;            // logical name (path or id)
     cook::AssetType     type{cook::AssetType::Unknown};
     u64                 offset{0};
     u64                 size  {0};
@@ -70,7 +65,7 @@ struct PackEntryDesc {
 // ---------------------------------------------------------------------------
 class Builder {
 public:
-    explicit Builder(std::string path);
+    explicit Builder(cardinal::string path);
     ~Builder();
     Builder(const Builder&) = delete;
     Builder& operator=(const Builder&) = delete;
@@ -79,24 +74,24 @@ public:
     // immediately. Duplicate keys overwrite the previous entry's index slot
     // (the old payload still occupies space — this is "append plus index"
     // semantics, like a tar file).
-    bool add(const std::string& key, cook::AssetType type,
-             const std::vector<u8>& bytes);
+    bool add(const cardinal::string& key, cook::AssetType type,
+             const cardinal::vector<u8>& bytes);
 
     // Convenience: read a file from disk + add as a single entry.
-    bool add_file(const std::string& key, cook::AssetType type,
-                  const std::string& source_path);
+    bool add_file(const cardinal::string& key, cook::AssetType type,
+                  const cardinal::string& source_path);
 
     // Write index + header. Renames the temporary to the final path
     // atomically. Returns false on any I/O error.
-    bool finalize(std::string* error_out = nullptr);
+    bool finalize(cardinal::string* error_out = nullptr);
 
     u32 entry_count() const noexcept { return static_cast<u32>(entries_.size()); }
     u64 bytes_written_so_far() const noexcept { return data_cursor_; }
 
 private:
-    std::string                 path_;
-    std::string                 tmp_path_;
-    std::vector<PackEntryDesc>  entries_;
+    cardinal::string                 path_;
+    cardinal::string                 tmp_path_;
+    cardinal::vector<PackEntryDesc>  entries_;
     void*                       file_handle_{nullptr};   // FILE*
     u64                         data_cursor_{0};
     bool                        finalized_{false};
@@ -107,28 +102,28 @@ private:
 //
 // Open() validates the header + loads the index. Per-entry payloads are
 // fetched on demand; load_blocking() reads synchronously, load_async()
-// returns a Future<std::vector<u8>> that resolves on a worker thread.
+// returns a Future<cardinal::vector<u8>> that resolves on a worker thread.
 // ---------------------------------------------------------------------------
 class Archive {
 public:
-    static std::shared_ptr<Archive> open(const std::string& path,
-                                         std::string* error_out = nullptr);
+    static cardinal::shared_ptr<Archive> open(const cardinal::string& path,
+                                         cardinal::string* error_out = nullptr);
     ~Archive();
 
-    const std::vector<PackEntryDesc>& entries() const noexcept { return entries_; }
-    const PackEntryDesc*              find(const std::string& key) const noexcept;
-    bool                              contains(const std::string& key) const noexcept;
+    const cardinal::vector<PackEntryDesc>& entries() const noexcept { return entries_; }
+    const PackEntryDesc*              find(const cardinal::string& key) const noexcept;
+    bool                              contains(const cardinal::string& key) const noexcept;
     u32                               entry_count() const noexcept { return static_cast<u32>(entries_.size()); }
-    const std::string&                path() const noexcept { return path_; }
+    const cardinal::string&                path() const noexcept { return path_; }
 
     // Synchronous blocking read of a full entry.
-    bool load_blocking(const std::string& key,
-                       std::vector<u8>& out_bytes,
-                       std::string* error_out = nullptr) const;
+    bool load_blocking(const cardinal::string& key,
+                       cardinal::vector<u8>& out_bytes,
+                       cardinal::string* error_out = nullptr) const;
 
     // Async load via cardinal::async — completes on a worker thread.
     // Empty vector on failure.
-    std::shared_future<std::vector<u8>> load_async(const std::string& key) const;
+    cardinal::shared_future<cardinal::vector<u8>> load_async(const cardinal::string& key) const;
 
     struct Stats {
         u32 entry_count{0};
@@ -142,9 +137,9 @@ public:
 private:
     Archive() = default;
 
-    std::string                        path_;
-    std::vector<PackEntryDesc>         entries_;
-    std::unordered_map<std::string, u32> by_key_;   // key -> index in entries_
+    cardinal::string                        path_;
+    cardinal::vector<PackEntryDesc>         entries_;
+    cardinal::unordered_map<cardinal::string, u32> by_key_;   // key -> index in entries_
     u64                                file_size_{0};
 };
 
@@ -169,24 +164,24 @@ private:
 // for staging the executable + NVIDIA/runtime DLLs next to the pack.
 // ---------------------------------------------------------------------------
 struct DistOptions {
-    std::string              project_root;          // holds cooked/ , save/
-    std::string              out_dir;               // created if absent
-    std::string              pack_name{"client"};   // → out_dir/<name>.cpk
+    cardinal::string              project_root;          // holds cooked/ , save/
+    cardinal::string              out_dir;               // created if absent
+    cardinal::string              pack_name{"client"};   // → out_dir/<name>.cpk
     bool                     include_saves{true};
-    std::vector<std::string> extra_files;           // abs paths, copied in
-    std::string              app_name{"Cardinal Game"};
-    std::string              engine_version{"0.1.0"};
+    cardinal::vector<cardinal::string> extra_files;           // abs paths, copied in
+    cardinal::string              app_name{"Cardinal Game"};
+    cardinal::string              engine_version{"0.1.0"};
 };
 
 struct DistResult {
     bool        ok{false};
-    std::string pack_path;
-    std::string manifest_path;
+    cardinal::string pack_path;
+    cardinal::string manifest_path;
     u32         asset_count{0};
     u32         save_count{0};
     u32         extra_count{0};
     u64         total_bytes{0};
-    std::string error;
+    cardinal::string error;
 };
 
 // Build the distribution. Idempotent: overwrites <out_dir> contents for

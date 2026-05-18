@@ -45,6 +45,10 @@ using f64 = double;
 
 using usize = std::size_t;
 using isize = std::ptrdiff_t;
+// Spelled-through C names so a std::size_t/ptrdiff_t call site migrates to
+// cardinal::size_t/ptrdiff_t mechanically (identical types to usize/isize).
+using size_t    = std::size_t;
+using ptrdiff_t = std::ptrdiff_t;
 
 // ---------------------------------------------------------------------------
 // Foundation-owned core vocabulary. The rest of the engine uses these

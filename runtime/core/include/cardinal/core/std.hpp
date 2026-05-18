@@ -25,10 +25,12 @@
 #include <cardinal/core/cstdio.hpp>
 #include <cardinal/core/cstdarg.hpp>
 #include <cardinal/core/cstdlib.hpp>
+#include <cardinal/core/ctime.hpp>
 #include <cardinal/core/cassert.hpp>
 #include <cardinal/core/new.hpp>
 #include <cardinal/core/atomic.hpp>
 #include <cardinal/core/thread.hpp>
+#include <cardinal/core/future.hpp>
 #include <cardinal/core/chrono.hpp>
 #include <cardinal/core/filesystem.hpp>
 #include <cardinal/core/fstream.hpp>
