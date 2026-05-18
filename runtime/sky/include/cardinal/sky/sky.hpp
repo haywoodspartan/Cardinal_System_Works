@@ -24,9 +24,9 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
+#include <cardinal/core/algorithm.hpp>   // cardinal::max
+#include <cardinal/core/containers.hpp>  // cardinal::vector
 #include <cardinal/scene/math.hpp>
-
-#include <vector>
 
 namespace cardinal::sky {
 
@@ -56,7 +56,7 @@ public:
     // ---- Clock ---------------------------------------------------
     float       hour()        const noexcept { return state_.hour; }
     void        set_hour(float h);
-    void        set_time_scale(float s) noexcept { time_scale_ = std::max(0.0f, s); }
+    void        set_time_scale(float s) noexcept { time_scale_ = cardinal::max(0.0f, s); }
     float       time_scale()  const noexcept { return time_scale_; }
     void        set_frozen(bool f) noexcept { frozen_ = f; }
     bool        frozen()      const noexcept { return frozen_; }
@@ -74,15 +74,15 @@ public:
 
     // ---- Keys -----------------------------------------------------
     // Direct access for editing in the panel.
-    std::vector<SkyKey>&       keys()       noexcept { return keys_; }
-    const std::vector<SkyKey>& keys() const noexcept { return keys_; }
+    cardinal::vector<SkyKey>&       keys()       noexcept { return keys_; }
+    const cardinal::vector<SkyKey>& keys() const noexcept { return keys_; }
     void                       sort_keys();
     void                       reset_to_defaults();
 
 private:
     void recompute_state_();
 
-    std::vector<SkyKey> keys_;
+    cardinal::vector<SkyKey> keys_;
     SkyState            state_{};
     float               time_scale_{120.0f};   // default: 12 minutes = 24h day
     bool                frozen_{false};

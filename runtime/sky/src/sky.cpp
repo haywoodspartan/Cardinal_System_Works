@@ -1,7 +1,7 @@
 #include <cardinal/sky/sky.hpp>
 
-#include <algorithm>
-#include <cmath>
+#include <cardinal/core/algorithm.hpp>   // cardinal::sort/clamp/max
+#include <cardinal/core/cmath.hpp>       // cardinal::fmod/cos/sin/sqrt
 
 namespace cardinal::sky {
 
@@ -42,12 +42,12 @@ void Sky::reset_to_defaults() {
 }
 
 void Sky::sort_keys() {
-    std::sort(keys_.begin(), keys_.end(),
+    cardinal::sort(keys_.begin(), keys_.end(),
               [](const SkyKey& a, const SkyKey& b){ return a.hour < b.hour; });
 }
 
 void Sky::set_hour(float h) {
-    h = std::fmod(h, 24.0f);
+    h = cardinal::fmod(h, 24.0f);
     if (h < 0.0f) h += 24.0f;
     state_.hour = h;
     recompute_state_();
@@ -68,7 +68,7 @@ float Sky::day_length_seconds() const noexcept {
 void Sky::tick(float real_dt) {
     if (frozen_) return;
     state_.hour += real_dt * time_scale_;
-    if (state_.hour >= 24.0f) state_.hour = std::fmod(state_.hour, 24.0f);
+    if (state_.hour >= 24.0f) state_.hour = cardinal::fmod(state_.hour, 24.0f);
     if (state_.hour <  0.0f)  state_.hour += 24.0f;
     recompute_state_();
 }
@@ -95,7 +95,7 @@ void Sky::recompute_state_() {
         ? (k1.hour - k0.hour)
         : (k1.hour + 24.0f - k0.hour);
     const float local = (h >= k0.hour) ? (h - k0.hour) : (h + 24.0f - k0.hour);
-    const float t = std::clamp(local / std::max(1e-4f, span), 0.0f, 1.0f);
+    const float t = cardinal::clamp(local / cardinal::max(1e-4f, span), 0.0f, 1.0f);
 
     state_.zenith        = lerp_vec(k0.zenith,    k1.zenith,    t);
     state_.horizon       = lerp_vec(k0.horizon,   k1.horizon,   t);
@@ -109,14 +109,14 @@ void Sky::recompute_state_() {
     // sun_intensity to decide whether to apply.
     const float angle = ((state_.hour - 6.0f) / 12.0f) * 3.14159265358979f;
     cardinal::scene::Vec3 to_sun{
-        std::cos(angle),
-        std::sin(angle),
+        cardinal::cos(angle),
+        cardinal::sin(angle),
         0.10f                      // slight Z tilt — looks better than perfectly head-on
     };
     // Direction the light *travels* (i.e. away from sun toward the world).
     state_.sun_dir = cardinal::scene::Vec3{ -to_sun.x, -to_sun.y, -to_sun.z };
     // Normalise.
-    const float l = std::sqrt(state_.sun_dir.x * state_.sun_dir.x +
+    const float l = cardinal::sqrt(state_.sun_dir.x * state_.sun_dir.x +
                               state_.sun_dir.y * state_.sun_dir.y +
                               state_.sun_dir.z * state_.sun_dir.z);
     if (l > 1e-6f) {
