@@ -2896,6 +2896,20 @@ int main(int argc, char** argv) {
     // hasn't run yet at the moment a stray notify fires.
     if (sw) sw->set_on_rebuilt(nullptr);
 
+    // Release the process-static AssetCatalog WHILE `device` is still alive.
+    // register_default_assets(*device) (above) filled the catalog with
+    // AssetFactory closures that capture shared_ptr<scn::Mesh>, and each
+    // Mesh owns a device-bound rhi::Buffer. The catalog is a function-local
+    // static, so left alone it is destroyed during C-runtime teardown —
+    // AFTER main() returns and `device` (a main-scope local) is gone —
+    // making ~VulkanBuffer free its VMA allocation against a dead allocator:
+    //   "Assertion failed: m_pMetadata->IsEmpty() && Some allocations were
+    //    not freed before destruction of this memory block" (vk_mem_alloc.h)
+    // on Vulkan exit. Clearing here tears those buffers down against the
+    // live device. (Engine-based apps get the symmetric clear in
+    // ~EngineImpl; this manual-main sample needs its own.)
+    scn::AssetCatalog::instance().clear();
+
     clog::infof("sample", "Shutting down (rendered %u frames)", frame);
     return 0;
 }
