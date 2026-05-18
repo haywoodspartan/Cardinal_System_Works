@@ -114,6 +114,7 @@ cardinal::shared_ptr<Project> Project::open(const cardinal::string& root, cardin
         else if (key == "default_pack_name") p->info_.default_pack_name = val;
         else if (key == "cook_on_save") p->info_.cook_on_save = (val == "true");
         else if (key == "pack_on_cook") p->info_.pack_on_cook = (val == "true");
+        else if (key == "startup_world") p->info_.startup_world = val;
     }
     cardinal::log::infof("project", "opened project '%s'", p->info_.name.c_str());
     return p;
@@ -134,6 +135,7 @@ bool Project::save(cardinal::string* err) const {
     f << "default_pack_name = \"" << info_.default_pack_name << "\"\n";
     f << "cook_on_save = " << (info_.cook_on_save ? "true" : "false") << "\n";
     f << "pack_on_cook = " << (info_.pack_on_cook ? "true" : "false") << "\n";
+    f << "startup_world = \"" << info_.startup_world << "\"\n";
     return true;
 }
 
@@ -209,6 +211,43 @@ float4 PSMain(VSOut i) : SV_TARGET {
 }
 )~~~";
 
+// Default runtime world — the serial "# Cardinal save v1" snapshot the
+// engine/Studio loads on boot (ProjectInfo::startup_world points here).
+// Ground / PlayerStart are class="" anonymous transform-only actors:
+// cardinal::serial::load_world spawns those with NO class registration,
+// so a freshly created project is loadable + runnable immediately, on
+// any runtime. "Hero" references HelloActor — the class src/main.cpp
+// registers via CARDINAL_REGISTER_GAME_CLASS — so once the project's
+// game DLL is built/loaded it spawns with its reflected properties; if
+// the class isn't registered yet load_world skips it gracefully (the
+// anonymous actors still load). Property lines match HelloActor's
+// PROP_FLOAT(speed)/PROP_BOOL(visible)/PROP_VEC3(axis).
+const char* kTemplateWorld = R"~~~(# Cardinal save v1
+actor "Ground" {
+  class = ""
+  position = (0.000, 0.000, 0.000)
+  rotation = (0.000, 0.000, 0.000)
+  scale = (50.000, 1.000, 50.000)
+}
+
+actor "PlayerStart" {
+  class = ""
+  position = (0.000, 1.000, 6.000)
+  rotation = (0.000, 0.000, 0.000)
+  scale = (1.000, 1.000, 1.000)
+}
+
+actor "Hero" {
+  class = "HelloActor"
+  position = (0.000, 1.500, 0.000)
+  rotation = (0.000, 0.000, 0.000)
+  scale = (1.000, 1.000, 1.000)
+  prop float speed = 1.000000
+  prop bool visible = true
+  prop vec3 axis = (0.000000, 1.000000, 0.000000)
+}
+)~~~";
+
 }  // namespace
 
 cardinal::shared_ptr<Project> instantiate_template(const InstantiateOptions& opts,
@@ -242,6 +281,12 @@ cardinal::shared_ptr<Project> instantiate_template(const InstantiateOptions& opt
     write_text(p->dirs().assets  + "/README.txt",
         "Drop your source assets here (.png .obj .hlsl .wav) — they'll be cooked\n"
         "into ../cooked/ + packed into ../pack/ when you hit Cook & Pack.\n");
+
+    // Engine/Studio-readable runtime data: a valid default world snapshot
+    // at ProjectInfo::startup_world. This is what makes a brand-new
+    // project actually *runnable* — Studio's Open-project / the engine
+    // boot path can serial::load_world() this immediately.
+    write_text(p->dirs().root + "/" + p->info().startup_world, kTemplateWorld);
 
     cardinal::log::infof("project",
         "instantiated template '%s' at %s",

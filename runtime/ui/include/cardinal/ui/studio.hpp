@@ -110,6 +110,17 @@ public:
     // restored windows back onto the main monitor.
     virtual void reset_layout() = 0;
 
+    // Maximize / restore the dock panel that currently has focus. ImGui
+    // docked windows (Hierarchy, Inspector, Console, …) have no native
+    // maximize button — only the viewport panels carry one in their
+    // toolbar. This floats the focused panel over the full host work
+    // area (covering everything else) and, on a second call, snaps it
+    // back into the dock node it came from. Studio also binds Shift+F11
+    // to this so it works without a host menu item; hosts can surface a
+    // "Window -> Maximize Panel" menu entry that calls it too. No-op
+    // when focus is on the dockhost / a popup / nothing.
+    virtual void toggle_maximize_focused_panel() = 0;
+
     // Built-in panels. Call between begin_frame() and end_frame().
     //   draw_fps_overlay() — small floating top-left FPS / frame-time card
     //   draw_log_panel()   — windowed message stream sourced from the

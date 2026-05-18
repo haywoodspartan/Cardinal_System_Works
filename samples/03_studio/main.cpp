@@ -2306,6 +2306,31 @@ int main(int argc, char** argv) {
                         pack_path.c_str(), archive->entries().size());
                 }
             }
+            // Opening / creating a project loads its runtime world snapshot
+            // (ProjectInfo::startup_world) straight into the live game, so
+            // a freshly created project is immediately runnable — press
+            // Play and the loaded actors simulate. Anonymous transform-only
+            // actors load on any runtime; class-bound actors bind once the
+            // project's game DLL is present (skipped gracefully otherwise).
+            if (act.opened) {
+                const auto& pinfo = act.opened->info();
+                const std::string world_path =
+                    act.opened->dirs().root + "/" + pinfo.startup_world;
+                std::string werr;
+                const auto ls = cardinal::serial::load_world(
+                    game, world_path, /*replace_existing=*/true, &werr);
+                if (werr.empty())
+                    clog::infof("sample",
+                        "project '%s' opened — startup world '%s': "
+                        "%u actors, %u props, %u skipped",
+                        pinfo.name.c_str(), pinfo.startup_world.c_str(),
+                        ls.actors_spawned, ls.properties_applied,
+                        ls.actors_skipped);
+                else
+                    clog::warnf("sample",
+                        "project world load failed (%s): %s",
+                        world_path.c_str(), werr.c_str());
+            }
         }
         if (!any_maximized && show_cook_pack) {
             studio->draw_cook_pack_panel(current_project.get(),

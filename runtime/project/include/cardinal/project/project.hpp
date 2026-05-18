@@ -50,6 +50,12 @@ struct ProjectInfo {
     cardinal::string default_pack_name {"main"};   // produces "pack/main.cpk"
     bool        cook_on_save      {true};
     bool        pack_on_cook      {true};
+
+    // Runtime entry point: the world snapshot the engine/Studio loads when
+    // the project boots. Root-relative; a fresh project ships a valid
+    // default at this path (serial "# Cardinal save v1" format) so the
+    // project is runnable the moment it is created.
+    cardinal::string startup_world {"save/main.cardinalworld"};
 };
 
 class Project {

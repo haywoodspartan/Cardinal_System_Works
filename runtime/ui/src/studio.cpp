@@ -414,12 +414,66 @@ public:
         // the user just sees their layout snap back into the host on the
         // first frame after a problematic .ini.
         clamp_imgui_windows_to_monitor_once();
+
+        // Focused-panel maximize — ImGui input is valid post-NewFrame.
+        // Gives every docked panel/tab a maximize it otherwise lacks
+        // (only the viewport panels carry a toolbar maximize button).
+        {
+            const ImGuiIO& io = ImGui::GetIO();
+            if (!io.WantTextInput &&
+                ImGui::IsKeyDown(ImGuiKey_LeftShift) &&
+                ImGui::IsKeyPressed(ImGuiKey_F11, false)) {
+                toggle_maximize_focused_panel();
+            }
+            if (max_restore_pending_) {
+                if (!max_restore_win_.empty() && max_restore_dock_ != 0) {
+                    ImGui::DockBuilderDockWindow(max_restore_win_.c_str(),
+                                                 max_restore_dock_);
+                }
+                max_restore_pending_ = false;
+                max_restore_win_.clear();
+                max_restore_dock_ = 0;
+            }
+            if (!max_win_.empty()) {
+                if (max_enter_pending_) {
+                    // Undock so the panel can float over everything.
+                    ImGui::DockBuilderDockWindow(max_win_.c_str(), 0);
+                    max_enter_pending_ = false;
+                }
+                const ImGuiViewport* vp = ImGui::GetMainViewport();
+                ImGui::SetWindowCollapsed(max_win_.c_str(), false);
+                ImGui::SetWindowPos (max_win_.c_str(), vp->WorkPos);
+                ImGui::SetWindowSize(max_win_.c_str(), vp->WorkSize);
+                ImGui::SetWindowFocus(max_win_.c_str());
+            }
+        }
     }
 
     void end_frame() override {
         // Just finalise the draw lists — the GPU recording happens inside
         // overlay_render() when the swapchain reaches the right point.
         ImGui::Render();
+    }
+
+    void toggle_maximize_focused_panel() override {
+        ImGuiContext* g = ImGui::GetCurrentContext();
+        if (g == nullptr) return;
+        if (!max_win_.empty()) {
+            // Already maximized → request restore to its old dock node.
+            max_restore_win_     = max_win_;
+            max_restore_dock_    = max_prev_dock_;
+            max_restore_pending_ = true;
+            max_win_.clear();
+            return;
+        }
+        ImGuiWindow* w = g->NavWindow;          // the focused panel
+        if (w == nullptr || w->Name == nullptr) return;
+        if ((w->Flags & (ImGuiWindowFlags_Popup | ImGuiWindowFlags_Tooltip |
+                         ImGuiWindowFlags_ChildWindow)) != 0) return;
+        if (w->Name[0] == '#') return;          // dockhost / internal
+        max_win_           = w->Name;
+        max_prev_dock_     = w->DockId;
+        max_enter_pending_ = true;
     }
 
     void on_swapchain_resized() override {
@@ -3870,6 +3924,14 @@ private:
     u64                                   last_sample_frame_{0};
     u64                                   frame_count_{0};
     float                                 ema_fps_{0.0f};
+
+    // Focused-panel maximize state (toggle_maximize_focused_panel + Shift+F11).
+    cardinal::string                      max_win_;           // "" = none
+    ImGuiID                               max_prev_dock_{0};  // dock to restore
+    bool                                  max_enter_pending_{false};
+    bool                                  max_restore_pending_{false};
+    cardinal::string                      max_restore_win_;
+    ImGuiID                               max_restore_dock_{0};
 
     // Log panel state — sink + scratch buffers + filter + min level. The
     // panel rendering lives in panels/log.cpp; we just hold the state and
