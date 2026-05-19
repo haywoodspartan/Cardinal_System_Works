@@ -294,7 +294,13 @@ void sample_sobol(const AlgoIn& in, AlgoOut& out) {
         u32 r = 0;
         u32 i = idx + 1;
         for (u32 b = 0; i > 0; ++b, i >>= 1) {
-            if ((i & 1) != 0) r ^= (1u << (31 - b - dim_offset));
+            // 31 - b - dim_offset is unsigned: once b + dim_offset > 31 it
+            // wraps to a huge value and `1u << that` is undefined behaviour
+            // (shift >= 32). That bit position is outside the 32-bit result
+            // word anyway, so the contribution is simply not representable —
+            // skip it (Sobol sequence truncated to 32 bits, the intent).
+            if ((i & 1) != 0 && (b + dim_offset) <= 31u)
+                r ^= (1u << (31u - b - dim_offset));
         }
         return static_cast<float>(r) * 2.3283064365386963e-10f;
     };
