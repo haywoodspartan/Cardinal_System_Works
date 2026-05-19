@@ -291,6 +291,106 @@ void test_render() {
     CHECK(stereo_dup);
 }
 
+// ---- render: additive mix + hard soft-clip ------------------------
+// Procedural cues with a CONSTANT generator make the mixed bus exact
+// (no sin phase). No tick ⇒ default gain 1.0 per instance.
+au::Cue const_cue(const char* id, float value) {
+    au::Cue c;
+    c.id = id;
+    c.kind = au::CueKind::Procedural;
+    c.duration_s = 100.0f;
+    c.procedural = [value](float) { return value; };
+    return c;
+}
+
+void test_render_mix() {
+    auto e = au::Engine::create();
+    e->register_cue(const_cue("c06", 0.6f));
+    float buf[64];
+
+    e->play_2d("c06");                               // 1 × 0.6 = 0.6
+    e->render(buf, 16, 1);
+    bool ok06 = true;
+    for (u32 i = 0; i < 16u; ++i) if (!ap(buf[i], 0.6f)) ok06 = false;
+    CHECK(ok06);
+
+    e->play_2d("c06"); e->play_2d("c06");            // 3 × 0.6 = 1.8 → clip 1
+    e->render(buf, 16, 1);
+    bool clipHi = true;
+    for (u32 i = 0; i < 16u; ++i) if (!ap(buf[i], 1.0f)) clipHi = false;
+    CHECK(clipHi);
+
+    auto e2 = au::Engine::create();
+    e2->register_cue(const_cue("cneg", -0.7f));
+    e2->play_2d("cneg"); e2->play_2d("cneg");        // -1.4 → clip -1
+    e2->render(buf, 16, 2);
+    bool clipLo = true;
+    for (u32 i = 0; i < 32u; ++i) if (!ap(buf[i], -1.0f)) clipLo = false;
+    CHECK(clipLo);
+}
+
+// ---- Procedural: t argument, pitch scaling, empty callback --------
+void test_procedural() {
+    auto e = au::Engine::create();
+    au::Cue id; id.id = "id"; id.kind = au::CueKind::Procedural;
+    id.duration_s = 100.0f;
+    id.procedural = [](float t) { return t; };       // sample value == time
+    e->register_cue(id);
+
+    e->play_2d("id", au::kChannelSfx, 1.0f, 1.0f, false);   // pitch 1
+    float buf[8];
+    e->render(buf, 4, 1);
+    const float inv = 1.0f / 48000.0f;               // default sample_rate
+    CHECK(ap(buf[0], 0.0f) && ap(buf[1], inv) &&
+          ap(buf[2], 2.0f * inv) && ap(buf[3], 3.0f * inv));
+
+    auto e2 = au::Engine::create();
+    e2->register_cue(id);
+    e2->play_2d("id", au::kChannelSfx, 1.0f, 2.0f, false);  // pitch 2 ⇒ 2·t
+    e2->render(buf, 4, 1);
+    CHECK(ap(buf[1], 2.0f * inv) && ap(buf[3], 6.0f * inv));
+
+    // Procedural with NO callback ⇒ silent.
+    auto e3 = au::Engine::create();
+    au::Cue np; np.id = "np"; np.kind = au::CueKind::Procedural;
+    np.duration_s = 100.0f;                           // procedural left empty
+    e3->register_cue(np);
+    e3->play_2d("np");
+    for (float& x : buf) x = 9.0f;
+    e3->render(buf, 8, 1);
+    bool zero = true;
+    for (u32 i = 0; i < 8u; ++i) if (buf[i] != 0.0f) zero = false;
+    CHECK(zero);
+}
+
+// ---- fade_in / fade_out gain ramps over ticks ---------------------
+void test_fades() {
+    auto e = au::Engine::create();
+    e->register_cue(sine_cue("sine", 10.0f));
+    const au::InstanceId id = e->play_2d("sine", au::kChannelSfx);
+    e->fade_in(id, 1.0f);                              // resets play_head to 0
+    e->tick(0.25f);                                   // 0.25/1.0
+    CHECK(ap(e->active_instances()[0].final_attenuated_volume, 0.25f, 1e-4f));
+    e->tick(0.25f);                                   // 0.50/1.0
+    CHECK(ap(e->active_instances()[0].final_attenuated_volume, 0.50f, 1e-4f));
+    e->tick(0.60f);                                   // 1.10 ≥ 1.0 ⇒ full
+    CHECK(ap(e->active_instances()[0].final_attenuated_volume, 1.0f, 1e-4f));
+
+    // fade_out: factor = t / max(1e-3, t+dt) where t = max(0, fade_out_s−dt)
+    // and fade_out_s is updated to t each tick.
+    auto e2 = au::Engine::create();
+    e2->register_cue(sine_cue("sine", 10.0f));
+    const au::InstanceId id2 = e2->play_2d("sine", au::kChannelSfx);
+    e2->fade_out(id2, 1.0f);
+    e2->tick(0.25f);                                  // t=.75, /1.0  = .75
+    CHECK(ap(e2->active_instances()[0].final_attenuated_volume, 0.75f, 1e-4f));
+    e2->tick(0.50f);                                  // t=.25, /.75  = .3333
+    CHECK(ap(e2->active_instances()[0].final_attenuated_volume,
+             0.25f / 0.75f, 1e-4f));
+    e2->tick(0.50f);                                  // t=0 ⇒ faded → removed
+    CHECK(e2->active_instances().empty());
+}
+
 }  // namespace
 
 int main() {
@@ -301,6 +401,9 @@ int main() {
     test_tick();
     test_attenuation();
     test_render();
+    test_render_mix();
+    test_procedural();
+    test_fades();
 
     if (g_fail == 0) {
         cardinal::log::infof("audiotest", "OK  %d checks passed", g_checks);
