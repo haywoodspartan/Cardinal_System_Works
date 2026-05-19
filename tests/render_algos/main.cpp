@@ -224,6 +224,13 @@ void test_sampling() {
 
     in.index = 0;  o = RUN(CID::Sampling, "sobol", in);
     CHECK(ap(o.unit3[0], 0.5f, 1e-6f) && ap(o.unit3[1], 0.25f, 1e-6f));
+    // Large index: the bit-loop reaches b ~= 31, so the dim_offset=1
+    // dimension used to underflow `31 - b - dim_offset` and shift by
+    // ~0xFFFFFFFF (UB). Must now stay finite + in [0,1).
+    in.index = 0xFFFFFFF0u; o = RUN(CID::Sampling, "sobol", in);
+    CHECK(unit01(o.unit3[0]) && unit01(o.unit3[1]));
+    in.index = 0x7FFFFFFFu; o = RUN(CID::Sampling, "sobol", in);
+    CHECK(unit01(o.unit3[0]) && unit01(o.unit3[1]));
 
     in.seed = 12345u;
     ra::AlgoOut b1 = RUN(CID::Sampling, "blue_noise", in);

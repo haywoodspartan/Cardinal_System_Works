@@ -197,6 +197,18 @@ void test_fp8() {
         CHECK(ap(pr::quantise(Format::FP8_E5M2, x), x));
     }
 
+    // Tiny-magnitude inputs drive the FP8 subnormal path with a large
+    // align shift: round_rne's sh = shift + extra reached ~45, a u32
+    // shift-count UB pre-fix. The smallest E4M3/E5M2 subnormal is far
+    // above these, so they must underflow to a finite 0 (no UB / NaN).
+    for (float tiny : { 1.0e-30f, 1.0e-38f, 1.0e-40f,
+                        std::numeric_limits<float>::denorm_min() }) {
+        const float q4 = pr::quantise(Format::FP8_E4M3,  tiny);
+        const float q5 = pr::quantise(Format::FP8_E5M2, -tiny);
+        CHECK(!is_nan(q4) && q4 == 0.0f);
+        CHECK(!is_nan(q5) && q5 == 0.0f);
+    }
+
     // E4M3 has no inf -> a finite over-range input saturates (does NOT
     // become inf); the result is finite.
     const float e4_big = pr::quantise(Format::FP8_E4M3, 1.0e9f);
