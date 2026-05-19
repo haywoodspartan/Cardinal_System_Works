@@ -129,6 +129,56 @@ void test_accumulator() {
     }
 }
 
+// ---- non-finite real_dt must not poison the physics accumulator ---
+// Regression: tick()'s clamps were `real_dt < 0` and `real_dt > max`;
+// BOTH are false for NaN (ordered compares with NaN are false), so a
+// NaN real_dt reached `physics_accum_ +=`, poisoning it forever
+// (NaN + x = NaN ⇒ `physics_accum_ >= fixed_dt` always false ⇒
+// fixed-step physics never substeps again) and turning
+// stats_.real_time_seconds permanently NaN. A non-finite real_dt must
+// behave exactly like the existing negative→0 case. NaN/Inf via
+// volatile launder (no <cmath>/<limits>).
+void test_nonfinite_dt() {
+    auto nanf = []{ volatile float z = 0.0f; return z / z; };    // 0/0 → NaN
+    auto inff = []{ volatile float z = 0.0f; return 1.0f / z; };  // 1/0 → +Inf
+
+    // (a) NaN real_dt → 0 (advancing tick, no time, no substep) AND the
+    //     accumulator stays pristine: later valid ticks still substep.
+    {
+        sm::SimWorld w(accum_desc());
+        const float ret = w.tick(nanf());
+        CHECK(ap(ret, 0.0f));                                  // scaled_dt 0
+        CHECK(apd(w.stats().real_time_seconds, 0.0));          // finite, not NaN
+        CHECK(w.stats().physics_substeps_last == static_cast<cardinal::u64>(0));
+        CHECK(w.stats().total_ticks == static_cast<cardinal::u64>(1));
+        w.tick(0.10f);
+        CHECK(w.stats().physics_substeps_last == static_cast<cardinal::u64>(1));
+        CHECK(apd(w.stats().real_time_seconds, 0.10));
+        w.tick(0.10f);
+        CHECK(w.stats().physics_substeps_last == static_cast<cardinal::u64>(1));
+    }
+    // (b) A NaN mid-run must not freeze an already-running sim.
+    {
+        sm::SimWorld w(accum_desc());
+        w.tick(0.10f); w.tick(0.10f);
+        const cardinal::u64 ticks_mid = w.stats().total_ticks;
+        w.tick(nanf());                                        // poison attempt
+        w.tick(0.10f);
+        CHECK(w.stats().physics_substeps_last == static_cast<cardinal::u64>(1));
+        CHECK(w.stats().total_ticks == ticks_mid + 2u);
+        CHECK(apd(w.stats().real_time_seconds, 0.30));         // .1+.1+0+.1
+    }
+    // (c) +Inf still clamped to max_real_dt (existing behaviour, the fix
+    //     must not regress it).
+    {
+        sm::SimWorld w(accum_desc());
+        const float ret = w.tick(inff());                      // → 1.0
+        CHECK(ap(ret, 1.0f));
+        CHECK(apd(w.stats().real_time_seconds, 1.0));
+        CHECK(w.stats().physics_substeps_last == static_cast<cardinal::u64>(4));
+    }
+}
+
 // ---- pause / single-step / start_paused ---------------------------
 void test_pause_step() {
     sm::SimWorld w;                                       // default desc
@@ -285,6 +335,7 @@ void test_stats_desc() {
 int main() {
     test_group_names();
     test_accumulator();
+    test_nonfinite_dt();
     test_pause_step();
     test_time_scale();
     test_handlers();

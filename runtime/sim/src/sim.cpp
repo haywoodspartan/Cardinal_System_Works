@@ -109,7 +109,15 @@ void SimWorld::integrate_physics_(float dt) {
 }
 
 float SimWorld::tick(float real_dt) {
-    if (real_dt < 0.0f) real_dt = 0.0f;
+    // `!(real_dt > 0.0f)` also catches NaN (every ordered compare with NaN
+    // is false, so the old `real_dt < 0.0f` let NaN straight through). A
+    // NaN real_dt would otherwise reach `physics_accum_ +=` and poison it
+    // forever (NaN + x = NaN ⇒ `physics_accum_ >= fixed_dt` always false ⇒
+    // fixed-step physics never substeps again, every body frozen) and turn
+    // stats_.real_time_seconds permanently NaN. Treat non-finite as 0 —
+    // identical to the existing negative→0 contract. +Inf is unaffected
+    // here and still clamped by the max_real_dt guard below (unchanged).
+    if (!(real_dt > 0.0f)) real_dt = 0.0f;
     if (real_dt > desc_.max_real_dt) real_dt = desc_.max_real_dt;
 
     stats_.real_time_seconds += real_dt;
