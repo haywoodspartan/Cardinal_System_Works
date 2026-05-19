@@ -60,11 +60,19 @@ public:
     WorkStealingDeque(const WorkStealingDeque&)            = delete;
     WorkStealingDeque& operator=(const WorkStealingDeque&) = delete;
 
-    void push(T item) {
-        i64 b = bottom_.load(std::memory_order_relaxed);
+    // Returns false if the deque is full (size == capacity). This ring
+    // has no growable backing array, so the producer MUST handle a full
+    // deque rather than overwrite a live, unconsumed slot. Reading top_
+    // with acquire is conservative: a stale (smaller) t can only make us
+    // report "full" slightly early — it can never let us overflow.
+    [[nodiscard]] bool push(T item) {
+        const i64 b = bottom_.load(std::memory_order_relaxed);
+        const i64 t = top_.load(std::memory_order_acquire);
+        if (b - t >= static_cast<i64>(deque_capacity)) return false;
         ring_[static_cast<u32>(b) & deque_mask].store(item, std::memory_order_relaxed);
         std::atomic_thread_fence(std::memory_order_release);
         bottom_.store(b + 1, std::memory_order_relaxed);
+        return true;
     }
 
     bool pop(T& out) {
@@ -354,7 +362,10 @@ struct JobSystem::Impl {
             head->park_next = nullptr;
             head->parked_on = nullptr;
             Worker& home = workers[head->home_worker];
-            home.ready_fibers.push(head);
+            // Provably never full: at most fiber_pool_size (256) fibers
+            // can exist and deque_capacity is 1024, so a parked-fiber
+            // re-queue always fits.
+            (void)home.ready_fibers.push(head);
             wake_worker(head->home_worker);
             head = next;
         }
@@ -375,8 +386,14 @@ struct JobSystem::Impl {
         constexpr int drain_limit = 128;
         for (int n = 0; n < drain_limit && !self.inbox.empty(); ++n) {
             Job* j = self.inbox.back();
+            // Deque full → stop draining; leave the rest in the inbox for
+            // later worker_main iterations to pick up as the deque empties.
+            // This backpressure is what stops the fixed-capacity ring from
+            // overflowing (was: unconditional push → ring overwrite →
+            // stale/null Job* dispatched → segfault on many-producer /
+            // few-consumer hosts, e.g. a low-core CI runner).
+            if (!self.jobs.push(j)) break;
             self.inbox.pop_back();
-            self.jobs.push(j);
         }
     }
 
@@ -533,9 +550,23 @@ JobSystem::~JobSystem() {
     delete impl_;
 }
 
-void JobSystem::start(const WorkerPlan& plan) {
+void JobSystem::start(const WorkerPlan& plan_in) {
     assert(!impl_->running.load() && "JobSystem already started");
-    assert(!plan.worker_cores.empty() && "WorkerPlan must have at least one core");
+    assert(!plan_in.worker_cores.empty() && "WorkerPlan must have at least one core");
+
+    // Defensive: the assert above is compiled out in release. An empty
+    // plan (topology detection degenerating to nothing on an exotic VM)
+    // would make worker_count()==0 and turn the submit/steal
+    // `% worker_count` into an integer divide-by-zero crash. Synthesize a
+    // single core-0 Performance worker so the system always has >=1.
+    WorkerPlan fallback;
+    if (plan_in.worker_cores.empty()) {
+        fallback.worker_cores      = { 0u };
+        fallback.worker_numa_nodes = { 0u };
+        fallback.worker_tiers      = { WorkerTier::Performance };
+        fallback.perf_worker_count = 1u;
+    }
+    const WorkerPlan& plan = plan_in.worker_cores.empty() ? fallback : plan_in;
 
     impl_->workers          = std::vector<Worker>(plan.worker_cores.size());
     impl_->perf_count       = plan.perf_worker_count;
@@ -592,8 +623,14 @@ Counter* JobSystem::submit(JobFunc fn, void* user_data, Counter* counter) {
 
     u32 wid = current_worker_id();
     if (wid != static_cast<u32>(-1)) {
-        // Internal — push directly onto own deque (single-owner ✓).
-        impl_->workers[wid].jobs.push(j);
+        // Internal — push onto own deque (single-owner ✓). If the deque
+        // is momentarily full, fall back to our own inbox instead of
+        // overwriting a live slot; try_drain_own_inbox reclaims it once
+        // the deque drains.
+        if (!impl_->workers[wid].jobs.push(j)) {
+            std::lock_guard<std::mutex> lg(impl_->workers[wid].inbox_mtx);
+            impl_->workers[wid].inbox.push_back(j);
+        }
         // Wake a random other worker in case it's idle, to encourage stealing.
         const u32 n = static_cast<u32>(impl_->workers.size());
         if (n > 1) {

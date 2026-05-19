@@ -191,6 +191,49 @@ int main() {
 
     js.shutdown();
 
+    // ---- T6: many-producer / few-consumer deque backpressure -------
+    // Reproduces the CI segfault deterministically on ANY host: a
+    // SINGLE worker with >> deque_capacity (1024) jobs streamed in from
+    // the external thread. The external submit path round-robins into
+    // the worker's inbox; the drain moves 128/iteration into the
+    // fixed-capacity ring while the worker consumes 1/iteration. Before
+    // the bounded-push fix the ring silently overwrote live, unconsumed
+    // slots → a reused Job* with fn==nullptr was dispatched → segfault
+    // (only masked on many-core dev boxes where jobs/worker stayed
+    // under 1024). Post-fix: push reports full, the drain applies
+    // backpressure, and every one of the 20000 jobs still runs exactly
+    // once. This crashed pre-fix even on a 32-thread box.
+    {
+        cc::WorkerPlan one{};
+        one.worker_cores      = { 0u };
+        one.worker_numa_nodes = { 0u };
+        one.worker_tiers      = { cc::WorkerTier::Performance };
+        one.perf_worker_count = 1u;
+
+        cc::JobSystem js1;
+        js1.start(one);
+        CHECK(js1.worker_count() == 1u);
+        bool ok = false; int tot = 0;
+        run_batch(js1, 20000, 64, ok, &tot);          // 20000 >> 1024
+        CHECK(ok);                                     // exactly-once, no crash
+        CHECK(tot == 20000);
+        js1.shutdown();
+    }
+
+    // T7: empty plan must not divide-by-zero in release (assert is
+    // compiled out). start() synthesizes a 1-worker fallback; a tiny
+    // batch must still run exactly once rather than crash on `% 0`.
+    {
+        cc::JobSystem js0;
+        js0.start(cc::WorkerPlan{});                   // intentionally empty
+        CHECK(js0.worker_count() >= 1u);               // fallback engaged
+        bool ok = false; int tot = 0;
+        run_batch(js0, 256, 16, ok, &tot);
+        CHECK(ok);
+        CHECK(tot == 256);
+        js0.shutdown();
+    }
+
     if (g_fail == 0) {
         cardinal::log::infof("jobstest", "OK  %d checks passed", g_checks);
         return 0;
