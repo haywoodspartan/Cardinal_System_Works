@@ -1614,9 +1614,11 @@ int main(int argc, char** argv) {
                 : 1.0f;
             pipelines->render(scene, aspect_i);
         }
-        // The gizmo overlay re-derives its own aspect inside
-        // set_viewport_camera — no shared `aspect` needed here anymore
-        // (the per-viewport render loop above uses its own aspect_i).
+        // NOTE: set_viewport_camera does NOT re-derive aspect — it just
+        // stores the view/proj it is given. The per-panel overlay camera
+        // is set inside the viewport-panel draw loop below (each panel
+        // gets proj(aspect_i) for its own extent) so detached-window
+        // overlays match their RTT + the pick.
 
         // ---- Editor UI -----------------------------------------------------
         studio->begin_frame();
@@ -2023,6 +2025,25 @@ int main(int argc, char** argv) {
             auto& vps = viewports[i];
             if (!vps.show) continue;
             if (any_maximized && i != maximized_idx) continue;
+            // Studio's gizmo / world-grid hover crosshair / chunk-readout
+            // overlays project with the camera set here, consumed
+            // synchronously inside draw_viewport_panel. Give EACH panel
+            // its OWN aspect — the same per-viewport extent its RTT was
+            // rendered with (render loop above) and that the click pick
+            // uses (pick.aspect) — so a panel in its own OS window
+            // (different aspect than viewport 0) has its overlays line up
+            // with the scene and with where objects actually place. The
+            // single global-aspect set_viewport_camera later in the frame
+            // skewed every non-main viewport's overlays; correct docked.
+            {
+                const u32   vw_i = sw->viewport_width (static_cast<u32>(i));
+                const u32   vh_i = sw->viewport_height(static_cast<u32>(i));
+                const float aspect_i = (vh_i > 0)
+                    ? static_cast<float>(vw_i) / static_cast<float>(vh_i)
+                    : 1.0f;
+                studio->set_viewport_camera(scene.camera().view(),
+                                            scene.camera().proj(aspect_i));
+            }
             studio->draw_viewport_panel(
                 vps.title.c_str(),
                 static_cast<u32>(i),
