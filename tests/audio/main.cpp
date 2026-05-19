@@ -28,6 +28,8 @@
 #include <cardinal/audio/audio.hpp>
 #include <cardinal/core/log.hpp>
 
+#include <limits>
+
 namespace {
 
 namespace au = cardinal::audio;
@@ -391,6 +393,79 @@ void test_fades() {
     CHECK(e2->active_instances().empty());
 }
 
+// ---- non-finite control inputs must not poison instances / bus ----
+// Regression: cardinal::clamp passes NaN THROUGH (NaN<lo and NaN>hi are
+// both false), so play_3d's volume/pitch "sanitizing" clamps did NOT
+// sanitize NaN. A NaN pitch made play_head_s NaN in tick(); the
+// `play_head_s >= duration_s` expiry test is false for NaN so the
+// instance was IMMORTAL, and render() then evaluated sin(2*pi*f*NaN) →
+// a NaN output bus forever. A non-finite dt poisons the same way.
+// Inputs must be forced finite (NaN vol→0/silent, NaN pitch→1,
+// non-finite dt→no-op); every finite input stays bit-identical.
+void test_nonfinite_inputs() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    const float inf  = std::numeric_limits<float>::infinity();
+
+    {   // NaN pitch must not survive into the instance / play head.
+        auto e = au::Engine::create();
+        e->register_cue(sine_cue("sine", 1.0f));
+        const au::InstanceId id = e->play_2d("sine", au::kChannelSfx,
+                                              1.0f, qnan, false);
+        CHECK(id != 0u);
+        auto a = e->active_instances();
+        CHECK(a.size() == 1u);
+        if (!a.empty()) {
+            CHECK(a[0].pitch == a[0].pitch);             // finite, not NaN
+            CHECK(a[0].pitch >= 0.05f && a[0].pitch <= 8.0f);
+        }
+        e->tick(0.25f);                                  // finite dt
+        a = e->active_instances();
+        if (!a.empty()) {
+            CHECK(a[0].play_head_s == a[0].play_head_s); // finite
+            CHECK(ap(a[0].play_head_s, 0.25f));          // pitch→1
+        }
+        e->tick(1.0f);                                   // 1.25 ≥ 1.0
+        CHECK(e->active_instances().empty());            // expires, not immortal
+    }
+    {   // NaN volume → silent (0), not a NaN bus.
+        auto e = au::Engine::create();
+        e->register_cue(sine_cue("sine", 1.0f));
+        e->play_2d("sine", au::kChannelSfx, qnan, 1.0f, false);
+        e->tick(0.01f);
+        auto a = e->active_instances();
+        CHECK(a.size() == 1u);
+        if (!a.empty()) {
+            CHECK(a[0].volume == a[0].volume);                       // finite
+            CHECK(a[0].final_attenuated_volume ==
+                  a[0].final_attenuated_volume);                     // finite
+            CHECK(ap(a[0].final_attenuated_volume, 0.0f, 1e-4f));    // silent
+        }
+        float buf[32];
+        for (float& x : buf) x = 7.0f;
+        e->render(buf, 16, 1);
+        bool finite_bus = true;
+        for (u32 i = 0; i < 16u; ++i)
+            if (!(buf[i] == buf[i])) finite_bus = false;             // no NaN
+        CHECK(finite_bus);
+    }
+    {   // Non-finite dt is a no-op; the next valid tick is correct.
+        auto e = au::Engine::create();
+        e->register_cue(sine_cue("sine", 1.0f));
+        e->play_2d("sine", au::kChannelSfx, 1.0f, 1.0f, false);
+        e->tick(qnan);
+        auto a = e->active_instances();
+        CHECK(a.size() == 1u);
+        if (!a.empty()) CHECK(ap(a[0].play_head_s, 0.0f));   // untouched
+        e->tick(inf);
+        a = e->active_instances();
+        if (!a.empty()) CHECK(ap(a[0].play_head_s, 0.0f));
+        e->tick(0.5f);                                        // valid
+        a = e->active_instances();
+        CHECK(a.size() == 1u);
+        if (!a.empty()) CHECK(ap(a[0].play_head_s, 0.5f));    // not NaN
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -404,6 +479,7 @@ int main() {
     test_render_mix();
     test_procedural();
     test_fades();
+    test_nonfinite_inputs();
 
     if (g_fail == 0) {
         cardinal::log::infof("audiotest", "OK  %d checks passed", g_checks);

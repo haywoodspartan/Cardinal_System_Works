@@ -166,8 +166,17 @@ InstanceId Engine::play_3d(const cardinal::string& cue_id, const cardinal::scene
     s.channel     = ch;
     s.is_3d       = true;
     s.position    = pos;
-    s.volume      = cardinal::clamp(volume, 0.0f, 4.0f);
-    s.pitch       = cardinal::clamp(pitch, 0.05f, 8.0f);
+    // cardinal::clamp passes NaN THROUGH (NaN < lo and NaN > hi are both
+    // false), so these "sanitizing" clamps do NOT sanitize a non-finite
+    // request. A NaN pitch makes play_head_s NaN in tick(); the
+    // `play_head_s >= duration_s` expiry test is false for NaN so the
+    // instance is immortal, and render() then evaluates sin(2*pi*f*NaN) →
+    // the whole output bus is NaN. Force finite first: NaN/Inf volume → 0
+    // (silent, safe), NaN/Inf pitch → 1 (normal speed).
+    s.volume      = cardinal::clamp(cardinal::isfinite(volume) ? volume : 0.0f,
+                                    0.0f, 4.0f);
+    s.pitch       = cardinal::clamp(cardinal::isfinite(pitch) ? pitch : 1.0f,
+                                    0.05f, 8.0f);
     s.loop        = loop;
     s.duration_s  = c->duration_s;
     instances_.push_back(s);
@@ -200,6 +209,12 @@ void Engine::set_emitter_position(InstanceId id, const cardinal::scene::Vec3& po
 }
 
 void Engine::tick(float dt) {
+    // A non-finite dt (NaN/Inf frame-time spike, debugger pause, pacer
+    // hiccup) makes play_head_s NaN: the `play_head_s >= duration_s`
+    // expiry test is then false forever (immortal instance) and render()
+    // evaluates sin(2*pi*f*NaN) → a NaN output bus every callback. No-op,
+    // leaving every instance's state finite for the next valid frame.
+    if (!cardinal::isfinite(dt)) return;
     cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     for (auto& s : instances_) {
         s.play_head_s += dt * s.pitch;
