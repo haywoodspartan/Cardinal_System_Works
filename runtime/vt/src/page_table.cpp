@@ -62,6 +62,11 @@ TileLookup PageTable::lookup(u32 mip, u32 y, u32 x) const noexcept {
 
 void PageTable::mark_pending(u32 mip, u32 y, u32 x) noexcept {
     if (mip >= entries_per_mip_.size()) return;
+    // Bounds-check (x,y) like lookup() does. Without this an out-of-range
+    // coord makes entry_index_ = y*width+x either alias a DIFFERENT
+    // tile's cell (silent status corruption) or, for y>=height, index
+    // PAST the per-mip atomics vector (OOB) — and still bump the counter.
+    if (x >= width_tiles(mip) || y >= height_tiles(mip)) return;
     if (entries_per_mip_[mip].empty()) ensure_mip_allocated_(mip);
     if (entries_per_mip_[mip].empty()) return;
     auto& cell = entries_per_mip_[mip][entry_index_(mip, y, x)];
@@ -74,6 +79,7 @@ void PageTable::mark_pending(u32 mip, u32 y, u32 x) noexcept {
 
 void PageTable::mark_resident(u32 mip, u32 y, u32 x, PhysicalSlot slot) noexcept {
     if (mip >= entries_per_mip_.size()) return;
+    if (x >= width_tiles(mip) || y >= height_tiles(mip)) return;  // see mark_pending
     if (entries_per_mip_[mip].empty()) ensure_mip_allocated_(mip);
     if (entries_per_mip_[mip].empty()) return;
     auto& cell = entries_per_mip_[mip][entry_index_(mip, y, x)];
@@ -90,6 +96,7 @@ void PageTable::mark_resident(u32 mip, u32 y, u32 x, PhysicalSlot slot) noexcept
 
 void PageTable::mark_evicted(u32 mip, u32 y, u32 x) noexcept {
     if (mip >= entries_per_mip_.size()) return;
+    if (x >= width_tiles(mip) || y >= height_tiles(mip)) return;  // see mark_pending
     if (entries_per_mip_[mip].empty()) return;
     auto& cell = entries_per_mip_[mip][entry_index_(mip, y, x)];
     const u32 prev = cell.load(cardinal::memory_order_acquire);
@@ -105,6 +112,7 @@ void PageTable::mark_evicted(u32 mip, u32 y, u32 x) noexcept {
 
 void PageTable::mark_failed(u32 mip, u32 y, u32 x) noexcept {
     if (mip >= entries_per_mip_.size()) return;
+    if (x >= width_tiles(mip) || y >= height_tiles(mip)) return;  // see mark_pending
     if (entries_per_mip_[mip].empty()) return;
     auto& cell = entries_per_mip_[mip][entry_index_(mip, y, x)];
     const u32 prev = cell.load(cardinal::memory_order_acquire);

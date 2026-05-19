@@ -262,6 +262,49 @@ void test_lookup_marks() {
     CHECK(pt.pending_count() == 1u);                     // unchanged
 }
 
+// ---- mark_* must bounds-check (mip,y,x) like lookup() does ---------
+// Regression: lookup() guards `x>=width_tiles(mip) || y>=height_tiles
+// (mip)` but mark_pending/resident/evicted/failed did NOT. An
+// out-of-range coord either ALIASED a different tile's status cell
+// (entry_index_ = y*width+x lands on some other valid cell — silent
+// deterministic corruption) or, for y>=height, indexed PAST the
+// per-mip atomics vector (OOB) — and still bumped pending_/resident_
+// count_. The header says "(mip,y,x) must be in range"; mark_* must
+// enforce it too. No existing test exercises out-of-range mark_*.
+void test_mark_out_of_range() {
+    using S = vt::TileStatus;
+    vt::PageTableDesc d; d.width_tiles = 4; d.height_tiles = 4;
+    d.mip_count = 2;
+    vt::PageTable pt(d);
+
+    // x == width_tiles(0) (out of range; valid x in [0,4)). entry_index_
+    // would be 0*4+4 == 4 == the cell of in-range tile (mip0,y1,x0):
+    // pre-fix this Pending-marks (0,1,0) and bumps the counter.
+    pt.mark_pending(0, /*y*/0, /*x*/4);
+    CHECK(pt.pending_count() == 0u);                    // pre-fix: 1
+    CHECK(pt.lookup(0, 1, 0).status == S::NotResident); // pre-fix: Pending
+
+    // y >= height_tiles(0): entry_index_ = 8*4+0 = 32 >= 16 → OOB on the
+    // size-16 atomics vector pre-fix. Post-fix: guarded no-op.
+    pt.mark_resident(0, /*y*/8, /*x*/0, /*slot*/3u);
+    CHECK(pt.resident_count() == 0u);                   // pre-fix: 1 (+OOB)
+    CHECK(pt.lookup(0, 0, 0).status == S::NotResident);
+
+    // mark_evicted / mark_failed out of range: clean no-ops too.
+    pt.mark_evicted(0, /*y*/99, /*x*/0);
+    pt.mark_failed (0, /*y*/0,  /*x*/77);
+    CHECK(pt.pending_count() == 0u && pt.resident_count() == 0u);
+
+    // The normal in-range path is preserved by the fix.
+    pt.mark_pending(0, 1, 2);
+    CHECK(pt.lookup(0, 1, 2).status == S::Pending);
+    CHECK(pt.pending_count() == 1u);
+    pt.mark_resident(0, 1, 2, /*slot*/7u);
+    CHECK(pt.lookup(0, 1, 2).status == S::Resident);
+    CHECK(pt.lookup(0, 1, 2).slot == 7u);
+    CHECK(pt.pending_count() == 0u && pt.resident_count() == 1u);
+}
+
 }  // namespace
 
 int main() {
@@ -270,6 +313,7 @@ int main() {
     test_hash_tile();
     test_geometry();
     test_lookup_marks();
+    test_mark_out_of_range();
 
     if (g_fail == 0) {
         cardinal::log::infof("vttest", "OK  %d checks passed", g_checks);
