@@ -1208,6 +1208,49 @@ cardinal::unique_ptr<Buffer> VulkanDevice::create_buffer(const BufferDesc& desc)
     return b;
 }
 
+// Transient single-submit command buffer for one-off GPU work (initial
+// image layout transitions, acceleration-structure builds). submit_and_wait
+// stalls the queue — only for setup-time, never per-frame.
+struct OneShotCmd {
+    VulkanDevice&   dev;
+    VkCommandPool   pool{VK_NULL_HANDLE};
+    VkCommandBuffer cmd{VK_NULL_HANDLE};
+
+    explicit OneShotCmd(VulkanDevice& d) : dev(d) {
+        VkCommandPoolCreateInfo pci{};
+        pci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pci.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        pci.queueFamilyIndex = dev.vk_graphics_queue_family();
+        vkCreateCommandPool(dev.vk_device(), &pci, nullptr, &pool);
+
+        VkCommandBufferAllocateInfo ai{};
+        ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        ai.commandPool        = pool;
+        ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = 1;
+        vkAllocateCommandBuffers(dev.vk_device(), &ai, &cmd);
+
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &bi);
+    }
+
+    void submit_and_wait() {
+        vkEndCommandBuffer(cmd);
+        VkSubmitInfo si{};
+        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers    = &cmd;
+        vkQueueSubmit(dev.vk_graphics_queue(), 1, &si, VK_NULL_HANDLE);
+        vkQueueWaitIdle(dev.vk_graphics_queue());
+    }
+
+    ~OneShotCmd() {
+        if (pool != VK_NULL_HANDLE) vkDestroyCommandPool(dev.vk_device(), pool, nullptr);
+    }
+};
+
 // =============================================================================
 // VulkanTexture — GPU 2D image. First consumer: the shadow-map depth
 // render target (DepthRenderTarget | Sampled). `layout_` is mutable
@@ -1271,7 +1314,42 @@ public:
                 "vkCreateImageView (texture)")) {
             return false;
         }
-        layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        // A Sampled texture must not be left in UNDEFINED: the pipeline
+        // statically declares its sampler binding, so the main pass binds
+        // + samples it (descriptor imageLayout = SHADER_READ_ONLY_OPTIMAL)
+        // EVERY frame — even when the producing pass is skipped (the
+        // shadow map in wireframe / no-directional-light / shadows-off /
+        // first frames). Sampling an image whose real layout (UNDEFINED)
+        // doesn't match the descriptor is undefined behaviour + a layout
+        // validation error. Put it in the sampleable layout up front; the
+        // shadow pass legitimately cycles it SHADER_READ_ONLY → DEPTH_
+        // ATTACHMENT → SHADER_READ_ONLY when it does run.
+        if (d.usage & static_cast<u32>(TextureUsage::Sampled)) {
+            OneShotCmd one(dev_);
+            VkImageMemoryBarrier b{};
+            b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image               = image_;
+            b.subresourceRange.aspectMask     = depth_
+                ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+            b.subresourceRange.baseMipLevel   = 0;
+            b.subresourceRange.levelCount     = 1;
+            b.subresourceRange.baseArrayLayer = 0;
+            b.subresourceRange.layerCount     = 1;
+            b.srcAccessMask       = 0;
+            b.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(one.cmd,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                0, 0, nullptr, 0, nullptr, 1, &b);
+            one.submit_and_wait();
+            layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        } else {
+            layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        }
         return true;
     }
 
@@ -1627,46 +1705,6 @@ namespace {
 // One-shot command buffer for AS builds. Submits to graphics queue and
 // waits on the queue (sync). Suitable for one-time setup; per-frame builds
 // will use a dedicated transfer queue + fence in a future phase.
-struct OneShotCmd {
-    VulkanDevice&   dev;
-    VkCommandPool   pool{VK_NULL_HANDLE};
-    VkCommandBuffer cmd{VK_NULL_HANDLE};
-
-    explicit OneShotCmd(VulkanDevice& d) : dev(d) {
-        VkCommandPoolCreateInfo pci{};
-        pci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        pci.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-        pci.queueFamilyIndex = dev.vk_graphics_queue_family();
-        vkCreateCommandPool(dev.vk_device(), &pci, nullptr, &pool);
-
-        VkCommandBufferAllocateInfo ai{};
-        ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        ai.commandPool        = pool;
-        ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        ai.commandBufferCount = 1;
-        vkAllocateCommandBuffers(dev.vk_device(), &ai, &cmd);
-
-        VkCommandBufferBeginInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cmd, &bi);
-    }
-
-    void submit_and_wait() {
-        vkEndCommandBuffer(cmd);
-        VkSubmitInfo si{};
-        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers    = &cmd;
-        vkQueueSubmit(dev.vk_graphics_queue(), 1, &si, VK_NULL_HANDLE);
-        vkQueueWaitIdle(dev.vk_graphics_queue());
-    }
-
-    ~OneShotCmd() {
-        if (pool != VK_NULL_HANDLE) vkDestroyCommandPool(dev.vk_device(), pool, nullptr);
-    }
-};
-
 // Allocate a transient buffer for AS scratch / result storage.
 struct ScratchBuffer {
     VmaAllocator     allocator{VK_NULL_HANDLE};
