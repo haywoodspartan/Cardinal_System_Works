@@ -217,7 +217,8 @@ void tab_navmesh(const cardinal::navmesh::Mesh* m) {
 }  // namespace
 
 void draw(const Inputs& in, const char* title, bool* p_open) {
-    if (!ImGui::Begin(title ? title : "World Systems", p_open)) { ImGui::End(); return; }
+    if (!ImGui::Begin(title ? title : "World Systems", p_open,
+                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
     if (ImGui::BeginTabBar("##ws_tabs")) {
         if (ImGui::BeginTabItem("HAL"))        { tab_hal();                            ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("IO"))         { tab_io(in.io_dispatcher);             ImGui::EndTabItem(); }

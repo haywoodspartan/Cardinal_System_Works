@@ -14,7 +14,8 @@
 namespace cardinal::ui::panels::mixer_panel {
 
 void draw(cardinal::audio::Engine* engine, const char* title, bool* p_open) {
-    if (!ImGui::Begin(title ? title : "Mixer", p_open)) { ImGui::End(); return; }
+    if (!ImGui::Begin(title ? title : "Mixer", p_open,
+                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
     if (engine == nullptr) {
         ImGui::TextDisabled("(no audio::Engine bound)");
         ImGui::End();

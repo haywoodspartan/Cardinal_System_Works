@@ -12,7 +12,8 @@
 namespace cardinal::ui::panels::shader_compiler_panel {
 
 void draw(cardinal::shader::Compiler* compiler, const char* title, bool* p_open) {
-    if (!ImGui::Begin(title ? title : "Shader Compiler", p_open)) { ImGui::End(); return; }
+    if (!ImGui::Begin(title ? title : "Shader Compiler", p_open,
+                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
     if (compiler == nullptr) {
         ImGui::TextDisabled("(no shader::Compiler bound)");
         ImGui::End();

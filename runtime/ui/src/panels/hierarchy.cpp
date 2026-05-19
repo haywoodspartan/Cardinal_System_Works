@@ -22,7 +22,8 @@ void draw(cardinal::scene::Scene& scene,
           bool* p_open,
           HierarchyPanelState& state)
 {
-    if (!ImGui::Begin(title ? title : "Hierarchy", p_open)) { ImGui::End(); return; }
+    if (!ImGui::Begin(title ? title : "Hierarchy", p_open,
+                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
 
     // Header row: count + filter.
     ImGui::Text("Entities: %zu", scene.entities().size());
