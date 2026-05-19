@@ -41,8 +41,10 @@ public:
 
     static inline int s_begin = 0;
     static inline int s_end   = 0;
+    static inline int s_tick  = 0;
     void begin_play() override { ++s_begin; }
     void end_play()   override { ++s_end;   }
+    void on_tick(float) override { ++s_tick; }
 };
 CARDINAL_REGISTER_GAME_CLASS(TestActor, "AI/Test",
     PROP_FLOAT (hp,   0.0f, 100.0f, "Hit points")
@@ -251,6 +253,84 @@ void test_game_lifecycle() {
     g.resume_play(); CHECK(g.state() == cg::GameState::Stopped && changes == 4);
 }
 
+// ---- Game::tick → apply_lifecycle_ catch-up + on_tick gating -------
+// The deferred-begin_play path: resume_play() does NOT broadcast (only
+// start_play does), so a spawn-while-Paused stays pending until a
+// Playing tick's PreUpdate handler runs apply_lifecycle_.
+void test_game_tick_lifecycle() {
+    TestActor::s_begin = 0;
+    TestActor::s_end   = 0;
+    TestActor::s_tick  = 0;
+
+    cardinal::sim::SimDesc sd{};
+    sd.fixed_dt      = 0.1f;                          // exact substep math
+    sd.max_substeps  = 8u;
+    cardinal::sim::SimWorld sw{sd};
+    cg::Game g(sw);
+
+    g.start_play();                                   // Stopped → Playing
+    g.pause_play();                                   // → Paused
+
+    cardinal::actor::Actor* a = g.spawn_class("TestActor", "deferred");
+    CHECK(a != nullptr);
+    CHECK(g.begin_play_pending() == 1u);              // Paused ⇒ deferred
+    CHECK(TestActor::s_begin == 0);
+
+    g.resume_play();                                  // Paused → Playing
+    CHECK(g.state() == cg::GameState::Playing);
+    CHECK(g.begin_play_pending() == 1u);              // resume does NOT broadcast
+    CHECK(TestActor::s_begin == 0);
+
+    g.tick(0.25f);                                    // ≥2 fixed substeps
+    CHECK(g.begin_play_pending() == 0u);              // apply_lifecycle_ caught it
+    CHECK(TestActor::s_begin == 1);                   // begun exactly once
+    CHECK(TestActor::s_tick  >= 1);                   // Update handler on_ticked it
+
+    const int tick_before = TestActor::s_tick;
+    g.tick(0.25f);                                    // no re-begin; keeps ticking
+    CHECK(TestActor::s_begin == 1);
+    CHECK(TestActor::s_tick  > tick_before);
+
+    g.stop_play();                                    // Playing → Stopped
+    CHECK(g.state() == cg::GameState::Stopped);
+    CHECK(TestActor::s_end == 1);                     // end_play broadcast
+
+    const int tick_stopped = TestActor::s_tick;
+    g.tick(0.5f);                                     // Stopped ⇒ Update gated off
+    CHECK(TestActor::s_tick == tick_stopped);
+}
+
+// ---- end_play fires on stop FROM Paused + spawn_class identity ----
+void test_stop_from_paused_and_identity() {
+    TestActor::s_begin = 0;
+    TestActor::s_end   = 0;
+    cardinal::sim::SimWorld sw{cardinal::sim::SimDesc{}};
+    cg::Game g(sw);
+    g.start_play();
+    cardinal::actor::Actor* a = g.spawn_class("TestActor");   // Playing ⇒ immediate
+    CHECK(a != nullptr);
+    CHECK(TestActor::s_begin == 1);
+
+    // The spawned GameActor is retrievable + carries the class identity.
+    auto* ga = a ? a->get_component<cg::GameActor>() : nullptr;
+    CHECK(ga != nullptr);
+    if (ga) {
+        CHECK(ga->class_name() == "TestActor");
+        CHECK(cardinal::string(ga->type_name()) == "GameActor");
+        CHECK(ga->playing() == true);
+    }
+
+    g.pause_play();                                   // pause does NOT end_play
+    CHECK(g.state() == cg::GameState::Paused);
+    CHECK(TestActor::s_end == 0);
+    if (ga) CHECK(ga->playing() == true);             // still playing while paused
+
+    g.stop_play();                                    // Paused → Stopped
+    CHECK(g.state() == cg::GameState::Stopped);
+    CHECK(TestActor::s_end == 1);                     // end_play fired from Paused
+    if (ga) CHECK(ga->playing() == false);
+}
+
 }  // namespace
 
 int main() {
@@ -258,6 +338,8 @@ int main() {
     test_reflection_lastwins();
     test_state_name_and_actor();
     test_game_lifecycle();
+    test_game_tick_lifecycle();
+    test_stop_from_paused_and_identity();
 
     if (g_fail == 0) {
         cardinal::log::infof("gametest", "OK  %d checks passed", g_checks);
