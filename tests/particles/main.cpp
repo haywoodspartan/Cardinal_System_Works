@@ -14,6 +14,8 @@
 #include <cardinal/particles/particles.hpp>
 #include <cardinal/core/log.hpp>
 
+#include <limits>
+
 namespace {
 
 namespace pa = cardinal::particles;
@@ -287,6 +289,61 @@ void test_clear_semantics() {
     CHECK(e.live_count() == sz(1));
 }
 
+// ---- non-finite dt must be rejected (NaN / +Inf robustness) --------
+// Regression: `if (dt <= 0.0f) return;` lets NaN through (NaN<=0 is
+// false) and +Inf through (Inf<=0 is false). spawn_accum_ then goes
+// non-finite; static_cast<u32>(non-finite) is UB (in practice a ~2e9
+// "integer indefinite" → multi-billion-iteration spawn loop); the
+// accumulator stays NaN forever (NaN-x=NaN) so every LATER valid tick
+// is poisoned too; and age+=dt makes `age >= lifetime` false → an
+// immortal NaN particle. tick() is noexcept: a non-finite dt must be
+// the exact same no-op as dt<=0, leaving state pristine for the next
+// valid tick.
+void test_nonfinite_dt() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    const float inf  = std::numeric_limits<float>::infinity();
+
+    {   // NaN dt: no-op; the subsequent VALID tick proves the spawn
+        // accumulator was never poisoned (exactly 5 spawn, not ~2e9).
+        pa::EmitterDesc d = fixed_desc();
+        d.rate_per_second = 100.0f;
+        pa::Emitter e(d);
+        e.tick(qnan);
+        CHECK(e.total_spawned() == static_cast<cardinal::u64>(0));
+        CHECK(e.live_count() == sz(0));
+        e.tick(0.05f);                               // 100 * 0.05 = 5
+        CHECK(e.total_spawned() == static_cast<cardinal::u64>(5));
+        CHECK(e.live_count() == sz(5));
+    }
+    {   // +Inf dt: same contract.
+        pa::EmitterDesc d = fixed_desc();
+        d.rate_per_second = 100.0f;
+        pa::Emitter e(d);
+        e.tick(inf);
+        CHECK(e.total_spawned() == static_cast<cardinal::u64>(0));
+        CHECK(e.live_count() == sz(0));
+        e.tick(0.05f);
+        CHECK(e.total_spawned() == static_cast<cardinal::u64>(5));
+    }
+    {   // A live particle survives a NaN tick with FINITE age (no NaN
+        // drift) and still culls normally afterwards (not immortal).
+        pa::EmitterDesc d = fixed_desc();
+        d.rate_per_second = 100.0f;
+        d.lifetime_min = 0.025f; d.lifetime_max = 0.025f;
+        pa::Emitter e(d);
+        e.tick(0.01f);                               // spawn 1, age≈0.01
+        e.set_emitting(false);
+        CHECK(e.live_count() == sz(1));
+        e.tick(qnan);                                // no-op
+        CHECK(e.live_count() == sz(1));
+        const pa::Particle& p = e.particles()[0];
+        CHECK(ap(p.age, 0.01f, 1e-4f));              // age unchanged
+        CHECK(p.age == p.age);                        // finite (not NaN)
+        e.tick(0.01f); e.tick(0.01f);                // age≈0.03 ≥ 0.025
+        CHECK(e.live_count() == sz(0));               // culled normally
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -298,6 +355,7 @@ int main() {
     test_determinism();
     test_system();
     test_clear_semantics();
+    test_nonfinite_dt();
 
     if (g_fail == 0) {
         cardinal::log::infof("ptest", "OK  %d checks passed", g_checks);

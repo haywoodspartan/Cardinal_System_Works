@@ -65,7 +65,14 @@ void Emitter::spawn_one_() noexcept {
 }
 
 void Emitter::tick(float dt) noexcept {
-    if (dt <= 0.0f) return;
+    // Reject non-positive AND non-finite dt. A bare `dt <= 0.0f` lets NaN
+    // through (NaN <= 0 is false) and +Inf through (Inf <= 0 is false):
+    // spawn_accum_ then goes non-finite, static_cast<u32>(non-finite) is UB
+    // (~2e9 "integer indefinite" → a multi-billion-iteration spawn loop),
+    // the accumulator stays NaN forever (NaN - x = NaN) poisoning every
+    // later valid tick, and age += dt makes `age >= lifetime` false →
+    // immortal NaN particles. This noexcept tick must no-op on such input.
+    if (!(dt > 0.0f) || !cardinal::isfinite(dt)) return;
 
     // 1) Spawn new particles using fractional accumulator (preserves rate
     //    independent of frame rate).
