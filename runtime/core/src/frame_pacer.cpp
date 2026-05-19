@@ -54,7 +54,14 @@ public:
         for (const auto& kv : limits_) {
             const float c = foreground_ ? kv.second.fps_foreground
                                         : kv.second.fps_background;
-            if (c <= 0.0f) continue;                 // uncapped contributes nothing
+            // !(c > 0) rejects 0, negative AND NaN uniformly. The old
+            // `c <= 0` let NaN through (NaN <= 0 is false); a NaN cap
+            // then reached static_cast<long long>(1e9 / NaN) below —
+            // float->integral of NaN is undefined behaviour in this
+            // per-frame hot path, and it also corrupted the public
+            // effective_fps_cap(). NaN is not a usable cap, so treat it
+            // as "uncapped, contributes nothing" exactly like 0/negative.
+            if (!(c > 0.0f)) continue;               // 0 / negative / NaN ⇒ uncapped
             if (best_cap == 0.0f || c < best_cap) best_cap = c;
         }
         effective_cap_ = best_cap;

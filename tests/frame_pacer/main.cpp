@@ -20,6 +20,8 @@
 #include <cardinal/core/frame_pacer.hpp>
 #include <cardinal/core/log.hpp>
 
+#include <limits>
+
 namespace {
 
 namespace co = cardinal::core;
@@ -144,6 +146,29 @@ void test_effective_cap() {
     CHECK(p->effective_fps_cap() == 0.0f);
 }
 
+// ---- a NaN cap must be ignored (uncapped), never UB ----------------
+// Regression: the old `c <= 0` filter let NaN through (NaN<=0 is
+// false); NaN then hit static_cast<long long>(1e9 / NaN) — float->int
+// of NaN is UB — and poisoned the public effective_fps_cap(). NaN is
+// not a usable cap and must behave exactly like 0 / negative.
+void test_nan_cap_uncapped() {
+    const float nan_f = std::numeric_limits<float>::quiet_NaN();
+    {   // sole context's foreground cap is NaN → uncapped, no sleep.
+        auto p = co::FramePacer::create();
+        p->set_limit(0u, co::FrameLimit{nan_f, 30.0f});
+        CHECK(p->wait_for_next_frame() == static_cast<cardinal::u64>(0));
+        CHECK(p->effective_fps_cap() == 0.0f);      // NaN skipped, not propagated
+    }
+    {   // NaN coexists with a valid cap → valid wins; NaN neither lowers
+        // nor corrupts the effective cap.
+        auto p = co::FramePacer::create();
+        p->set_limit(0u, co::FrameLimit{nan_f,     30.0f});
+        p->set_limit(1u, co::FrameLimit{20000.0f,  30.0f});
+        p->wait_for_next_frame();
+        CHECK(p->effective_fps_cap() == 20000.0f);
+    }
+}
+
 // ---- uncapped ⇒ wait_for_next_frame returns exactly 0 (no sleep) ---
 void test_uncapped_no_sleep() {
     {   // both fields zero on the only context.
@@ -183,6 +208,7 @@ int main() {
     test_fresh_state();
     test_registry();
     test_effective_cap();
+    test_nan_cap_uncapped();
     test_uncapped_no_sleep();
     test_foreground_stable();
 
