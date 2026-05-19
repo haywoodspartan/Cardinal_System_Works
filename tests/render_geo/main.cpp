@@ -34,6 +34,7 @@ namespace {
 namespace geo = cardinal::render::geo;
 namespace scn = cardinal::scene;
 using cardinal::u32;
+using cardinal::usize;
 
 int g_checks = 0;
 int g_fail   = 0;
@@ -247,6 +248,138 @@ void test_lod() {
     CHECK(geo::cluster_lod(b, cam, cfg) == 3u);
 }
 
+// ---- subdivide: counts, watertightness, PN placement --------------
+void test_subdivide() {
+    geo::TriMesh in;
+    in.positions = { {0,0,0}, {1,0,0}, {0,1,0} };
+    in.indices   = { 0u,1u,2u };
+
+    auto l0 = geo::subdivide(in, geo::SubdivOptions{0u, 0.0f});
+    CHECK(l0.positions.size() == 3u && l0.indices.size() == 3u);   // passthrough
+
+    auto l1 = geo::subdivide(in, geo::SubdivOptions{1u, 0.0f});
+    CHECK(l1.positions.size() == 6u);     // 3 corners + 3 edge mids
+    CHECK(l1.indices.size()   == 12u);    // 4 sub-tris
+    CHECK(veq(l1.positions[3], 0.5, 0.0, 0.0));   // mid(0,1)
+    CHECK(veq(l1.positions[4], 0.5, 0.5, 0.0));   // mid(1,2)
+    CHECK(veq(l1.positions[5], 0.0, 0.5, 0.0));   // mid(2,0)
+
+    auto l2 = geo::subdivide(in, geo::SubdivOptions{2u, 0.0f});
+    CHECK(l2.indices.size() == 48u);      // 4^2 tris * 3
+
+    // Watertight: a 2-tri quad shares the diagonal midpoint exactly once.
+    geo::TriMesh q;
+    q.positions = { {0,0,0}, {1,0,0}, {1,1,0}, {0,1,0} };
+    q.indices   = { 0u,1u,2u,  0u,2u,3u };
+    auto qs = geo::subdivide(q, geo::SubdivOptions{1u, 0.0f});
+    CHECK(qs.positions.size() == 9u);     // 4 corners + 5 unique edges
+    CHECK(qs.indices.size()   == 24u);
+
+    // PN-triangle: a sphere-like edge (normals fanned along the edge)
+    // bows midpoint(0,1) to z = -0.12 at full blend. blend 0 stays at the
+    // linear midpoint; blend 0.5 lands exactly halfway (lerp wiring).
+    geo::TriMesh c;
+    c.positions = { {0,0,0}, {1,0,0}, {0,1,0} };
+    c.normals   = { {0.6f,0,0.8f}, {-0.6f,0,0.8f}, {0,0,1} };
+    c.indices   = { 0u,1u,2u };
+    auto flat = geo::subdivide(c, geo::SubdivOptions{1u, 0.0f});
+    CHECK(veq(flat.positions[3], 0.5, 0.0, 0.0));            // == linear
+    auto bent = geo::subdivide(c, geo::SubdivOptions{1u, 1.0f});
+    CHECK(ap(bent.positions[3].x, 0.5) && ap(bent.positions[3].z, -0.12));
+    auto half = geo::subdivide(c, geo::SubdivOptions{1u, 0.5f});
+    CHECK(ap(half.positions[3].z, -0.06));                   // lerp(lin,pn,.5)
+    CHECK(bent.normals.size() == bent.positions.size());
+
+    // Odd index count → rejected (defensive).
+    geo::TriMesh bad; bad.positions = { {0,0,0} }; bad.indices = { 0u,0u };
+    CHECK(geo::subdivide(bad, geo::SubdivOptions{1u,0.0f}).indices.empty());
+}
+
+// ---- subdiv_level_for_factor: ceil(log2) ramp, clamped ------------
+void test_subdiv_level() {
+    CHECK(geo::subdiv_level_for_factor(0.5f)        == 0u);
+    CHECK(geo::subdiv_level_for_factor(1.0f)        == 0u);
+    CHECK(geo::subdiv_level_for_factor(2.0f)        == 1u);
+    CHECK(geo::subdiv_level_for_factor(3.0f)        == 2u);
+    CHECK(geo::subdiv_level_for_factor(4.0f)        == 2u);
+    CHECK(geo::subdiv_level_for_factor(8.0f)        == 3u);
+    CHECK(geo::subdiv_level_for_factor(64.0f, 4u)   == 4u);   // clamp
+    CHECK(geo::subdiv_level_for_factor(1000.0f, 6u) == 6u);   // clamp
+}
+
+// ---- cluster DAG + perfect LOD cut --------------------------------
+void test_cluster_dag() {
+    const int N = 8;                                  // 81 verts, 128 tris
+    std::vector<float> pos;
+    for (int y = 0; y <= N; ++y)
+        for (int x = 0; x <= N; ++x) {
+            pos.push_back(static_cast<float>(x));
+            pos.push_back(static_cast<float>(y));
+            pos.push_back(0.0f);
+        }
+    auto vid = [&](int x, int y){ return static_cast<u32>(y*(N+1)+x); };
+    std::vector<u32> idx;
+    for (int y = 0; y < N; ++y)
+        for (int x = 0; x < N; ++x) {
+            idx.push_back(vid(x,  y  )); idx.push_back(vid(x+1,y  )); idx.push_back(vid(x+1,y+1));
+            idx.push_back(vid(x,  y  )); idx.push_back(vid(x+1,y+1)); idx.push_back(vid(x,  y+1));
+        }
+    const u32 vcount = static_cast<u32>(pos.size() / 3);
+    auto base = geo::build_meshlets(idx.data(), static_cast<u32>(idx.size()),
+                                    pos.data(), vcount, kStride);
+    CHECK(base.meshlets.size() >= 2u);
+
+    auto dag = geo::build_cluster_dag(base, pos.data(), vcount, kStride);
+    CHECK(dag.root != u32(-1));
+    CHECK(dag.level_count >= 2u);
+    CHECK(dag.nodes[dag.root].child_count > 0u);
+
+    u32 l0 = 0;
+    for (const auto& n : dag.nodes) if (n.lod_level == 0u) ++l0;
+    CHECK(l0 == static_cast<u32>(base.meshlets.size()));
+
+    bool mono = true, ranges_ok = true, idx_ok = true;
+    for (const auto& n : dag.nodes) {
+        if ((n.index_count % 3u) != 0u) ranges_ok = false;
+        if (static_cast<usize>(n.index_offset) + n.index_count
+              > dag.indices.size()) ranges_ok = false;
+        else for (u32 i = 0; i < n.index_count; ++i)
+            if (dag.indices[n.index_offset + i] >= dag.positions.size())
+                idx_ok = false;
+        for (u32 k = 0; k < n.child_count; ++k) {
+            const u32 cid = dag.child_ids[n.first_child + k];
+            if (n.error + 1e-3f < dag.nodes[cid].error) mono = false;
+        }
+    }
+    CHECK(mono); CHECK(ranges_ok); CHECK(idx_ok);
+
+    auto dag2 = geo::build_cluster_dag(base, pos.data(), vcount, kStride);
+    CHECK(dag2.nodes.size() == dag.nodes.size());
+    CHECK(dag2.root == dag.root && dag2.level_count == dag.level_count);
+
+    // Perfect LOD cut — far + huge budget → just the root.
+    geo::LodCutParams cam{};
+    cam.camera_pos         = scn::Vec3{4.0f, 4.0f, 1000.0f};
+    cam.proj_scale         = 1.0f;
+    cam.error_threshold_px = 1e9f;
+    auto coarse = geo::select_lod_cut(dag, cam);
+    CHECK(coarse.size() == 1u && coarse[0] == dag.root);
+
+    // Tight budget + huge projection → refine down to leaves.
+    cam.proj_scale         = 1e6f;
+    cam.error_threshold_px = 1e-9f;
+    auto fine = geo::select_lod_cut(dag, cam);
+    CHECK(fine.size() >= coarse.size());
+    bool ids_ok = true, reached_leaf = false;
+    for (u32 id : fine) {
+        if (id >= dag.nodes.size()) ids_ok = false;
+        else if (dag.nodes[id].child_count == 0u) reached_leaf = true;
+    }
+    CHECK(ids_ok); CHECK(reached_leaf);
+    auto fine2 = geo::select_lod_cut(dag, cam);
+    CHECK(fine2.size() == fine.size());
+}
+
 }  // namespace
 
 int main() {
@@ -260,6 +393,9 @@ int main() {
     test_sphere_frustum();
     test_backface();
     test_lod();
+    test_subdivide();
+    test_subdiv_level();
+    test_cluster_dag();
 
     if (g_fail == 0) {
         cardinal::log::infof("geotest", "OK  %d checks passed", g_checks);
