@@ -3,6 +3,7 @@
 #include <cardinal/core/log.hpp>
 
 #include <cardinal/core/algorithm.hpp>   // cardinal::clamp
+#include <cardinal/core/cmath.hpp>       // cardinal::isfinite
 #include <cardinal/core/traits.hpp>      // cardinal::decay_t/is_same_v
 // cardinal::visit arrives via cine.hpp (core/utility.hpp)
 
@@ -29,6 +30,15 @@ void Player::seek(float t) {
 
 void Player::tick(float dt) {
     if (seq_ == nullptr || !seq_->playing) return;
+    // A non-finite dt (NaN/±Inf from a frame-time spike, debugger pause or
+    // pacer hiccup) poisons the play head: with NaN, `t = prev + dt*speed`
+    // is NaN and `t >= duration` is false (unordered) so no wrap/clamp runs,
+    // yet play_head_s/prev_time_s_ get written = NaN — permanently freezing
+    // the sequencer (every later tick stays NaN, no event ever fires, the
+    // editor read-out shows "nan"); +Inf under looping instead refires every
+    // event every tick forever. No-op like a paused tick. Finite dt of any
+    // sign stays valid — negative speed / speed 0 are supported, unaffected.
+    if (!cardinal::isfinite(dt)) return;
     const float prev = seq_->play_head_s;
     float t = prev + dt * seq_->speed;
     if (t >= seq_->duration_s) {

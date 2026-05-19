@@ -26,6 +26,7 @@
 #include <cardinal/cine/cine.hpp>
 #include <cardinal/core/log.hpp>
 
+#include <limits>
 #include <string>
 #include <utility>          // std::move
 #include <vector>
@@ -345,6 +346,56 @@ void test_callbacks_and_order() {
     }
 }
 
+// ---- non-finite dt must be a pure no-op (NaN / Inf robustness) -----
+// Regression: tick() guarded seq_/playing but never dt. A NaN dt makes
+// `t = prev + dt*speed` NaN; `t >= duration` is false (NaN unordered)
+// so no wrap/clamp, and the `ev <= t` window is false so nothing fires
+// — but play_head_s/prev_time_s_ are written = NaN, PERMANENTLY
+// freezing the sequencer (every later tick stays NaN, no event ever,
+// editor read-out shows "nan"). A +Inf dt under looping instead
+// refires EVERY event EVERY tick forever. A non-finite dt must be the
+// same no-op as a paused tick, leaving state pristine for the next
+// valid tick. Finite dt of any sign is unaffected (speed tests above).
+void test_nonfinite_dt() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    const float inf  = std::numeric_limits<float>::infinity();
+
+    {   // NaN dt: no-op; the next VALID tick proves play_head_s was
+        //  never poisoned to NaN (it advances and the event fires).
+        cn::Sequence seq;
+        seq.duration_s = 10.0f; seq.looping = false; seq.speed = 1.0f;
+        seq.tracks.push_back(ev_track({ {2.0f, "e", ""} }));
+        cn::Player p(&seq); Rec r; wire(p, r);
+        p.seek(1.0f); p.play();
+        p.tick(qnan);
+        CHECK(r.ev.empty());
+        CHECK(ap(seq.play_head_s, 1.0f));      // unchanged + finite
+        CHECK(seq.playing);                    // still playing
+        p.tick(3.0f);                          // 1 → 4, crosses 2
+        CHECK(r.ev.size() == sz(1));
+        CHECK(r.ev[0] == "e");
+        CHECK(ap(seq.play_head_s, 4.0f));      // not NaN+3 == NaN
+    }
+    {   // +Inf / -Inf dt under looping must NOT storm every event.
+        cn::Sequence seq;
+        seq.duration_s = 5.0f; seq.looping = true; seq.speed = 1.0f;
+        seq.tracks.push_back(ev_track({ {1.0f,"a",""}, {4.0f,"b",""} }));
+        cn::Player p(&seq); Rec r; wire(p, r);
+        p.seek(0.0f); p.play();
+        p.tick(inf);
+        CHECK(r.ev.empty());
+        CHECK(ap(seq.play_head_s, 0.0f));
+        p.tick(-inf);
+        CHECK(r.ev.empty());
+        CHECK(ap(seq.play_head_s, 0.0f));
+        CHECK(seq.playing);
+        p.tick(3.0f);                          // (0,3] → "a" only
+        CHECK(r.ev.size() == sz(1));
+        CHECK(r.ev[0] == "a");
+        CHECK(ap(seq.play_head_s, 3.0f));
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -357,6 +408,7 @@ int main() {
     test_speed();
     test_camera_track();
     test_callbacks_and_order();
+    test_nonfinite_dt();
 
     if (g_fail == 0) {
         cardinal::log::infof("cinetest", "OK  %d checks passed", g_checks);
