@@ -229,6 +229,19 @@ public:
         // its contents. Title-bar-only move is also the expected
         // pro-editor behaviour (UE / Unity / Blender all do this).
         io.ConfigWindowsMoveFromTitleBarOnly = true;
+        // ...but ConfigWindowsMoveFromTitleBarOnly alone is NOT enough
+        // with docking. ImGui's cancel-move gate (imgui.cpp 1.91.9
+        // UpdateMouseMovingWindowEndFrame) only fires for a root window
+        // when `!(Flags & NoTitleBar) || DockIsActive`. A panel dragged
+        // out so it is the sole window in a floating node has its host
+        // node hidden (HostWindowHiddenBecauseSingleWindow): the root
+        // window then has NoTitleBar set AND DockIsActive == false, so
+        // the gate is skipped and a body click drags the whole node /
+        // OS window. ConfigDockingAlwaysTabBar keeps every floating /
+        // detached node's tab+title bar (DockIsActive stays true so the
+        // `|| DockIsActive` branch fires) — this closes the bypass for
+        // EVERY panel in one place, not per-window.
+        io.ConfigDockingAlwaysTabBar = true;
         // Master window system: any panel can be dragged outside the main
         // window and become its own OS-native window. ImGui_ImplWin32 spawns
         // those secondary windows; the renderer backend creates a per-window
@@ -1032,25 +1045,18 @@ public:
         }
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        // NoMove is mandatory, not optional. When this panel is the SOLE
-        // window in its dock node — exactly the case when it is dragged
-        // out into its own OS window under multi-viewport — ImGui hides
-        // the node's title bar and draws the panel filling the whole
-        // window. ConfigWindowsMoveFromTitleBarOnly is gated by
-        // `!(flags & NoTitleBar)` (imgui.cpp), so for a no-title-bar solo
-        // node that restriction is BYPASSED and a click anywhere in the
-        // body calls DockNodeStartMouseMovingWindow → the entire OS
-        // window drags when the user only meant to interact with the
-        // viewport. NoMove suppresses that body-drag move; tab-drag
-        // docking/undock (driven by the tab bar, not this flag) and the
-        // ImGui::Image hit-testing for marquee/gizmo/place are unaffected,
-        // and the window still moves via its real OS title bar/caption
-        // (ConfigViewportsNoDecoration=false).
+        // The body-drag-moves-the-window bug is now fixed GLOBALLY at the
+        // IO layer (ConfigWindowsMoveFromTitleBarOnly + the
+        // ConfigDockingAlwaysTabBar bypass-closer in init). The viewport
+        // panel therefore needs NO per-window NoMove — and must not have
+        // one, or it would be the only panel the user can't reposition by
+        // its title bar/tab, contradicting "move from the top". NoMove
+        // stays only while maximized (the panel is pinned to the host
+        // work area then and must not be dragged or undocked).
         const ImGuiWindowFlags wflags =
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-            ImGuiWindowFlags_NoMove |
             ((maximized_inout != nullptr && *maximized_inout)
-                ? (ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDocking)
+                ? (ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDocking)
                 : 0);
         if (!ImGui::Begin(title ? title : "Viewport", p_open, wflags)) {
             ImGui::End(); ImGui::PopStyleVar(); return;
