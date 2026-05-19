@@ -128,6 +128,46 @@ indices, oversized stores) and asserts a clean bounded result — no
 crash, OOB read, or over-allocation — under the standing `/W4 /WX` +
 56/56 gate.
 
+## Integration coverage & headless-testability boundary
+
+A third invariant, established by the same per-pass discipline (one
+cross-module seam per pass: build-clean, full-regression-green, a
+deterministic headless suite, committed+pushed). The asset lifecycle —
+the longest cross-module path in the engine — is now pinned end to end:
+
+| Seam (cross-module) | Suite | Commit |
+|---|---|---|
+| codec → cook::CookedAsset → pack::Builder → asset::Registry | `asset_pipeline` | `0ae029a` |
+| on-disk OBJ → importer → MeshCooker → pack → Registry | `content_pipeline` | `3fafcb0` |
+| `cook::cook_all` driver + hash manifest (skip/recook/force) | `cook_incremental` | `9ff607f` |
+| cook_all → `pack::distribute` → Archive / cooked-dir → Registry (dev==shipping) | `shipping_pipeline` | `93a1cd6` |
+| `pack::Archive::load_async` ↔ `async` ↔ `JobSystem` (256 concurrent) | `pack_streaming` | `6253bc2` |
+
+Other deterministic/headless integration seams were surveyed and found
+**already covered** by their existing suites — pinning them again would
+be box-ticking, not coverage: world save/load round-trip
+(`serial_world`), sky save/load (`serial`), undo/redo composite +
+capacity↔cursor↔redo-truncation (`undo`), `LevelManager`↔`World` +
+HLOD (`level`), `Game::tick`↔`SimWorld`↔deferred begin_play/sweep
+(`game`), the fixed-step accumulator (`sim`), physics determinism
+(`physics`), grid/polygon pathfinding pipelines (`nav`, `navmesh`),
+and the bytecode VM incl. its verifier/trap boundary (`vm`).
+
+> **Headless-testability boundary.** Several remaining seams are
+> *correctly deferred*, not gaps: there is **no null/headless
+> `rhi::Device` backend**, and `scene::Mesh` can only be constructed
+> through factories that take an `rhi::Device&` (and it owns a GPU
+> `rhi::Buffer`). So `serial::save_scene`/`load_scene`,
+> `scene_graph` `entity_world_aabb`/`pick_entity`, and any
+> render-data round-trip are not deterministically headless-testable
+> today. The `serial`/`scene_graph` suites name this deferral by
+> design. The single highest-leverage unlock is a minimal **null RHI
+> backend** (no-op buffers, CPU-side data) — it would make the scene
+> serialization round-trip and render-data seams headless-pinnable;
+> until it exists, autonomous effort pivots to targeted pure-CPU
+> latent-bug review (the pattern that fixed the `mass` typeid-hash
+> truncation and `audio::play_2d`), not redundant integration suites.
+
 ## Note on history
 
 An interim commit (`b2d53bb`) prematurely declared "Phase 1 COMPLETE"
