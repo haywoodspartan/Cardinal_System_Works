@@ -158,6 +158,8 @@ long resolve_idx(long idx, cardinal::size_t count) {
 struct MeshBuilder {
     ImportMesh mesh;
     cardinal::unordered_map<u64, u32> dedup;
+    bool any_normal{false};
+    bool any_uv{false};
 
     u32 emit(const FaceRef& fr,
              const cardinal::vector<Vec3>& P, const cardinal::vector<Vec3>& N,
@@ -173,16 +175,35 @@ struct MeshBuilder {
         const u32 out = static_cast<u32>(mesh.positions.size());
         mesh.positions.push_back(
             (vi >= 0 && vi < static_cast<long>(P.size())) ? P[vi] : Vec3{});
-        if (ni >= 0 && ni < static_cast<long>(N.size()))
-            mesh.normals.push_back(N[ni]);
+        // normals/uvs MUST stay strictly parallel to positions — one slot
+        // per emitted vertex. The old per-vertex CONDITIONAL push desynced
+        // the SoA: an OBJ that mixes `v//vn` and bare-`v` face-vertices (or
+        // mixed `v/vt`) left normals[i] pointing at a DIFFERENT vertex than
+        // positions[i], and the array shorter than positions, silently
+        // corrupting every normal/uv after the first gap. Default-fill the
+        // gap here; finalize() drops the whole array if the mesh carried no
+        // real normal/uv at all (keeps the documented "empty ⇒ flat-shade /
+        // no UVs" contract).
+        const bool n_ok = (ni >= 0 && ni < static_cast<long>(N.size()));
+        mesh.normals.push_back(n_ok ? N[ni] : Vec3{0, 1, 0});
+        any_normal = any_normal || n_ok;
         if (!C.empty())
             mesh.colors.push_back(
                 (vi >= 0 && vi < static_cast<long>(C.size()))
                     ? C[vi] : Vec3{1, 1, 1});
-        if (ti >= 0 && ti < static_cast<long>(T.size()))
-            mesh.uvs.push_back(T[ti]);
+        const bool t_ok = (ti >= 0 && ti < static_cast<long>(T.size()));
+        mesh.uvs.push_back(t_ok ? T[ti] : Vec2{0.0f, 0.0f});
+        any_uv = any_uv || t_ok;
         dedup.emplace(key, out);
         return out;
+    }
+
+    // Restore the "empty ⇒ absent" contract: if NO face-vertex carried a
+    // real normal / uv, drop the all-default parallel array so downstream
+    // still flat-shades / treats UVs as none.
+    void finalize() {
+        if (!any_normal) mesh.normals.clear();
+        if (!any_uv)     mesh.uvs.clear();
     }
 };
 
@@ -206,6 +227,7 @@ ImportScene import_obj(const cardinal::string& path, cardinal::string* error) {
 
     cardinal::unordered_map<cardinal::string, int> mtl_by_name;
     auto flush = [&](MeshBuilder& mb) {
+        mb.finalize();
         if (!mb.mesh.positions.empty() && !mb.mesh.indices.empty())
             scene.meshes.push_back(cardinal::move(mb.mesh));
         mb = MeshBuilder{};

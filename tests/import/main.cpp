@@ -148,6 +148,56 @@ void test_obj_negative(const std::filesystem::path& dir) {
     }
 }
 
+// ---- OBJ: mixed per-vertex normal/uv presence stays parallel --------
+// Regression: MeshBuilder pushed positions every emit but normals/uvs
+// only when THAT face-vertex carried a vn/vt. A face mixing `v//vn`,
+// `v/vt` and bare `v` thus desynced the SoA — normals[i] no longer
+// matched positions[i] and the array was short — silently corrupting
+// every normal/uv after the first gap. Contract: normals/uvs are
+// either empty (no attribute anywhere) or exactly parallel to
+// positions, gaps default-filled (+Y normal / (0,0) uv).
+void test_obj_mixed_normals(const std::filesystem::path& dir) {
+    const auto p = dir / "mixed.obj";
+    write_file(p,
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+        "vn 1 0 0\nvn 0 0 1\n"
+        "vt 0.25 0.75\n"
+        "f 1//1 2/1 3//2\n");          // fv0: vn only, fv1: vt only, fv2: vn only
+
+    imp::ImportScene s = imp::import_obj(str_of(p));
+    CHECK(s.ok);
+    CHECK(s.meshes.size() == sz(1));
+    if (!s.meshes.empty()) {
+        const imp::ImportMesh& m = s.meshes[0];
+        CHECK(m.positions.size() == sz(3));
+        CHECK(m.indices.size()   == sz(3));
+        // The core invariant: parallel to positions, not short/scrambled.
+        CHECK(m.normals.size() == m.positions.size());
+        CHECK(m.uvs.size()     == m.positions.size());
+        if (m.normals.size() == sz(3)) {
+            CHECK(approx(m.normals[0].x, 1.0f, 1e-6f) &&   // fv0 → vn 1 (+X)
+                  approx(m.normals[0].y, 0.0f, 1e-6f) &&
+                  approx(m.normals[0].z, 0.0f, 1e-6f));
+            CHECK(approx(m.normals[1].x, 0.0f, 1e-6f) &&   // fv1 gap → +Y dflt
+                  approx(m.normals[1].y, 1.0f, 1e-6f) &&
+                  approx(m.normals[1].z, 0.0f, 1e-6f));
+            CHECK(approx(m.normals[2].x, 0.0f, 1e-6f) &&   // fv2 → vn 2 (+Z)
+                  approx(m.normals[2].y, 0.0f, 1e-6f) &&
+                  approx(m.normals[2].z, 1.0f, 1e-6f));
+        }
+        if (m.uvs.size() == sz(3)) {
+            CHECK(approx(m.uvs[0].u, 0.0f, 1e-6f) &&        // fv0 gap → (0,0)
+                  approx(m.uvs[0].v, 0.0f, 1e-6f));
+            CHECK(approx(m.uvs[1].u, 0.25f, 1e-6f) &&       // fv1 → vt 1
+                  approx(m.uvs[1].v, 0.75f, 1e-6f));
+            CHECK(approx(m.uvs[2].u, 0.0f, 1e-6f) &&        // fv2 gap → (0,0)
+                  approx(m.uvs[2].v, 0.0f, 1e-6f));
+        }
+    }
+    CHECK(s.total_vertices()  == 3u);
+    CHECK(s.total_triangles() == 1u);
+}
+
 // ---- OBJ + MTL: metallic-roughness PBR binding ----------------------
 void test_obj_mtl(const std::filesystem::path& dir) {
     write_file(dir / "mat.mtl",
@@ -380,6 +430,7 @@ int main() {
     test_obj_triangle(dir);
     test_obj_quad(dir);
     test_obj_negative(dir);
+    test_obj_mixed_normals(dir);
     test_obj_mtl(dir);
     test_obj_vertex_color(dir);
     test_gltf_triangle(dir);
