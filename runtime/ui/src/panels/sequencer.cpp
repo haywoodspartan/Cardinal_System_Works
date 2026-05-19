@@ -77,7 +77,7 @@ void draw_track_row(cardinal::cine::Sequence& s, usize ti,
 
 void draw(cardinal::cine::Player* player, const char* title, bool* p_open) {
     if (!ImGui::Begin(title ? title : "Sequencer", p_open,
-                      ImGuiWindowFlags_NoScrollbar))
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove))
     { ImGui::End(); return; }
 
     if (player == nullptr || player->sequence() == nullptr) {
