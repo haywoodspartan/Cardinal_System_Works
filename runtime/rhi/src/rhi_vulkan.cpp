@@ -1034,7 +1034,14 @@ ShaderBlob VulkanDevice::compile_shader(
         L"-fspv-target-env=vulkan1.3",   // emit Vulkan 1.3 SPIR-V
         L"-HV", L"2021",                 // HLSL 2021
         L"-O3",                          // optimize
-        L"-Zpr",                         // row-major matrices
+        // Matrix packing MUST match the D3D12 backend: the renderer
+        // pushes the SAME scene::Mat4 bytes to both, and the shared
+        // HLSL does mul(pc.mvp, pos). D3D12 compiles with DXC's default
+        // (column-major); the old -Zpr (row-major) here transposed
+        // every transform on Vulkan only, so placed geometry projected
+        // to garbage clip space and never rendered as 3D. Pin
+        // column-major explicitly so the two backends can't diverge.
+        L"-Zpc",                         // column-major (match D3D12)
     };
     if (caps_.shader_float16 && settings_.prefer_fp16) {
         args.push_back(L"-enable-16bit-types");
