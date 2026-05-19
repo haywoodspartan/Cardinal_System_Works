@@ -66,6 +66,10 @@ inline constexpr u32 kMagic       = 0x314D5643u;   // "CVM1"
 inline constexpr u32 kVersion     = 1u;
 inline constexpr u32 kPageSize    = 65536u;        // 64 KiB linear-memory page
 inline constexpr u32 kMaxFuncs    = 4096u;
+// Hard per-function bytecode cap. Far larger than any real function, yet
+// ~256x below 2^32 so every N-based offset computation in the verifier
+// (ip + 1 + imm, N + 1, jump targets) is provably free of u32 overflow.
+inline constexpr u32 kMaxCodeLen  = 16u * 1024u * 1024u;   // 16 MiB
 
 // ---- Opcodes --------------------------------------------------------------
 enum class Op : u8 {

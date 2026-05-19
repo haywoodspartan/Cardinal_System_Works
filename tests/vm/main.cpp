@@ -508,6 +508,27 @@ void test_verifier_rejects() {
         Limits lim; lim.max_mem_pages = 4;
         CHECK(vm::load(b.data(), b.size(), lim, &err) == nullptr);
     }
+    {   // code_len over kMaxCodeLen — rejected at the descriptor scan,
+        // before any N-sized allocation. Closes the verifier u32-overflow
+        // class (ip+1+imm and the vector(N+1) height map can't wrap once
+        // N is bounded). code_len is at byte offset 28 (hdr 20 + the
+        // num_params/num_locals descriptor words).
+        auto patch_clen = [&](u32 v) {
+            std::vector<u8> b = base;
+            for (usize i = 0; i < 4u; ++i)
+                b[28u + i] = static_cast<u8>(
+                    (v >> (8u * static_cast<u32>(i))) & 0xFFu);
+            return b;
+        };
+        CHECK(!loads_ok(patch_clen(vm::kMaxCodeLen + 1u)));
+        CHECK(!loads_ok(patch_clen(0xFFFFFFFFu)));
+        // Exactly at the cap passes the cap check (then fails the
+        // exact-size check) — proves the bound is inclusive.
+        std::string e;
+        std::vector<u8> at = patch_clen(vm::kMaxCodeLen);
+        CHECK(vm::load(at.data(), at.size(), Limits{}, &e) == nullptr);
+        CHECK(e == "size mismatch");
+    }
 }
 
 // ---- trap_name table ----------------------------------------------------

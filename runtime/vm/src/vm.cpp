@@ -293,6 +293,10 @@ ModulePtr load(const u8* bytes, usize len,
         if (f.num_locals < f.num_params) return bad("num_locals < num_params");
         if (f.num_locals > 65535u)       return bad("too many locals");
         if (f.code_len == 0u)            return bad("empty function");
+        // Unbounded code_len would let `ip + 1 + imm > N` and the
+        // `vector(N + 1)` height map wrap u32 in the verifier. Cap it at
+        // the source, like nfunc / num_locals above.
+        if (f.code_len > kMaxCodeLen)    return bad("function code too large");
         body += static_cast<usize>(name_len) + f.code_len;
         // stash name_len temporarily in code_off (re-used below)
         f.code_off = name_len;
