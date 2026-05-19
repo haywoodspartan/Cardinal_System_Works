@@ -1,0 +1,77 @@
+# Cardinal — line-ending + binary policy.
+#
+# This is a greenfield Win+Linux engine. Without this file, a Windows
+# checkout with core.autocrlf=true rewrites LF→CRLF in the working tree
+# (the "LF will be replaced by CRLF" warning on every commit) and risks
+# CRLF entering the repo, which breaks the Linux build / produces noisy
+# whitespace diffs. Pin the repo to canonical LF and a deterministic
+# LF working tree on every platform regardless of the local
+# core.autocrlf setting. MSVC + clang both accept LF, so this is safe.
+#
+# NOTE: existing blobs are already LF, so this changes nothing now (no
+# `git add --renormalize` is performed) — it only makes future checkouts
+# / commits deterministic and silences the warning.
+
+# Default: auto-detect text, store LF, check out LF everywhere.
+* text=auto eol=lf
+
+# Source / text — explicit (belt-and-suspenders over text=auto).
+*.cpp   text eol=lf
+*.hpp   text eol=lf
+*.h     text eol=lf
+*.c     text eol=lf
+*.inl   text eol=lf
+*.hlsl  text eol=lf
+*.hlsli text eol=lf
+*.glsl  text eol=lf
+*.comp  text eol=lf
+*.cmake text eol=lf
+*.txt   text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.toml  text eol=lf
+*.ini   text eol=lf
+*.cardinalproj  text eol=lf
+*.cardinalworld text eol=lf
+.gitattributes  text eol=lf
+.gitignore      text eol=lf
+
+# Windows shell scripts MUST stay CRLF — cmd.exe mis-parses some LF
+# .bat/.cmd (labels/goto). build.bat is build-critical; pin it.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+*.sh    text eol=lf
+
+# Binary — never line-ending-convert or text-diff these.
+*.dll   binary
+*.exe   binary
+*.lib   binary
+*.pdb   binary
+*.exp   binary
+*.obj   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.bmp   binary
+*.tga   binary
+*.dds   binary
+*.ktx   binary
+*.ico   binary
+*.ttf   binary
+*.otf   binary
+*.wav   binary
+*.ogg   binary
+*.flac  binary
+*.mp3   binary
+*.glb   binary
+*.gltf-bin binary
+*.fbx   binary
+*.obj-bin  binary
+*.spv   binary
+*.bin   binary
+*.pak   binary
+*.cpk   binary
+*.zip   binary
+*.7z    binary
+*.gz    binary
