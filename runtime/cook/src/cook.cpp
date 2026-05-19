@@ -85,7 +85,10 @@ bool CookedAsset::deserialize(const cardinal::vector<u8>& bytes, CookedAsset& ou
     out.type           = static_cast<AssetType>(rd_u32(4));
     const u32 size     = rd_u32(8);
     out.cooker_version = rd_u32(12);
-    if (kCookHeaderBytes + size > bytes.size()) return false;
+    // `size` is attacker-controlled; `kCookHeaderBytes + size` in u32
+    // wraps for size near UINT32_MAX, slips past this guard, and the
+    // payload.assign below walks far out of bounds. 64-bit arithmetic.
+    if (static_cast<usize>(kCookHeaderBytes) + size > bytes.size()) return false;
     out.payload.assign(bytes.begin() + kCookHeaderBytes,
                        bytes.begin() + kCookHeaderBytes + size);
     return true;

@@ -227,6 +227,28 @@ int main() {
         write_raw(badmagic, std::vector<u8>(40, 0xEE));
         CHECK(pk::Archive::open(badmagic, &err) == nullptr);
         CHECK(!err.empty());
+
+        // Untrusted entry_count must not drive an unbounded reserve.
+        // Patch a valid archive's header entry_count (offset 8, u32 LE)
+        // to 0xFFFFFFFF: pre-fix this requested a multi-GB reserve and
+        // OOM-terminated the process; the index loop still stops at EOF,
+        // so the archive must open cleanly with its real 4 entries.
+        {
+            std::ifstream in(cpk, std::ios::binary | std::ios::ate);
+            const std::streamsize n = in.tellg();
+            in.seekg(0);
+            std::vector<u8> raw(static_cast<cardinal::usize>(n));
+            in.read(reinterpret_cast<char*>(raw.data()), n);
+            in.close();
+            CHECK(raw.size() > 12u);
+            raw[8]=0xFFu; raw[9]=0xFFu; raw[10]=0xFFu; raw[11]=0xFFu;
+            const auto huge = (dir / "huge_count.cpk").string();
+            write_raw(huge, raw);
+            cardinal::string herr;
+            auto ha = pk::Archive::open(huge, &herr);
+            CHECK(ha != nullptr);                       // no OOM / crash
+            if (ha) CHECK(ha->entry_count() == 4u);     // EOF-bounded loop
+        }
     }
 
     std::error_code rec;

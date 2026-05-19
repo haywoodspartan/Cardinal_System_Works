@@ -114,6 +114,14 @@ void test_codec() {
     CHECK(!CookedAsset::deserialize(bad, junk));
     std::vector<u8> trunc = s; trunc.resize(16 + 2);                 // size>actual
     CHECK(!CookedAsset::deserialize(trunc, junk));
+    // Integer-overflow guard: `size` (offset 8) is attacker-controlled.
+    // A value near UINT32_MAX used to wrap `kCookHeaderBytes + size`
+    // (u32) past the bound check and walk payload.assign far OOB.
+    std::vector<u8> ovf = s; ovf.resize(16);                         // header only
+    ovf[8]=0xF0; ovf[9]=0xFF; ovf[10]=0xFF; ovf[11]=0xFF;            // size=0xFFFFFFF0
+    CHECK(!CookedAsset::deserialize(ovf, junk));
+    ovf[8]=0xFF;                                                     // size=0xFFFFFFFF
+    CHECK(!CookedAsset::deserialize(ovf, junk));
 }
 
 // ---- type lookups ---------------------------------------------------

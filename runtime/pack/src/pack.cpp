@@ -216,7 +216,16 @@ cardinal::shared_ptr<Archive> Archive::open(const cardinal::string& path,
 
     // Read index.
     cardinal::fseek(f, static_cast<long>(index_offset), SEEK_SET);
-    a->entries_.reserve(entry_count);
+    // entry_count is untrusted: a corrupt header could request a
+    // multi-GB reserve and OOM the process. Each on-disk entry is at
+    // least 30 bytes (2 key-length + 28 fixed tail; the key may be
+    // empty), so the bytes after index_offset can hold no more than
+    // (sz - index_offset) / 30. The loop below still reads the real
+    // count and stops at EOF — this only caps the pre-allocation.
+    // (index_offset < sz is guaranteed above, so no underflow.)
+    const u64 max_possible = (sz - index_offset) / 30u;
+    a->entries_.reserve(static_cast<usize>(
+        entry_count < max_possible ? entry_count : max_possible));
     for (u32 i = 0; i < entry_count; ++i) {
         u8 kl_buf[2];
         if (cardinal::fread(kl_buf, 1, 2, f) != 2) break;
