@@ -125,6 +125,69 @@ void test_freefall() {
     CHECK(ap(p.x, 0.0f, 1e-5f) && ap(p.z, 0.0f, 1e-5f));   // no lateral drift
 }
 
+// ---- non-finite wall_dt must not permanently freeze the world -------
+// Regression: step()'s guards are `wall_dt <= 0` and `wall_dt > 0.25`;
+// both are FALSE for NaN (unordered), so a NaN wall_dt slipped through
+// to `accumulator_ += wall_dt`, poisoning it forever (NaN + x = NaN ⇒
+// `accumulator_ >= fixed_dt_` is then always false ⇒ no substep EVER
+// again ⇒ every body frozen permanently). NaN/Inf via volatile launder
+// (FOUNDATION: no <cmath>/<limits>).
+void test_nonfinite_step() {
+    auto nanf = []{ volatile float z = 0.0f; return z / z; };    // 0/0 → NaN
+    auto inff = []{ volatile float z = 0.0f; return 1.0f / z; };  // 1/0 → +Inf
+
+    // (a) NaN dt is a no-op AND must not poison the accumulator: a body
+    //     must still free-fall correctly on the next valid steps.
+    {
+        auto w = ph::World::create();
+        if (!w) { CHECK(false); return; }
+        const float g = -10.0f, dt = 0.01f, y0 = 100.0f;
+        w->set_gravity(Vec3{0.0f, g, 0.0f});
+        w->set_fixed_timestep(dt);
+        const ph::BodyHandle h = w->create_body(
+            dyn_sphere(Vec3{0.0f, y0, 0.0f}, 0.5f, 0.0f));
+        w->step(nanf());                                   // poison attempt
+        CHECK(ap(w->position(h).y, y0, 1e-6f));            // no substep ran
+        CHECK(ap(w->velocity(h).y, 0.0f, 1e-6f));
+        const int N = 60;
+        for (int i = 0; i < N; ++i) w->step(dt);           // must still step
+        const float sum   = static_cast<float>(N * (N + 1) / 2);
+        const float exp_y = y0 + g * dt * dt * sum;
+        const float exp_v = static_cast<float>(N) * g * dt;
+        CHECK(ap(w->position(h).y, exp_y, 5e-3f));         // PRE-FIX: stuck at y0
+        CHECK(ap(w->velocity(h).y, exp_v, 2e-3f));
+    }
+    // (b) A NaN dt MID-simulation must not freeze an already-running world.
+    {
+        auto w = ph::World::create();
+        if (!w) { CHECK(false); return; }
+        const float dt = 0.01f;
+        w->set_gravity(Vec3{0.0f, -10.0f, 0.0f});
+        w->set_fixed_timestep(dt);
+        const ph::BodyHandle h = w->create_body(
+            dyn_sphere(Vec3{0.0f, 100.0f, 0.0f}, 0.5f, 0.0f));
+        for (int i = 0; i < 30; ++i) w->step(dt);
+        const float y_mid = w->position(h).y;
+        CHECK(y_mid < 100.0f);                              // it was falling
+        w->step(nanf());                                    // mid-sim NaN
+        for (int i = 0; i < 30; ++i) w->step(dt);
+        CHECK(w->position(h).y < y_mid - 1.0f);             // kept falling
+    }
+    // (c) +Inf dt is still clamped to 0.25 (existing behaviour preserved,
+    //     the fix must not regress it) → the world advances.
+    {
+        auto w = ph::World::create();
+        if (!w) { CHECK(false); return; }
+        const float dt = 0.01f;
+        w->set_gravity(Vec3{0.0f, -10.0f, 0.0f});
+        w->set_fixed_timestep(dt);
+        const ph::BodyHandle h = w->create_body(
+            dyn_sphere(Vec3{0.0f, 100.0f, 0.0f}, 0.5f, 0.0f));
+        w->step(inff());                                    // clamp → steps
+        CHECK(w->position(h).y < 100.0f);
+    }
+}
+
 // ---- mutators + integration gating ----------------------------------
 void test_mutators() {
     auto w = ph::World::create();
@@ -348,6 +411,7 @@ void test_default_layer_contract() {
 int main() {
     test_determinism();
     test_freefall();
+    test_nonfinite_step();
     test_mutators();
     test_collision();
     test_raycast();

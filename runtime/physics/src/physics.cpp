@@ -751,6 +751,14 @@ public:
         wall_dt *= time_scale_;
         if (wall_dt <= 0.0f) return;
         if (wall_dt > 0.25f) wall_dt = 0.25f;
+        // A NaN wall_dt (frame-time spike, debugger pause, Inf*0 when
+        // time_scale_==0, or a NaN time_scale_) defeats EVERY guard above —
+        // `NaN <= 0` and `NaN > 0.25` are both false — and would poison
+        // accumulator_ forever (NaN + x = NaN, so `accumulator_ >= fixed_dt_`
+        // is then always false → the world never substeps again and every
+        // body freezes permanently). After the 0.25 clamp a finite/+Inf dt is
+        // already a finite value in (0, 0.25]; reject only the NaN residue.
+        if (!cardinal::isfinite(wall_dt)) return;
         accumulator_ += wall_dt;
         u32 sub = 0;
         while (accumulator_ >= fixed_dt_ && sub < kMaxSubsteps_) {
