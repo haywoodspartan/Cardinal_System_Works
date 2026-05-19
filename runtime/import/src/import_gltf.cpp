@@ -482,9 +482,29 @@ ImportScene import_gltf(const cardinal::string& path, cardinal::string* error) {
                 }
                 if (const JVal* idx = pr.find("indices")) {
                     auto v = read_accessor(g, idx->inum(-1), nc);
+                    const u32 vcount = static_cast<u32>(im.positions.size());
+                    // Indices are untrusted. Reject NaN / negative / >=2^32
+                    // (the latter is also static_cast<u32>(float) UB) and
+                    // anything past the vertex array, keeping only whole
+                    // in-range triangles so no downstream positions[idx]
+                    // reads OOB — the importer is the cooker/renderer
+                    // trust boundary.
+                    auto ridx = [vcount](float f) -> long {
+                        if (!(f >= 0.0f) || f >= 4.294967296e9f) return -1;
+                        const u32 u = static_cast<u32>(f + 0.5f);
+                        return (u < vcount) ? static_cast<long>(u) : -1;
+                    };
                     im.indices.reserve(v.size());
-                    for (float f : v)
-                        im.indices.push_back(static_cast<u32>(f + 0.5f));
+                    for (cardinal::size_t t = 0; t + 2 < v.size(); t += 3) {
+                        const long a = ridx(v[t]);
+                        const long b = ridx(v[t + 1]);
+                        const long c = ridx(v[t + 2]);
+                        if (a >= 0 && b >= 0 && c >= 0) {
+                            im.indices.push_back(static_cast<u32>(a));
+                            im.indices.push_back(static_cast<u32>(b));
+                            im.indices.push_back(static_cast<u32>(c));
+                        }
+                    }
                 } else {
                     for (u32 i = 0; i < im.positions.size(); ++i)
                         im.indices.push_back(i);

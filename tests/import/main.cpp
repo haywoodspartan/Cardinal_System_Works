@@ -322,6 +322,45 @@ void test_failures(const std::filesystem::path& dir) {
             CHECK(hs.total_vertices() == 0u);                        // bounded
         }
     }
+
+    // Out-of-range glTF indices must not let downstream positions[idx]
+    // read OOB: the corrupt triangle is dropped, the valid one kept, and
+    // no emitted index ever exceeds the vertex count.
+    {
+        const float pos[9] = { 0,0,0, 1,0,0, 0,1,0 };
+        const unsigned short idx[6] = { 0,1,2,  0,1,99 };   // 2nd tri bogus
+        std::vector<unsigned char> bb(sizeof(pos) + sizeof(idx));
+        std::memcpy(bb.data(), pos, sizeof(pos));
+        std::memcpy(bb.data() + sizeof(pos), idx, sizeof(idx));
+        const cardinal::string uri =
+            "data:application/octet-stream;base64," + b64(bb);
+        const cardinal::string json = cardinal::string(
+            "{\"asset\":{\"version\":\"2.0\"},"
+            "\"buffers\":[{\"byteLength\":48,\"uri\":\"") + uri + "\"}],"
+            "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+            "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],"
+            "\"accessors\":[{\"bufferView\":0,\"byteOffset\":0,"
+            "\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+            "{\"bufferView\":1,\"byteOffset\":0,\"componentType\":5123,"
+            "\"count\":6,\"type\":\"SCALAR\"}],"
+            "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},"
+            "\"indices\":1}]}],"
+            "\"nodes\":[{\"mesh\":0}],"
+            "\"scenes\":[{\"nodes\":[0]}],\"scene\":0}";
+        const auto gp = dir / "oob_idx.gltf";
+        write_file(gp, json);
+        cardinal::string ge;
+        imp::ImportScene hs = imp::import_file(str_of(gp), &ge);  // must return
+        bool all_in_range = true;
+        for (const auto& m : hs.meshes) {
+            CHECK(m.indices.size() % 3u == 0u);
+            const cardinal::usize vc = m.positions.size();
+            for (auto ix : m.indices)
+                if (static_cast<cardinal::usize>(ix) >= vc) all_in_range = false;
+        }
+        CHECK(all_in_range);                  // never OOB downstream
+        CHECK(hs.total_triangles() == 1u);    // bogus tri dropped, good kept
+    }
 }
 
 }  // namespace
