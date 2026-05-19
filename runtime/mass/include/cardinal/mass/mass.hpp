@@ -55,9 +55,15 @@ public:
     // ----- Component registration -----------------------------------
     template <class T>
     u32 register_component(const cardinal::string& name) {
+        // NOTE: pass the FULL 64-bit hash. add<T>/get<T> look it up via
+        // bit_for_type_(typeid(T).hash_code()) un-truncated; an earlier
+        // static_cast<u32> here keyed type_to_bit with a truncated hash,
+        // so on any platform whose hash_code() has high bits set (MSVC)
+        // every typed add<T>/get<T> silently missed and returned
+        // false/nullptr. type_hash is u64 end-to-end.
         return register_component_internal_(
             name, static_cast<u32>(sizeof(T)), static_cast<u32>(alignof(T)),
-            static_cast<u32>(typeid(T).hash_code()));
+            typeid(T).hash_code());
     }
     u32 component_count() const noexcept;
     const ComponentDesc* describe_component(u32 bit) const noexcept;
