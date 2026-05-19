@@ -1409,9 +1409,27 @@ bool VulkanPipeline::initialize(const PipelineDesc& desc) {
     VkPushConstantRange pc_range{};
     if (push_constant_size_ > 0) {
         // Visible to both stages so the renderer can put MVP in VS and
-        // per-draw scalars in FS without two separate ranges. Vulkan's
-        // 128-byte minimum guarantee covers our common shape (1 Mat4
-        // + a few scalars) — we don't bother capping internally.
+        // per-draw scalars in FS without two separate ranges.
+        //
+        // Vulkan only *guarantees* maxPushConstantsSize >= 128 B; real
+        // devices vary (commonly 128 or 256). The scene block is 240 B,
+        // so on a 128-byte device vkCreatePipelineLayout would fail
+        // opaquely and no scene PSO would come up — the exact twin of
+        // the D3D12 root-signature overflow. Fail loudly + cleanly with
+        // an actionable message instead (the higher layers already
+        // degrade gracefully on a null pipeline). The portable fix —
+        // demote large blocks to a per-frame UBO, mirroring the D3D12
+        // backend's root-CBV fallback — is the follow-up; the common
+        // NVIDIA/AMD desktop limit of 256 B covers the 240 B block.
+        VkPhysicalDeviceProperties pdp{};
+        vkGetPhysicalDeviceProperties(dev_.vk_physical(), &pdp);
+        if (push_constant_size_ > pdp.limits.maxPushConstantsSize) {
+            cardinal::log::errorf("rhi/vk",
+                "push constant block %u B exceeds device maxPushConstantsSize "
+                "%u B — pipeline not created (needs a UBO fallback)",
+                push_constant_size_, pdp.limits.maxPushConstantsSize);
+            return false;
+        }
         pc_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT
                             | VK_SHADER_STAGE_FRAGMENT_BIT;
         pc_range.offset     = 0;
