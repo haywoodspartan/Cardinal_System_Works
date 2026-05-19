@@ -209,6 +209,14 @@ inline u32 quantise_to_packed(Spec s, float x) noexcept {
 
     auto round_rne = [&](u32 m, int sh) -> u32 {
         if (sh <= 0) return m;
+        // The subnormal path feeds sh = shift + extra, which can reach
+        // ~45. A shift count >= the operand width is undefined behaviour
+        // on a u32. `m` here is a reconstructed fp32 mantissa (< 2^24),
+        // so any sh >= 32 shifts every bit — including the round bit at
+        // position sh-1 (>= 31, where m is 0) — out: the result is
+        // exactly 0 with no round-up. Guard makes that explicit + UB-free
+        // (sh in [25,31] is already <32, defined, and also yields 0).
+        if (sh >= 32) return 0u;
         const u32 round_bit = (m >> (sh - 1)) & 1u;
         const u32 sticky    = (sh >= 2) ? (m & ((1u << (sh - 1)) - 1u)) : 0u;
         u32 result = m >> sh;
