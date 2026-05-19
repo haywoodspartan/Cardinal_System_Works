@@ -27,6 +27,7 @@
 #include <cardinal/core/log.hpp>
 
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -456,11 +457,72 @@ void test_save_load() {
     CHECK(lib.find("__ct rt prof") == nullptr);
 }
 
+// ---- load_from_file: malformed numerics must not throw ------------
+// Regression: cardinal::stof / cardinal::stoul ARE std::stof /
+// std::stoul and THROW (invalid_argument / out_of_range). load_from_file
+// parses a hand-editable text format the user can typo + live-reload; a
+// single bad token used to throw straight out of "load a file" —
+// aborting the whole library load (losing every profile after the bad
+// line) or crashing the editor on a typo'd reload. A malformed value
+// must fall back to the field default and parsing must CONTINUE, like
+// the parser already silently ignores unknown keys.
+void test_load_malformed() {
+    namespace fs = std::filesystem;
+    auto& lib = sc::TerrainProfileLibrary::instance();
+
+    fs::path tmp = fs::temp_directory_path() /
+                   "cardinal_terrain_malformed.profiles";
+    if (fs::exists(tmp)) fs::remove(tmp);
+    {
+        std::ofstream o(tmp);
+        o << "profile \"__ct_malformed\"\n"
+             "  base_height 3.0\n"      // valid (before the bad line)
+             "  height_scale abc\n"     // std::stof invalid_argument
+             "  cliff_blend 0.5\n"      // valid (AFTER bad → continuation)
+             "  layer \"L\"\n"
+             "    weight 1e999\n"       // std::stof out_of_range
+             "    frequency xyz\n"      // std::stof invalid_argument
+             "    octaves 5\n"          // valid (atoi, never throws)
+             "    seed nope\n"          // std::stoul invalid_argument
+             "    gain 0.25\n";         // valid (AFTER bad → continuation)
+    }
+
+    const cardinal::usize before = lib.all().size();
+    const bool ok = lib.load_from_file(tmp.string().c_str());  // must NOT throw
+    CHECK(ok);
+    const sc::TerrainProfile* P = lib.find("__ct_malformed");
+    CHECK(P != nullptr);
+    if (P) {
+        CHECK(ap(P->base_height, 3.0f));            // valid, before bad line
+        CHECK(ap(P->height_scale, 8.0f));           // "abc"  → default 8.0
+        CHECK(ap(P->cliff_blend_threshold, 0.5f));  // parsed AFTER bad line
+        CHECK(fin(P->height_scale));
+        CHECK(P->layers.size() == sz(1));
+        if (P->layers.size() == sz(1)) {
+            const auto& L = P->layers[0];
+            CHECK(L.id == "L");
+            CHECK(ap(L.weight, 1.0f));              // "1e999" → default 1.0
+            CHECK(ap(L.frequency, 0.05f));          // "xyz"   → default 0.05
+            CHECK(L.octaves == 5);                  // atoi("5") == 5
+            CHECK(L.seed == 1337u);                 // "nope"  → default 1337
+            CHECK(ap(L.gain, 0.25f));               // parsed AFTER bad seed
+            CHECK(fin(L.frequency) && fin(L.weight));
+        }
+    }
+
+    // Clean up: drop the profile + temp file, library back to baseline.
+    lib.remove("__ct_malformed");
+    if (fs::exists(tmp)) fs::remove(tmp);
+    CHECK(lib.all().size() == before);
+    CHECK(lib.find("__ct_malformed") == nullptr);
+}
+
 }  // namespace
 
 int main() {
     // Library-touching tests first (pristine singleton), then pure math.
     test_save_load();
+    test_load_malformed();
     test_library();
     test_register_idempotent();
     test_finiteness();

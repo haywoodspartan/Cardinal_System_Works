@@ -295,6 +295,22 @@ inline NoiseShape parse_shape(const cardinal::string& s) {
     return NoiseShape::Smooth;
 }
 
+// cardinal::stof / cardinal::stoul ARE std::stof / std::stoul and THROW
+// (std::invalid_argument on a non-numeric token, std::out_of_range on
+// overflow). load_from_file parses a hand-editable text format the user
+// can typo and live-reload, so a malformed value must degrade to the
+// field's default and parsing must continue — exactly like the parser
+// already ignores unknown keys — never propagate an exception out of a
+// "load a file" call (which would abort the whole library load, or crash
+// the editor on a typo'd live-reload).
+inline float parse_f(const cardinal::string& s, float def) noexcept {
+    try { return cardinal::stof(s); } catch (...) { return def; }
+}
+inline u32 parse_u32(const cardinal::string& s, u32 def) noexcept {
+    try { return static_cast<u32>(cardinal::stoul(s)); }
+    catch (...) { return def; }
+}
+
 }  // namespace
 
 bool TerrainProfileLibrary::save_to_file(const char* path) const {
@@ -389,27 +405,27 @@ bool TerrainProfileLibrary::load_from_file(const char* path) {
             if      (k == "enabled"        && tok.size() > 1) curlayer.enabled        = cardinal::atoi(tok[1].c_str()) != 0;
             else if (k == "op"             && tok.size() > 1) curlayer.op             = parse_op(tok[1]);
             else if (k == "shape"          && tok.size() > 1) curlayer.shape          = parse_shape(tok[1]);
-            else if (k == "weight"         && tok.size() > 1) curlayer.weight         = cardinal::stof(tok[1]);
-            else if (k == "frequency"      && tok.size() > 1) curlayer.frequency      = cardinal::stof(tok[1]);
+            else if (k == "weight"         && tok.size() > 1) curlayer.weight         = parse_f(tok[1], curlayer.weight);
+            else if (k == "frequency"      && tok.size() > 1) curlayer.frequency      = parse_f(tok[1], curlayer.frequency);
             else if (k == "octaves"        && tok.size() > 1) curlayer.octaves        = cardinal::atoi(tok[1].c_str());
-            else if (k == "lacunarity"     && tok.size() > 1) curlayer.lacunarity     = cardinal::stof(tok[1]);
-            else if (k == "gain"           && tok.size() > 1) curlayer.gain           = cardinal::stof(tok[1]);
-            else if (k == "seed"           && tok.size() > 1) curlayer.seed           = static_cast<u32>(cardinal::stoul(tok[1]));
-            else if (k == "offset_x"       && tok.size() > 1) curlayer.offset_x       = cardinal::stof(tok[1]);
-            else if (k == "offset_z"       && tok.size() > 1) curlayer.offset_z       = cardinal::stof(tok[1]);
-            else if (k == "warp_amount"    && tok.size() > 1) curlayer.warp_amount    = cardinal::stof(tok[1]);
-            else if (k == "warp_frequency" && tok.size() > 1) curlayer.warp_frequency = cardinal::stof(tok[1]);
+            else if (k == "lacunarity"     && tok.size() > 1) curlayer.lacunarity     = parse_f(tok[1], curlayer.lacunarity);
+            else if (k == "gain"           && tok.size() > 1) curlayer.gain           = parse_f(tok[1], curlayer.gain);
+            else if (k == "seed"           && tok.size() > 1) curlayer.seed           = parse_u32(tok[1], curlayer.seed);
+            else if (k == "offset_x"       && tok.size() > 1) curlayer.offset_x       = parse_f(tok[1], curlayer.offset_x);
+            else if (k == "offset_z"       && tok.size() > 1) curlayer.offset_z       = parse_f(tok[1], curlayer.offset_z);
+            else if (k == "warp_amount"    && tok.size() > 1) curlayer.warp_amount    = parse_f(tok[1], curlayer.warp_amount);
+            else if (k == "warp_frequency" && tok.size() > 1) curlayer.warp_frequency = parse_f(tok[1], curlayer.warp_frequency);
         } else {
             // Profile-scope settings.
             if      (k == "description"      && tok.size() > 1) cur.description           = tok[1];
-            else if (k == "base_height"      && tok.size() > 1) cur.base_height           = cardinal::stof(tok[1]);
-            else if (k == "height_scale"     && tok.size() > 1) cur.height_scale          = cardinal::stof(tok[1]);
-            else if (k == "tint_low"         && tok.size() > 3) cur.tint_low              = { cardinal::stof(tok[1]), cardinal::stof(tok[2]), cardinal::stof(tok[3]) };
-            else if (k == "tint_high"        && tok.size() > 3) cur.tint_high             = { cardinal::stof(tok[1]), cardinal::stof(tok[2]), cardinal::stof(tok[3]) };
-            else if (k == "tint_cliff"       && tok.size() > 3) cur.tint_cliff            = { cardinal::stof(tok[1]), cardinal::stof(tok[2]), cardinal::stof(tok[3]) };
-            else if (k == "tint_height_low"  && tok.size() > 1) cur.tint_height_low       = cardinal::stof(tok[1]);
-            else if (k == "tint_height_high" && tok.size() > 1) cur.tint_height_high      = cardinal::stof(tok[1]);
-            else if (k == "cliff_blend"      && tok.size() > 1) cur.cliff_blend_threshold = cardinal::stof(tok[1]);
+            else if (k == "base_height"      && tok.size() > 1) cur.base_height           = parse_f(tok[1], cur.base_height);
+            else if (k == "height_scale"     && tok.size() > 1) cur.height_scale          = parse_f(tok[1], cur.height_scale);
+            else if (k == "tint_low"         && tok.size() > 3) cur.tint_low              = { parse_f(tok[1], cur.tint_low.x),  parse_f(tok[2], cur.tint_low.y),  parse_f(tok[3], cur.tint_low.z)  };
+            else if (k == "tint_high"        && tok.size() > 3) cur.tint_high             = { parse_f(tok[1], cur.tint_high.x), parse_f(tok[2], cur.tint_high.y), parse_f(tok[3], cur.tint_high.z) };
+            else if (k == "tint_cliff"       && tok.size() > 3) cur.tint_cliff            = { parse_f(tok[1], cur.tint_cliff.x),parse_f(tok[2], cur.tint_cliff.y),parse_f(tok[3], cur.tint_cliff.z)};
+            else if (k == "tint_height_low"  && tok.size() > 1) cur.tint_height_low       = parse_f(tok[1], cur.tint_height_low);
+            else if (k == "tint_height_high" && tok.size() > 1) cur.tint_height_high      = parse_f(tok[1], cur.tint_height_high);
+            else if (k == "cliff_blend"      && tok.size() > 1) cur.cliff_blend_threshold = parse_f(tok[1], cur.cliff_blend_threshold);
         }
     }
     commit_profile();
