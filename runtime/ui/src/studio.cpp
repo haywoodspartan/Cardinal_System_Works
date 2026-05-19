@@ -1032,10 +1032,25 @@ public:
         }
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        // NoMove is mandatory, not optional. When this panel is the SOLE
+        // window in its dock node — exactly the case when it is dragged
+        // out into its own OS window under multi-viewport — ImGui hides
+        // the node's title bar and draws the panel filling the whole
+        // window. ConfigWindowsMoveFromTitleBarOnly is gated by
+        // `!(flags & NoTitleBar)` (imgui.cpp), so for a no-title-bar solo
+        // node that restriction is BYPASSED and a click anywhere in the
+        // body calls DockNodeStartMouseMovingWindow → the entire OS
+        // window drags when the user only meant to interact with the
+        // viewport. NoMove suppresses that body-drag move; tab-drag
+        // docking/undock (driven by the tab bar, not this flag) and the
+        // ImGui::Image hit-testing for marquee/gizmo/place are unaffected,
+        // and the window still moves via its real OS title bar/caption
+        // (ConfigViewportsNoDecoration=false).
         const ImGuiWindowFlags wflags =
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+            ImGuiWindowFlags_NoMove |
             ((maximized_inout != nullptr && *maximized_inout)
-                ? (ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDocking)
+                ? (ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDocking)
                 : 0);
         if (!ImGui::Begin(title ? title : "Viewport", p_open, wflags)) {
             ImGui::End(); ImGui::PopStyleVar(); return;
