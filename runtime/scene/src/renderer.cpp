@@ -1416,6 +1416,26 @@ public:
             swapchain_->bind_sampled_texture(0, shadow_tex_.get());
         }
 
+        // Defense-in-depth: pso_solid_/pso_wire_ statically declare the
+        // g_lights (t0) + g_materials (t1) root SRVs, so issuing ANY draw
+        // with them requires both storage buffers bound to a valid GPU
+        // address. If a per-frame upload buffer failed to allocate, skip
+        // the dependent draws this viewport rather than recording a draw
+        // that reads an unbound descriptor — on D3D12 that GPU-faults,
+        // removes the device, and cascades into a hard abort. The shadow
+        // pass uses no SRVs and is intentionally not gated here.
+        const bool storage_ready =
+            (lslot.buffer != nullptr && mslot.buffer != nullptr);
+        if (!storage_ready) {
+            static bool warned = false;
+            if (!warned) {
+                cardinal::log::warnf("scene/renderer",
+                    "storage buffers unavailable — skipping scene draw "
+                    "(degraded; see earlier rhi buffer errors)");
+                warned = true;
+            }
+        }
+
         const Entity* last_entity = nullptr;
         int           mat_index   = -1;   // ++ per entity change → slot 1 idx
         PushBlock pc{};
@@ -1434,6 +1454,7 @@ public:
         pc.light_count_pad = Vec4{static_cast<f32>(active_lights),
                                   eye.x, eye.y, eye.z};
         for (const auto& w : work_list_) {
+            if (!storage_ready) break;     // degraded — skip the SRV-dependent pass
             if (w.entity != last_entity) {
                 ++mat_index;   // lockstep with the material pre-pass order
                 pc.model        = w.entity->transform.matrix();
@@ -1548,7 +1569,7 @@ public:
                     auto nb = device_->create_buffer(bd);
                     if (nb != nullptr) gslot.buffer = cardinal::move(nb);
                 }
-                if (gslot.buffer != nullptr) {
+                if (gslot.buffer != nullptr && storage_ready) {
                     gslot.buffer->upload(gizmo_verts_.data(), gbytes);
                     swapchain_->bind_pipeline(pso_wire_.get());
                     swapchain_->bind_vertex_buffer(gslot.buffer.get(), 0);
