@@ -61,6 +61,13 @@ constexpr u32 kProtocolId = 0x434E5431;   // 'CNT1' — reject stray datagrams
 // datagram past the window is correct, not lossy.
 constexpr usize kMaxReorderBuffered = 256;
 
+// Hard cap on the server's peer table. UDP source addresses are
+// trivially spoofable, so an un-capped table lets a Connect flood from
+// distinct (ip,port) tuples exhaust memory and degrade every
+// peer_by_addr_ / find_peer_ linear scan into O(n^2). Far above any
+// real concurrent-player count; the app enforces its own lower limit.
+constexpr usize kMaxPeers = 4096;
+
 enum class PktType : u8 {
     Connect = 0, ConnectAck = 1, Data = 2, Disconnect = 3, Ack = 4
 };
@@ -179,7 +186,13 @@ public:
             case PktType::Connect: {
                 if (!is_server_) break;
                 PeerId pid = find_peer_(from);
-                if (pid == kInvalidPeer) pid = add_peer_(from);
+                if (pid == kInvalidPeer) {
+                    // Refuse new peers past the cap (see kMaxPeers) so a
+                    // spoofed-source Connect flood can't exhaust the
+                    // table. Known peers still re-ack idempotently.
+                    if (peers_.size() >= kMaxPeers) break;
+                    pid = add_peer_(from);
+                }
                 PktHeader ack = make_hdr_(PktType::ConnectAck,
                                           Channel::ReliableOrdered, 0);
                 sendto(sock_, reinterpret_cast<const char*>(&ack),
