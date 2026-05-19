@@ -24,6 +24,7 @@
 #include <cardinal/game/game_actor.hpp>
 #include <cardinal/game/reflection.hpp>
 #include <cardinal/sim/sim.hpp>
+#include <cardinal/actor/world.hpp>
 #include <cardinal/core/log.hpp>
 
 namespace cg = cardinal::game;
@@ -60,6 +61,31 @@ public:
 };
 CARDINAL_REGISTER_GAME_CLASS(OtherActor, "Gameplay/Other",
     PROP_FLOAT(x, -1.0f, 1.0f, "X"));
+
+// A GameActor whose begin_play/end_play spawn a batch of actors — the
+// common "spawn from a lifecycle hook" pattern. NOT registered with the
+// macro (keeps the ClassRegistry exactly {TestActor, OtherActor} for
+// test_reflection); added to an Actor directly via add_component.
+class SpawnerGA : public cg::GameActor {
+public:
+    static inline cardinal::actor::World* s_world = nullptr;
+    static inline int s_begin = 0, s_end = 0;
+    static inline int s_did_begin = 0, s_did_end = 0;
+    void begin_play() override {
+        ++s_begin;
+        if (s_world && s_did_begin == 0) {
+            s_did_begin = 1;
+            for (int k = 0; k < 512; ++k) s_world->spawn("bspawn");
+        }
+    }
+    void end_play() override {
+        ++s_end;
+        if (s_world && s_did_end == 0) {
+            s_did_end = 1;
+            for (int k = 0; k < 512; ++k) s_world->spawn("espawn");
+        }
+    }
+};
 
 namespace {
 
@@ -331,6 +357,50 @@ void test_stop_from_paused_and_identity() {
     if (ga) CHECK(ga->playing() == false);
 }
 
+// ---- game.cpp lifecycle loops must survive spawn-during-iteration --
+// Regression: broadcast_begin_play_ / broadcast_end_play_ /
+// apply_lifecycle_ / update_h_ iterated `for (auto& aptr :
+// sim_.world().actors())`. A GameActor whose begin_play()/end_play()/
+// on_tick() spawns (→ world.spawn() → actors_.push_back realloc) — a
+// common pattern — reallocated the vector mid-iteration; the range-for
+// then dangled into the freed old buffer whose unique_ptrs were
+// moved-from to null → a deterministic null-deref crash on the next
+// aptr->alive(). (Needs ≥2 original actors so the outer loop actually
+// dereferences a freed slot after the realloc.)
+void test_lifecycle_spawn_during_iteration() {
+    SpawnerGA::s_world = nullptr;
+    SpawnerGA::s_begin = SpawnerGA::s_end = 0;
+    SpawnerGA::s_did_begin = SpawnerGA::s_did_end = 0;
+
+    cardinal::sim::SimWorld sw{cardinal::sim::SimDesc{}};
+    cg::Game g(sw);
+    cardinal::actor::Actor* a = sw.world().spawn("spawner");   // index 0
+    a->add_component<SpawnerGA>();
+    for (int k = 0; k < 7; ++k) sw.world().spawn("plain");      // ≥2 total
+    SpawnerGA::s_world = &sw.world();
+    const cardinal::usize before = sw.world().actor_count();    // 8
+    CHECK(before == 8u);
+
+    g.start_play();   // broadcast_begin_play_ → begin_play() spawns 512
+                      // mid-iteration. PRE-FIX: null-deref crash.
+    CHECK(g.state() == cg::GameState::Playing);
+    CHECK(SpawnerGA::s_begin == 1);
+    CHECK(sw.world().actor_count() == before + 512u);
+    CHECK(g.begin_play_pending() == 0u);
+
+    g.stop_play();    // broadcast_end_play_ → end_play() spawns 512 more.
+    CHECK(g.state() == cg::GameState::Stopped);
+    CHECK(SpawnerGA::s_end == 1);
+    CHECK(sw.world().actor_count() == before + 1024u);
+
+    // A Playing tick now drives update_h_ + apply_lifecycle_ (same
+    // fixed loops) over 1032 actors — must not crash.
+    g.start_play();
+    g.tick(0.016f);
+    CHECK(g.state() == cg::GameState::Playing);
+    CHECK(sw.world().actor_count() == before + 1024u);          // no new spawn
+}
+
 }  // namespace
 
 int main() {
@@ -340,6 +410,7 @@ int main() {
     test_game_lifecycle();
     test_game_tick_lifecycle();
     test_stop_from_paused_and_identity();
+    test_lifecycle_spawn_during_iteration();
 
     if (g_fail == 0) {
         cardinal::log::infof("gametest", "OK  %d checks passed", g_checks);

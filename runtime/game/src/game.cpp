@@ -24,10 +24,22 @@ Game::Game(cardinal::sim::SimWorld& sim) : sim_(sim) {
     });
     update_h_= sim_.add_handler(cardinal::sim::TickGroup::Update, [this](float dt){
         if (state_ != GameState::Playing) return;
-        for (auto& aptr : sim_.world().actors()) {
+        // Index-snapshot, NOT range-for: a GameActor::on_tick very
+        // commonly spawn_class()-es (→ SimWorld::world().spawn() →
+        // actors_.push_back) or add_component()s, reallocating the
+        // vector mid-iteration. A range-for would then dangle into the
+        // freed old buffer whose unique_ptrs were moved-from to null →
+        // deterministic null-deref. Actor*/Component* stay valid across
+        // realloc (heap-behind-unique_ptr); operator[] re-reads .data()
+        // each step; the pre-spawn count defers fresh actors to next
+        // frame (spawn_class already fired their begin_play immediately).
+        const auto& acts = sim_.world().actors();
+        for (cardinal::usize i = 0, n = acts.size(); i < n; ++i) {
+            cardinal::actor::Actor* aptr = acts[i].get();
             if (!aptr->alive()) continue;
-            for (const auto& c : aptr->components()) {
-                if (auto* ga = dynamic_cast<GameActor*>(c.get())) {
+            const auto& comps = aptr->components();
+            for (cardinal::usize j = 0, m = comps.size(); j < m; ++j) {
+                if (auto* ga = dynamic_cast<GameActor*>(comps[j].get())) {
                     if (ga->playing()) ga->on_tick(dt);
                 }
             }
@@ -121,10 +133,14 @@ void Game::apply_lifecycle_() {
     // Playing but haven't seen begin_play yet. Cheap O(N) sweep.
     if (begin_play_pending_ == 0) return;
     u32 fired = 0;
-    for (auto& aptr : sim_.world().actors()) {
+    // Index-snapshot (see update_h_): begin_play() can spawn_class().
+    const auto& acts = sim_.world().actors();
+    for (cardinal::usize i = 0, n = acts.size(); i < n; ++i) {
+        cardinal::actor::Actor* aptr = acts[i].get();
         if (!aptr->alive()) continue;
-        for (const auto& c : aptr->components()) {
-            if (auto* ga = dynamic_cast<GameActor*>(c.get())) {
+        const auto& comps = aptr->components();
+        for (cardinal::usize j = 0, m = comps.size(); j < m; ++j) {
+            if (auto* ga = dynamic_cast<GameActor*>(comps[j].get())) {
                 if (!ga->playing()) {
                     ga->begin_play();
                     ga->_set_playing(true);
@@ -140,9 +156,15 @@ void Game::apply_lifecycle_() {
 }
 
 void Game::broadcast_begin_play_() {
-    for (auto& aptr : sim_.world().actors()) {
-        for (const auto& c : aptr->components()) {
-            if (auto* ga = dynamic_cast<GameActor*>(c.get())) {
+    // Index-snapshot (see update_h_): begin_play() can spawn_class();
+    // a fresh actor spawned mid-broadcast already had begin_play fired
+    // by spawn_class (state_==Playing), so not revisiting it here also
+    // correctly avoids a double begin_play.
+    const auto& acts = sim_.world().actors();
+    for (cardinal::usize i = 0, n = acts.size(); i < n; ++i) {
+        const auto& comps = acts[i]->components();
+        for (cardinal::usize j = 0, m = comps.size(); j < m; ++j) {
+            if (auto* ga = dynamic_cast<GameActor*>(comps[j].get())) {
                 if (!ga->playing()) {
                     ga->begin_play();
                     ga->_set_playing(true);
@@ -154,9 +176,12 @@ void Game::broadcast_begin_play_() {
 }
 
 void Game::broadcast_end_play_() {
-    for (auto& aptr : sim_.world().actors()) {
-        for (const auto& c : aptr->components()) {
-            if (auto* ga = dynamic_cast<GameActor*>(c.get())) {
+    // Index-snapshot (see update_h_): end_play() could spawn_class().
+    const auto& acts = sim_.world().actors();
+    for (cardinal::usize i = 0, n = acts.size(); i < n; ++i) {
+        const auto& comps = acts[i]->components();
+        for (cardinal::usize j = 0, m = comps.size(); j < m; ++j) {
+            if (auto* ga = dynamic_cast<GameActor*>(comps[j].get())) {
                 if (ga->playing()) {
                     ga->end_play();
                     ga->_set_playing(false);
