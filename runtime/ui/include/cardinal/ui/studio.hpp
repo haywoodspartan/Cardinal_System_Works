@@ -341,6 +341,15 @@ public:
         bool  click_left{false};    // LMB clicked (release-without-drag) this frame
         float ndc_x{0.0f};          // mouse X in panel-local NDC at click time
         float ndc_y{0.0f};
+        // The panel the NDC/marquee was sampled in, and that panel's true
+        // pixel aspect (width/height). The host MUST build its picking
+        // projection with THIS aspect: a viewport dragged into its own OS
+        // window (multi-viewport) has its own aspect, and pairing this
+        // panel-local NDC with another panel's aspect skews the
+        // unprojected ray — object placement lands offset. `aspect` is 0
+        // when no panel was hovered (host should fall back).
+        cardinal::u32 viewport_id{0};
+        float         aspect{0.0f};
         bool  delete_pressed{false};// Delete / Backspace fired this frame
         // ---- Multi-select additions (back-compat: default false/0) -----
         // `additive` = Ctrl or Shift was held at click time → the host

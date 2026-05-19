@@ -2993,15 +2993,22 @@ int main(int argc, char** argv) {
             }
 
             // ---- Click-to-select / click-to-place (existing behaviour).
-            // Pick aspect from viewport 0 — picking happens in whichever
-            // viewport was hovered, but every viewport shares one camera
-            // so the projection math works out the same. (Per-viewport
-            // hovered-id picking is a follow-up if/when cameras split.)
-            const auto  pick    = studio->last_viewport_pick();
-            const u32   pick_vw = sw->viewport_width(0u);
-            const u32   pick_vh = sw->viewport_height(0u);
-            if (pick.click_left && pick_vw > 0 && pick_vh > 0) {
-                const float aspect_pick = float(pick_vw) / float(pick_vh);
+            // Use the HOVERED panel's own aspect — Studio reports it with
+            // the pick (pick.aspect / pick.viewport_id). A viewport dragged
+            // into its own OS window has a different aspect than viewport
+            // 0; pairing its panel-local NDC with viewport 0's aspect
+            // skewed the unprojected ray so placement landed offset. Fall
+            // back to viewport 0 only when no panel was hovered.
+            const auto  pick = studio->last_viewport_pick();
+            float aspect_pick = pick.aspect;
+            if (!(aspect_pick > 0.0f)) {
+                const u32 v0w = sw->viewport_width(0u);
+                const u32 v0h = sw->viewport_height(0u);
+                aspect_pick = (v0w > 0 && v0h > 0)
+                    ? static_cast<float>(v0w) / static_cast<float>(v0h)
+                    : 1.0f;
+            }
+            if (pick.click_left && aspect_pick > 0.0f) {
                 const auto  view_m = scene.camera().view();
                 const auto  proj_m = scene.camera().proj(aspect_pick);
                 const auto  ray    = scn::unproject_ndc_ray(pick.ndc_x, pick.ndc_y,
@@ -3041,9 +3048,8 @@ int main(int argc, char** argv) {
             // Marquee box-select — Studio reports a panel-local NDC rect;
             // we test each entity's projected centre against it (Studio
             // stays scene-agnostic). Ctrl/Shift during the box extends.
-            if (pick.marquee && pick_vw > 0 && pick_vh > 0) {
-                const float ar = float(pick_vw) / float(pick_vh);
-                const auto  mvp = scene.camera().proj(ar) * scene.camera().view();
+            if (pick.marquee && aspect_pick > 0.0f) {
+                const auto  mvp = scene.camera().proj(aspect_pick) * scene.camera().view();
                 if (!pick.marquee_additive) selection.clear();
                 for (auto& e : scene.entities()) {
                     const auto& t = e.transform.translation;

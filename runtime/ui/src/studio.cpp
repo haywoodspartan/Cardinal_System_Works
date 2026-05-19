@@ -1198,6 +1198,13 @@ public:
         if (ImGui::IsItemHovered() && avail.x > 1.0f && avail.y > 1.0f) {
             vp_pick_.hovered = true;
             vp_last_hovered_id_ = viewport_id;
+            // Travel the panel id + its TRUE aspect with the pick so the
+            // host unprojects with a projection matching THIS panel — even
+            // when it's its own OS window with a different aspect than
+            // viewport 0 (was: host hardcoded viewport 0's aspect → ray
+            // skew → object placement offset in detached viewports).
+            vp_pick_.viewport_id = viewport_id;
+            vp_pick_.aspect      = avail.x / avail.y;
             const ImGuiIO& io = ImGui::GetIO();
 
             const bool ctrl_or_shift = io.KeyCtrl || io.KeyShift;
