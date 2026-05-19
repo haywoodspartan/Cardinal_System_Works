@@ -52,6 +52,15 @@ namespace {
 
 constexpr u32 kProtocolId = 0x434E5431;   // 'CNT1' — reject stray datagrams
 
+// Per-peer cap on early-arrival (future-seq) datagrams held for
+// reordering. seq is attacker-controlled off the wire, so an unbounded
+// buffer is a trivial remote memory-exhaustion DoS (flood distinct high
+// seqs that never let in_expected advance). A real reorder window is a
+// handful of packets; 256 (~512 KB/peer worst case at MTU) is generous.
+// ReliableOrdered means the sender retransmits, so dropping a future
+// datagram past the window is correct, not lossy.
+constexpr usize kMaxReorderBuffered = 256;
+
 enum class PktType : u8 {
     Connect = 0, ConnectAck = 1, Data = 2, Disconnect = 3, Ack = 4
 };
@@ -236,7 +245,11 @@ public:
                     bool have = false;
                     for (auto& e : pr->reorder)
                         if (e.first == h.seq) { have = true; break; }
-                    if (!have) {
+                    // Bounded reorder window — see kMaxReorderBuffered.
+                    // Past the cap, drop: ReliableOrdered retransmits, so
+                    // a peer >256 ahead of in_expected (lossy or hostile)
+                    // can't grow this buffer without limit.
+                    if (!have && pr->reorder.size() < kMaxReorderBuffered) {
                         pr->reorder.emplace_back(h.seq,
                             cardinal::vector<char>(pay, pay + plen));
                     }
