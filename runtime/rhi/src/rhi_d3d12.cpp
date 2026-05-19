@@ -275,10 +275,12 @@ class D3D12Pipeline final : public Pipeline {
 public:
     D3D12Pipeline(ComPtr<ID3D12RootSignature> rs, ComPtr<ID3D12PipelineState> pso,
                   PrimitiveTopology topo, u32 vertex_stride, u32 push_constant_size,
-                  u32 storage_buffer_slots, u32 sampled_texture_slots)
+                  u32 storage_buffer_slots, u32 sampled_texture_slots,
+                  bool push_is_cbv)
         : root_(cardinal::move(rs)), pso_(cardinal::move(pso))
         , topology_(to_d3d_topology(topo)), vertex_stride_(vertex_stride)
         , push_constant_size_(push_constant_size)
+        , push_is_cbv_(push_is_cbv)
         , storage_buffer_slots_(storage_buffer_slots)
         , sampled_texture_slots_(sampled_texture_slots)
         // Root SRVs follow the optional 32-bit-constants param. When a
@@ -295,6 +297,7 @@ public:
     D3D12_PRIMITIVE_TOPOLOGY topology()          const noexcept { return topology_; }
     u32                    vertex_stride()       const noexcept { return vertex_stride_; }
     u32                    push_constant_size()  const noexcept { return push_constant_size_; }
+    bool                   push_is_cbv()         const noexcept { return push_is_cbv_; }
     u32                    storage_buffer_slots() const noexcept { return storage_buffer_slots_; }
     u32                    storage_root_base()    const noexcept { return storage_root_base_; }
     u32                    sampled_texture_slots() const noexcept { return sampled_texture_slots_; }
@@ -306,6 +309,7 @@ private:
     D3D12_PRIMITIVE_TOPOLOGY    topology_;
     u32                         vertex_stride_{0};
     u32                         push_constant_size_{0};
+    bool                        push_is_cbv_{false};
     u32                         storage_buffer_slots_{0};
     u32                         storage_root_base_{0};
     u32                         sampled_texture_slots_{0};
@@ -443,6 +447,21 @@ private:
     cardinal::array<ComPtr<ID3D12Resource>, kFramesInFlight> back_buffers_;
     cardinal::array<Frame, kFramesInFlight> frames_;
     UINT                             frame_index_{0};
+
+    // Per-frame upload constant ring — backs root-CBV push blocks (large
+    // push-constant pipelines; see create_pipeline). Each set_push_constants
+    // bump-allocates a fresh 256 B-aligned slice so successive draws in a
+    // frame don't clobber each other's constants before the GPU consumes
+    // them. One persistently-mapped buffer per frame-in-flight; the offset
+    // resets in begin_frame after the frame's prior submission has retired.
+    static constexpr u32 kCbAlign     = 256u;            // D3D12 CBV placement
+    static constexpr u32 kMaxPushBytes = 256u;           // >= largest push block
+    static constexpr u32 kCbRingBytes = 256u * 1024u;    // 1024 slices/frame
+    cardinal::array<ComPtr<ID3D12Resource>, kFramesInFlight>     cb_ring_{};
+    cardinal::array<u8*, kFramesInFlight>                        cb_ring_cpu_{};
+    cardinal::array<D3D12_GPU_VIRTUAL_ADDRESS, kFramesInFlight>  cb_ring_gpu_{};
+    u32                              cb_ring_offset_{0};
+    cardinal::array<u8, kMaxPushBytes> push_shadow_{};   // CPU staging (partial writes)
 
     ComPtr<ID3D12Fence>              fence_;
     HANDLE                           fence_event_{nullptr};
@@ -887,14 +906,30 @@ cardinal::unique_ptr<Pipeline> D3D12Device::create_pipeline(const PipelineDesc& 
     // index 0. Root SRVs (not descriptor tables) need no descriptor
     // heap — they bind straight from a GPU virtual address, mirroring
     // the Vulkan storage-buffer descriptor on the other backend.
+    // A D3D12 root signature is capped at 64 DWORDs. 32-bit root constants
+    // cost one DWORD *per DWORD of payload*, so a large push block (e.g. the
+    // 240 B / 60-DWORD scene block) plus root SRVs (2 DWORDs each) + a
+    // descriptor table (1 DWORD) blows the budget and CreateRootSignature
+    // fails with E_INVALIDARG. Demote big blocks to a root CBV (b0, a flat
+    // 2 DWORDs) backed by the per-frame constant ring; keep the cheaper
+    // inline root-constants path for genuinely small blocks (<=16 DWORDs,
+    // e.g. the shadow pass's single mat4). HLSL `cbuffer Push : register(b0)`
+    // is identical either way, so no shader change is needed.
+    const bool push_as_cbv = desc.push_constant_size > 64;
     cardinal::vector<D3D12_ROOT_PARAMETER> root_params;
     if (desc.push_constant_size > 0) {
         D3D12_ROOT_PARAMETER rp{};
-        rp.ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        rp.Constants.ShaderRegister = 0;                  // b0
-        rp.Constants.RegisterSpace  = 0;
-        rp.Constants.Num32BitValues = (desc.push_constant_size + 3) / 4;
-        rp.ShaderVisibility         = D3D12_SHADER_VISIBILITY_ALL;
+        if (push_as_cbv) {
+            rp.ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+            rp.Descriptor.ShaderRegister = 0;             // b0
+            rp.Descriptor.RegisterSpace  = 0;
+        } else {
+            rp.ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+            rp.Constants.ShaderRegister = 0;              // b0
+            rp.Constants.RegisterSpace  = 0;
+            rp.Constants.Num32BitValues = (desc.push_constant_size + 3) / 4;
+        }
+        rp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         root_params.push_back(rp);
     }
     for (u32 s = 0; s < desc.storage_buffer_slots; ++s) {
@@ -947,6 +982,26 @@ cardinal::unique_ptr<Pipeline> D3D12Device::create_pipeline(const PipelineDesc& 
     if (desc.sampled_texture_slots > 0) {
         rsd.NumStaticSamplers = 1;
         rsd.pStaticSamplers   = &ss;
+    }
+
+    // Fail loudly *here* rather than via an opaque CreateRootSignature
+    // E_INVALIDARG if some future slot configuration still overflows the
+    // 64-DWORD ceiling. push: CBV=2, else ceil(bytes/4); root SRV=2 each;
+    // sampled-texture descriptor table=1.
+    {
+        const u32 push_dwords = (desc.push_constant_size == 0) ? 0u
+                              : (push_as_cbv ? 2u : (desc.push_constant_size + 3u) / 4u);
+        const u32 total_dwords = push_dwords
+                               + 2u * desc.storage_buffer_slots
+                               + (desc.sampled_texture_slots > 0 ? 1u : 0u);
+        if (total_dwords > 64u) {
+            cardinal::log::errorf("rhi/d3d12",
+                "root signature too large: %u DWORDs > 64 "
+                "(push=%uB storage=%u tex=%u)",
+                total_dwords, desc.push_constant_size,
+                desc.storage_buffer_slots, desc.sampled_texture_slots);
+            return nullptr;
+        }
     }
 
     ComPtr<ID3DBlob> blob, err;
@@ -1039,7 +1094,8 @@ cardinal::unique_ptr<Pipeline> D3D12Device::create_pipeline(const PipelineDesc& 
                                            desc.topology, desc.vertex_stride,
                                            desc.push_constant_size,
                                            desc.storage_buffer_slots,
-                                           desc.sampled_texture_slots);
+                                           desc.sampled_texture_slots,
+                                           push_as_cbv);
 }
 
 // -----------------------------------------------------------------------------
@@ -1356,12 +1412,40 @@ bool D3D12Swapchain::create_per_frame_objects() {
                 0, D3D12_COMMAND_LIST_TYPE_DIRECT, frames_[i].alloc.Get(), nullptr,
                 IID_PPV_ARGS(&frames_[i].cmd)))) return false;
         frames_[i].cmd->Close();
+
+        // Per-frame constant ring (UPLOAD heap, persistently mapped).
+        D3D12_HEAP_PROPERTIES cbh{};
+        cbh.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC cbd{};
+        cbd.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        cbd.Width            = kCbRingBytes;
+        cbd.Height           = 1;
+        cbd.DepthOrArraySize = 1;
+        cbd.MipLevels        = 1;
+        cbd.Format           = DXGI_FORMAT_UNKNOWN;
+        cbd.SampleDesc.Count = 1;
+        cbd.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        if (FAILED(dev_.device()->CreateCommittedResource(
+                &cbh, D3D12_HEAP_FLAG_NONE, &cbd,
+                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                IID_PPV_ARGS(&cb_ring_[i])))) return false;
+        D3D12_RANGE no_read{0, 0};
+        void* mapped = nullptr;
+        if (FAILED(cb_ring_[i]->Map(0, &no_read, &mapped))) return false;
+        cb_ring_cpu_[i] = static_cast<u8*>(mapped);
+        cb_ring_gpu_[i] = cb_ring_[i]->GetGPUVirtualAddress();
     }
     return true;
 }
 
 void D3D12Swapchain::destroy_per_frame_objects() {
     for (auto& f : frames_) { f.cmd.Reset(); f.alloc.Reset(); }
+    for (UINT i = 0; i < kFramesInFlight; ++i) {
+        if (cb_ring_[i]) { cb_ring_[i]->Unmap(0, nullptr); cb_ring_[i].Reset(); }
+        cb_ring_cpu_[i] = nullptr;
+        cb_ring_gpu_[i] = 0;
+    }
+    cb_ring_offset_ = 0;
 }
 
 bool D3D12Swapchain::ensure_viewport_objects(u32 id, u32 w, u32 h) {
@@ -1503,6 +1587,7 @@ u32 D3D12Swapchain::begin_frame(float r, float g, float b, float a) {
     frame_index_ = swap_->GetCurrentBackBufferIndex();
     Frame& f = frames_[frame_index_];
     wait_for_frame(frame_index_);
+    cb_ring_offset_ = 0;          // frame's prior GPU work retired -> ring reusable
     f.alloc->Reset();
     f.cmd->Reset(f.alloc.Get(), nullptr);
 
@@ -1604,8 +1689,38 @@ void D3D12Swapchain::set_push_constants(u32 offset, const void* data, u32 size) 
         }
         return;
     }
-    // D3D12 root constants are written in DWORDs. We round size up
-    // for the count and pass byte-offset/4 for the destination index.
+    if (dp->push_is_cbv()) {
+        // Large block → root CBV. Patch the CPU shadow at [offset,offset+size)
+        // (supports partial / multi-call updates), then publish the whole
+        // declared block into a fresh 256 B-aligned ring slice and point
+        // root param 0 (b0) at it. A new slice per call keeps each draw's
+        // constants live until the GPU consumes them.
+        if (declared > kMaxPushBytes) {
+            static bool warned = false;
+            if (!warned) {
+                cardinal::log::warnf("rhi/d3d12",
+                    "push block %uB exceeds CBV ring slice cap %uB (dropped)",
+                    declared, kMaxPushBytes);
+                warned = true;
+            }
+            return;
+        }
+        cardinal::memcpy(push_shadow_.data() + offset, data, size);
+        const u32 slot = (declared + (kCbAlign - 1u)) & ~(kCbAlign - 1u);
+        if (cb_ring_offset_ + slot > kCbRingBytes) {
+            cb_ring_offset_ = 0;          // defensive wrap (very busy frame)
+        }
+        u8* cpu = cb_ring_cpu_[frame_index_] + cb_ring_offset_;
+        const D3D12_GPU_VIRTUAL_ADDRESS gpu =
+            cb_ring_gpu_[frame_index_] + cb_ring_offset_;
+        cardinal::memcpy(cpu, push_shadow_.data(), declared);
+        cb_ring_offset_ += slot;
+        frames_[frame_index_].cmd->SetGraphicsRootConstantBufferView(0, gpu);
+        return;
+    }
+
+    // Small block → inline root constants, written in DWORDs. We round size
+    // up for the count and pass byte-offset/4 for the destination index.
     // Caller is expected to align offset to a 4-byte boundary.
     const UINT num_values   = (size + 3u) / 4u;
     const UINT dest_dword   = offset / 4u;
