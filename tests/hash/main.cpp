@@ -149,6 +149,11 @@ void test_fxhash64() {
     // Empty input → the seed, untouched.
     CHECK(h::fxhash64(static_cast<const void*>(""), 0, 0ull) == 0ull);
     CHECK(h::fxhash64(static_cast<const void*>(""), 0, 1234ull) == 1234ull);
+    // ...and well-defined even when `data` itself is null: no memcpy is
+    // performed on a null/zero region (the pre-fix code's
+    // memcpy(&tail, nullptr, 0) was standards-UB / UBSan-reportable).
+    CHECK(h::fxhash64(nullptr, 0)        == 0ull);
+    CHECK(h::fxhash64(nullptr, 0, 99ull) == 99ull);
 
     // One 8-byte block == fxhash64(seed, word). memcpy round-trips the
     // word, so this identity is endian-independent.

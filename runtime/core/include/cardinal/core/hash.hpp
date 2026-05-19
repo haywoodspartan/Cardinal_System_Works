@@ -60,9 +60,16 @@ inline u64 fxhash64(const void* data, usize len, u64 seed = 0) noexcept {
         h = fxhash64(h, w);
         p += 8; len -= 8;
     }
-    u64 tail = 0;
-    std::memcpy(&tail, p, len);
-    if (len) h = fxhash64(h, tail);
+    if (len) {
+        u64 tail = 0;
+        std::memcpy(&tail, p, len);          // 1..7 trailing bytes
+        h = fxhash64(h, tail);
+    }
+    // len == 0 here returns the seed untouched — well-defined even when
+    // `data` is null. The pre-guard `memcpy(&tail, p, 0)` was UB by the
+    // standard (memcpy with a null/one-past-end pointer, even at size 0)
+    // and a UBSan `nonnull` finding; guarding it removes the UB with
+    // zero behaviour change for any non-empty input.
     return h;
 }
 
