@@ -785,7 +785,14 @@ cardinal::unique_ptr<Buffer> D3D12Device::create_buffer(const BufferDesc& desc) 
     rd.SampleDesc.Count   = 1;
     rd.Layout             = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     rd.Flags              = D3D12_RESOURCE_FLAG_NONE;
-    if (static_cast<u32>(desc.usage) & static_cast<u32>(BufferUsage::Storage))
+    // ALLOW_UNORDERED_ACCESS is *illegal* on an UPLOAD-heap resource and is
+    // only meaningful for GPU-writable (UAV) buffers. Our cpu_writable
+    // storage buffers (per-frame light/material uploads) live on the UPLOAD
+    // heap and are bound read-only as root SRVs (StructuredBuffer<T>), so
+    // requesting UAV here makes CreateCommittedResource fail with
+    // E_INVALIDARG. Only DEFAULT-heap storage buffers may be UAVs.
+    if (!desc.cpu_writable &&
+        (static_cast<u32>(desc.usage) & static_cast<u32>(BufferUsage::Storage)))
         rd.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
     const D3D12_RESOURCE_STATES initial =
