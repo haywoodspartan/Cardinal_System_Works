@@ -124,7 +124,12 @@ SamplerState g_shadow_smp : register(s0);
 //   light_vp        : 4 rows (64B) — directional light-space view-proj
 //                                     (pass-1 matrix) for the shadow test
 // Total: 240 bytes — still under the 256B ceiling.
-[[vk::push_constant]] cbuffer Push : register(b0) {
+// DXC rejects [[vk::push_constant]] on a `cbuffer` — the attribute must
+// sit on a global of struct type. Declare the block once and bind it per
+// target: SPIR-V (Vulkan) as a real push constant; DXIL (D3D12) as a b0
+// ConstantBuffer (fed by inline root constants OR a root CBV — see the
+// D3D12 backend). DXC predefines __spirv__ only on the SPIR-V path.
+struct Push {
     float4x4 mvp;
     float4x4 model;
     float4   ambient_mode;
@@ -132,6 +137,11 @@ SamplerState g_shadow_smp : register(s0);
     float4   material_pad;
     float4x4 light_vp;
 };
+#ifdef __spirv__
+[[vk::push_constant]] Push pc;
+#else
+ConstantBuffer<Push> pc : register(b0);
+#endif
 
 // 3×3 PCF directional shadow factor. Reprojects the world position
 // into the pass-1 light clip space, then averages 9 depth comparisons
@@ -140,7 +150,7 @@ SamplerState g_shadow_smp : register(s0);
 // darkening at the map edge). Slope-scaled bias kills shadow acne on
 // surfaces grazing the sun.
 float directional_shadow(float3 world_pos, float ndotl) {
-    float4 lc = mul(light_vp, float4(world_pos, 1.0));
+    float4 lc = mul(pc.light_vp, float4(world_pos, 1.0));
     if (lc.w <= 0.0) return 1.0;
     float3 ndc = lc.xyz / lc.w;
     // Engine clip is RH z∈[0,1]; XY → [0,1] UV with V flipped.
@@ -165,12 +175,12 @@ float directional_shadow(float3 world_pos, float ndotl) {
 VSOut VSMain(VSIn i) {
     VSOut o;
     float4 pos4    = float4(i.pos, 1.0);
-    o.pos          = mul(mvp,   pos4);
-    o.world_pos    = mul(model, pos4).xyz;
+    o.pos          = mul(pc.mvp,   pos4);
+    o.world_pos    = mul(pc.model, pos4).xyz;
     // World-space normal via the upper-left 3x3 of model. Uniform-scale
     // assumption — non-uniform scale would need the inverse-transpose;
     // documented limitation matches the CPU rot_xform() helper today.
-    o.world_normal = normalize(mul((float3x3)model, i.normal));
+    o.world_normal = normalize(mul((float3x3)pc.model, i.normal));
     o.color        = i.color;
     return o;
 }
@@ -198,9 +208,9 @@ float4 PSMain(VSOut i) : SV_TARGET {
     //                                                spot.w   = outer_cos)
     // ambient_mode.w lerps unlit (debug view modes) vs lit (Solid).
     float3 normal = normalize(i.world_normal);
-    int    nlit   = int(light_count_pad.x);
+    int    nlit   = int(pc.light_count_pad.x);
     // Camera position (specular view vector) arrives via light_count_pad.yzw.
-    float3 view_pos = light_count_pad.yzw;
+    float3 view_pos = pc.light_count_pad.yzw;
     float3 V        = normalize(view_pos - i.world_pos);
     // Per-entity material (slot 1). Metallic-roughness PBR:
     //   spec.x = spec_scale  — overall specular strength (legacy
@@ -211,7 +221,7 @@ float4 PSMain(VSOut i) : SV_TARGET {
     //                          NDF non-singular)
     //   spec.w = metalness   — lerps F0 (0.04 dielectric → albedo) and
     //                          kills diffuse for conductors
-    GpuMaterial mat        = g_materials[int(material_pad.x)];
+    GpuMaterial mat        = g_materials[int(pc.material_pad.x)];
     float  spec_scale      = mat.spec.x;
     float  roughness       = clamp(mat.spec.z, 0.045, 1.0);
     float  metalness       = saturate(mat.spec.w);
@@ -227,7 +237,7 @@ float4 PSMain(VSOut i) : SV_TARGET {
     //     the hemisphere. This is the term that stops conductors
     //     (metalness→1, zero diffuse) reading near-black between direct
     //     highlights, which the Blinn→PBR switch otherwise introduced.
-    float3 sky_amb  = ambient_mode.xyz;
+    float3 sky_amb  = pc.ambient_mode.xyz;
     float3 env_up   = sky_amb * 1.6;
     float3 env_dn   = sky_amb * 0.4;
     float  NdotV_a  = max(dot(normal, V), 1e-4);
@@ -285,7 +295,7 @@ float4 PSMain(VSOut i) : SV_TARGET {
         // Directional sun shadow (pass-1 map). material_pad.z gates it
         // so wire/gizmo + no-directional + missing-resource frames skip
         // the reprojection entirely.
-        if (is_dir && material_pad.z > 0.5 && NdotL > 0.0) {
+        if (is_dir && pc.material_pad.z > 0.5 && NdotL > 0.0) {
             radiance *= directional_shadow(i.world_pos, NdotL);
         }
         if (NdotL > 0.0) {
@@ -331,10 +341,10 @@ float4 PSMain(VSOut i) : SV_TARGET {
     // must show raw encoded values, never an S-curve. Exposure rides
     // material_pad.y (per-frame host knob via LightSet::set_exposure);
     // guard 0 → 1.0 so an unset value is neutral, not black.
-    float exposure = material_pad.y;
+    float exposure = pc.material_pad.y;
     if (exposure <= 0.0) exposure = 1.0;
     float3 mapped = aces_tonemap(lit * exposure);
-    return float4(lerp(i.color, mapped, ambient_mode.w), 1.0);
+    return float4(lerp(i.color, mapped, pc.ambient_mode.w), 1.0);
 }
 )";
 
@@ -351,11 +361,14 @@ struct VSIn {
     float3 color  : COLOR0;
     float3 normal : TEXCOORD0;
 };
-[[vk::push_constant]] cbuffer Push : register(b0) {
-    float4x4 light_mvp;
-};
+struct Push { float4x4 light_mvp; };
+#ifdef __spirv__
+[[vk::push_constant]] Push pc;
+#else
+ConstantBuffer<Push> pc : register(b0);
+#endif
 float4 VSMain(VSIn i) : SV_POSITION {
-    return mul(light_mvp, float4(i.pos, 1.0));
+    return mul(pc.light_mvp, float4(i.pos, 1.0));
 }
 void PSMain() {}
 )";
