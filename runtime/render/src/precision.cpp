@@ -13,8 +13,8 @@
 // =============================================================================
 #include <cardinal/render/precision.hpp>
 
+#include <cardinal/core/bit.hpp>
 #include <cardinal/core/cmath.hpp>
-#include <cardinal/core/cstring.hpp>
 #include <cardinal/core/limits.hpp>
 
 namespace cardinal::render::precision {
@@ -73,13 +73,9 @@ float format_smallest_subnormal(Format f) noexcept {
     return 0.0f;
 }
 
-// Bitcast helpers (constexpr-friendly via cardinal::memcpy).
-inline u32 fp32_bits(float f) noexcept {
-    u32 u; cardinal::memcpy(&u, &f, 4); return u;
-}
-inline float bits_fp32(u32 u) noexcept {
-    float f; cardinal::memcpy(&f, &u, 4); return f;
-}
+// Bit-cast helpers — constexpr type-puns via the Foundation's bit_cast.
+constexpr u32   fp32_bits(float f) noexcept { return cardinal::bit_cast<u32>(f); }
+constexpr float bits_fp32(u32 u)   noexcept { return cardinal::bit_cast<float>(u); }
 
 // ---------------------------------------------------------------------------
 // FP16

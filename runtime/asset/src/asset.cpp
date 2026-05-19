@@ -4,7 +4,7 @@
 #include <cardinal/pack/pack.hpp>
 
 #include <cardinal/core/algorithm.hpp>    // cardinal::sort/unique
-#include <cardinal/core/cstring.hpp>      // cardinal::memcpy
+#include <cardinal/core/bit.hpp>         // cardinal::bit_cast
 #include <cardinal/core/filesystem.hpp>   // cardinal::fs, error_code
 #include <cardinal/core/fstream.hpp>      // cardinal::ifstream/ios
 #include <cardinal/core/utility.hpp>      // cardinal::move
@@ -28,9 +28,7 @@ void wr_u32(cardinal::vector<u8>& o, u32 v) {
     o.push_back(static_cast<u8>(v >> 24));
 }
 void wr_f(cardinal::vector<u8>& o, float v) {
-    u32 bits;
-    cardinal::memcpy(&bits, &v, sizeof(bits));
-    wr_u32(o, bits);
+    wr_u32(o, cardinal::bit_cast<u32>(v));
 }
 void wr_bytes(cardinal::vector<u8>& o, const u8* p, usize n) {
     o.insert(o.end(), p, p + n);
@@ -45,10 +43,7 @@ u32 rd_u32(const u8* p) {
            (static_cast<u32>(p[2]) << 16) | (static_cast<u32>(p[3]) << 24);
 }
 float rd_f(const u8* p) {
-    u32 bits = rd_u32(p);
-    float v;
-    cardinal::memcpy(&v, &bits, sizeof(v));
-    return v;
+    return cardinal::bit_cast<float>(rd_u32(p));
 }
 
 }  // namespace

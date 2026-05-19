@@ -10,10 +10,11 @@
 #include <cardinal/shader/shader.hpp>
 
 #include <cardinal/core/algorithm.hpp>    // cardinal::transform
+#include <cardinal/core/bit.hpp>          // cardinal::bit_cast
 #include <cardinal/core/cctype.hpp>       // cardinal::tolower
 #include <cardinal/core/cstdio.hpp>       // cardinal::sscanf
 #include <cardinal/core/cstdlib.hpp>      // cardinal::strtoull
-#include <cardinal/core/cstring.hpp>      // cardinal::memcmp/memcpy
+#include <cardinal/core/cstring.hpp>      // cardinal::memcmp
 #include <cardinal/core/filesystem.hpp>   // cardinal::fs
 #include <cardinal/core/fstream.hpp>      // cardinal::ifstream/ofstream
 #include <cardinal/core/utility.hpp>      // cardinal::move
@@ -124,7 +125,7 @@ void wr_u32(cardinal::vector<u8>& o, u32 v) {
     o.push_back(static_cast<u8>(v >> 24));
 }
 void wr_f(cardinal::vector<u8>& o, float v) {
-    u32 b; cardinal::memcpy(&b, &v, 4); wr_u32(o, b);
+    wr_u32(o, cardinal::bit_cast<u32>(v));
 }
 void wr_str(cardinal::vector<u8>& o, const cardinal::string& s) {
     wr_u32(o, static_cast<u32>(s.size()));

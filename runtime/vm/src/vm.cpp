@@ -9,7 +9,7 @@
 // =============================================================================
 #include <cardinal/vm/vm.hpp>
 
-#include <cardinal/core/cstring.hpp>   // cardinal::memcpy (bit-casts)
+#include <cardinal/core/bit.hpp>       // cardinal::bit_cast (type-puns)
 #include <cardinal/core/utility.hpp>   // cardinal::move
 // cardinal::vector / cardinal::string / cardinal::unique_ptr arrive via
 // vm.hpp (core/containers.hpp + core/types.hpp).
@@ -35,8 +35,8 @@ inline u64 rd_u64(const u8* p) noexcept {
 inline i32 rd_i32(const u8* p) noexcept {
     return static_cast<i32>(rd_u32(p));
 }
-inline f64 bits_to_f64(u64 b) noexcept { f64 d; cardinal::memcpy(&d, &b, 8); return d; }
-inline u64 f64_to_bits(f64 d) noexcept { u64 b; cardinal::memcpy(&b, &d, 8); return b; }
+constexpr f64 bits_to_f64(u64 b) noexcept { return cardinal::bit_cast<f64>(b); }
+constexpr u64 f64_to_bits(f64 d) noexcept { return cardinal::bit_cast<u64>(d); }
 
 // Immediate byte count for an opcode (0 if operand-less). 0xFF => bad opcode.
 u32 imm_size(Op o) noexcept {
