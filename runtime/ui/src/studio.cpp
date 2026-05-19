@@ -220,6 +220,15 @@ public:
         ImGuiIO& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        // Windows move ONLY by dragging their title bar — never by
+        // click-dragging the body. ImGui's default is "move from
+        // anywhere", which turns any in-panel drag (marquee-select or
+        // drag-place inside a viewport) into a window move; for a panel
+        // popped into its own OS window (ViewportsEnable, below) that
+        // drags the ENTIRE platform window instead of interacting with
+        // its contents. Title-bar-only move is also the expected
+        // pro-editor behaviour (UE / Unity / Blender all do this).
+        io.ConfigWindowsMoveFromTitleBarOnly = true;
         // Master window system: any panel can be dragged outside the main
         // window and become its own OS-native window. ImGui_ImplWin32 spawns
         // those secondary windows; the renderer backend creates a per-window
