@@ -194,7 +194,7 @@ void test_select() {
     vg::SelectInput in{};
     in.hierarchy = h.get();
     in.model     = M4::identity();
-    in.view      = M4::look_at({ c.x, c.y, c.z + r * 4.0f }, c, { 0, 1, 0 });
+    in.view      = M4::look_at({ c.x, c.y, c.z + r * 6.0f }, c, { 0, 1, 0 });
     in.proj      = M4::perspective(1.0f, 16.0f / 9.0f, 0.05f, 10000.0f);
     in.viewport_pixel_height = 1080.0f;
 
@@ -209,20 +209,48 @@ void test_select() {
         return drawn == o.stats.drawn_tri_count;
     };
 
-    // Permissive: a huge error tolerance ⇒ select never descends ⇒ the
-    // cut is small (root-ward). Strict + same camera ⇒ descends further.
+    // (1) cook() sets geometric_error = radius*0.5, so the descend test
+    // is pixel_error = 0.5*pixel_r (the radius cancels). A 1e9 tolerance
+    // ⇒ 0.5*pixel_r ≤ tol ALWAYS ⇒ the root never descends ⇒ the cut is
+    // EXACTLY the root cluster (index 0), in-frustum so nothing culled.
     vg::SelectOutput coarse;
     in.pixel_error_tolerance = 1.0e9f;
     vg::select(in, coarse);
-    CHECK(!coarse.cluster_ids.empty());                  // camera looks at it
+    CHECK(coarse.cluster_ids.size() == 1u);
+    CHECK(!coarse.cluster_ids.empty() && coarse.cluster_ids[0] == 0u);
+    CHECK(coarse.stats.cut_cluster_count == 1u);
+    CHECK(coarse.stats.culled_cluster_count == 0u);
     CHECK(valid_consistent(coarse));
+    CHECK(coarse.stats.drawn_tri_count == h->clusters[0].vertex_count / 3u);
+
+    // (2) Tolerance monotonicity: looser → tighter never shrinks the
+    // cut (a smaller pixel-error budget can only force MORE descent).
+    // A finite tolerance does NOT yield exactly the leaf set — small
+    // inner clusters have a small pixel_r so 0.5*pixel_r can fall below
+    // the budget and they emit; and at 6r some edge/leaf spheres still
+    // frustum-cull. So pin the robust, certain invariants: validity,
+    // S(1e9) ≤ S(1.0) ≤ S(1e-6) ≤ total, and that a tiny tolerance
+    // descends strictly past the root-only cut.
+    vg::SelectOutput mid;
+    in.pixel_error_tolerance = 1.0f;
+    vg::select(in, mid);
+    CHECK(valid_consistent(mid));
 
     vg::SelectOutput fine;
     in.pixel_error_tolerance = 1.0e-6f;
     vg::select(in, fine);
     CHECK(valid_consistent(fine));
-    CHECK(fine.cluster_ids.size() >= coarse.cluster_ids.size());  // monotone
+    CHECK(mid.cluster_ids.size()  >= coarse.cluster_ids.size());   // monotone
+    CHECK(fine.cluster_ids.size() >= mid.cluster_ids.size());      // in tol
+    CHECK(fine.cluster_ids.size() >  coarse.cluster_ids.size());   // descended
     CHECK(fine.cluster_ids.size() <= h->clusters.size());
+    // Emitted clusters partition the visible mesh: no cluster is also
+    // an ancestor/descendant of another in the cut (each appears once).
+    bool unique_ids = true;
+    for (usize i = 0; i < fine.cluster_ids.size(); ++i)
+        for (usize j = i + 1; j < fine.cluster_ids.size(); ++j)
+            if (fine.cluster_ids[i] == fine.cluster_ids[j]) unique_ids = false;
+    CHECK(unique_ids);
 
     // Determinism: identical input ⇒ identical cut.
     vg::SelectOutput fine2;
@@ -232,6 +260,21 @@ void test_select() {
         if (fine2.cluster_ids[i] != fine.cluster_ids[i]) same = false;
     CHECK(same);
     CHECK(fine2.stats.drawn_tri_count == fine.stats.drawn_tri_count);
+
+    // (3) Camera facing AWAY ⇒ the whole mesh sits behind the near
+    // plane ⇒ frustum-culled: empty cut, nothing drawn, ≥1 culled, but
+    // master_tri_count still reported (set before the BFS).
+    vg::SelectInput away = in;
+    const V3 eye{ c.x, c.y, c.z + r * 6.0f };
+    away.view = M4::look_at(eye, { eye.x, eye.y, eye.z + 1.0f }, { 0, 1, 0 });
+    away.pixel_error_tolerance = 1.0f;
+    vg::SelectOutput culled;
+    vg::select(away, culled);
+    CHECK(culled.cluster_ids.empty());
+    CHECK(culled.stats.cut_cluster_count == 0u);
+    CHECK(culled.stats.drawn_tri_count == 0u);
+    CHECK(culled.stats.culled_cluster_count >= 1u);
+    CHECK(culled.stats.master_tri_count == h->master_tri_count);
 }
 
 }  // namespace
