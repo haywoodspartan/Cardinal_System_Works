@@ -5,6 +5,7 @@
 
 #include <cardinal/core/algorithm.hpp>   // cardinal::min/sort/unique/clamp
 #include <cardinal/core/cctype.hpp>      // cardinal::tolower/isspace
+#include <cardinal/core/cmath.hpp>       // cardinal::isfinite
 #include <cardinal/core/cstdarg.hpp>     // cardinal::va_list (+ va_* macros)
 #include <cardinal/core/cstdio.hpp>      // cardinal::vsnprintf
 #include <cardinal/core/cstdlib.hpp>     // cardinal::strtoll/strtod
@@ -87,7 +88,12 @@ bool parse_int(const cardinal::string& s, i64& out) noexcept {
 bool parse_float(const cardinal::string& s, f64& out) noexcept {
     char* end = nullptr;
     const double v = cardinal::strtod(s.c_str(), &end);
-    if (end == s.c_str()) return false;
+    // strtod (per the C standard) also parses "nan"/"inf"/"infinity". A
+    // NaN would then DEFEAT apply_cvar's [min,max] clamp — `v < min` and
+    // `v > max` are both false for NaN (unordered) — writing NaN straight
+    // into live engine state. Treat any non-finite (or unparseable) input
+    // as a parse failure: caller keeps the old value and reports an error.
+    if (end == s.c_str() || !cardinal::isfinite(v)) return false;
     out = static_cast<f64>(v);
     return true;
 }

@@ -295,6 +295,48 @@ void test_cvar_set() {
     CHECK(has(L[0], "s.ro = true"));
 }
 
+// ---- cvar set: non-finite (nan/inf) rejected, not stored ----------
+// Regression: parse_float used strtod, which per the C standard parses
+// "nan"/"inf"/"infinity". A NaN then DEFEATS apply_cvar's [min,max]
+// clamp (v<min and v>max are both false for NaN — unordered), so
+// `set r.scale nan` wrote NaN straight into live engine state — the
+// exact "missing clamp / range violation reaches live state" failure
+// this suite exists to guard. Non-finite input must be rejected like
+// any other unparseable value: old value kept + an error printed.
+void test_cvar_nonfinite() {
+    reg().clear();
+    double ff = 0.5;
+    cv_float("s.f", "H", 0.0, 1.0, &ff);
+
+    std::vector<std::string> L;
+    cc::Output out([&L](const std::string& s) { L.push_back(s); });
+
+    // The legit finite path is unaffected.
+    reg().execute("s.f 0.25", out);              CHECK(ap_d(ff, 0.25));
+
+    // NaN forms: rejected, value UNCHANGED + still finite, error shown.
+    for (const char* bad : { "s.f nan", "s.f NAN", "s.f -nan",
+                             "s.f nan(1)" }) {
+        L.clear();
+        const double before = ff;
+        CHECK(reg().execute(bad, out) == true);  // matched the cvar
+        CHECK(ff == ff);                         // finite, not NaN
+        CHECK(ap_d(ff, before));                 // unchanged
+        CHECK(!L.empty() && has(L[0], "expects number"));
+    }
+    // Inf forms: also rejected (not silently clamped to max).
+    for (const char* bad : { "s.f inf", "s.f -inf", "s.f infinity" }) {
+        L.clear();
+        const double before = ff;
+        reg().execute(bad, out);
+        CHECK(ap_d(ff, before));                 // unchanged
+        CHECK(!L.empty() && has(L[0], "expects number"));
+    }
+    // A normal finite value still applies and clamps as before.
+    reg().execute("s.f 2.5", out);               CHECK(ap_d(ff, 1.0));
+    reg().execute("s.f 0.75", out);              CHECK(ap_d(ff, 0.75));
+}
+
 // ---- command dispatch ---------------------------------------------
 void test_command() {
     reg().clear();
@@ -448,6 +490,7 @@ int main() {
     test_complete();
     test_cvar_read();
     test_cvar_set();
+    test_cvar_nonfinite();
     test_command();
     test_builtins();
     test_unknown_empty();
