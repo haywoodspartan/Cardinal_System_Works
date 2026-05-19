@@ -87,6 +87,47 @@ grep -rlE --include='*.cpp' --include='*.hpp' --include='*.h' \
 Plus the build gate every pass enforced: `build.bat release msvc` clean
 under `/W4 /WX`, and all 56 `Cardinal_Test_*` regression suites green.
 
+## Untrusted-input trust boundaries
+
+A second conformance invariant, hardened in the same per-pass discipline
+(one boundary per pass: build-clean, 56/56, a deterministic hostile-input
+regression, committed+pushed):
+
+> Any size / count / length / offset that originates **outside** the
+> engine's trust boundary is validated in 64-bit (`usize`) arithmetic and
+> bounded against the real container/buffer **before** it drives an
+> allocation, `resize`/`reserve`, `memcpy`, or index. One named `kMax*`
+> constant is the single source of truth for each bound so a producer and
+> consumer cannot drift apart.
+
+| Boundary | Entry point | Guard | Commit |
+|---|---|---|---|
+| Cooked-asset codec | `asset::codec::decode_{texture,mesh,shader,material}` | size fields widened to `usize` (no 32-bit wrap) | `ab18470` |
+| Cooked-asset container | `cook::CookedAsset::deserialize` | `usize(kCookHeaderBytes)+size` | `58b3453` |
+| Pack archive index | `pack::Archive::open` | `reserve` ≤ `(sz−index_offset)/30` | `58b3453` |
+| Pack entry load | `pack::Archive::load_blocking`/`load_async` | `offset ≤ fsz && size ≤ fsz−offset` | `68d85e1` |
+| VM bytecode module | `vm::load` | `kMaxCodeLen` (16 MiB) in the descriptor scan | `e6f71a9` |
+| glTF accessor | `import` `read_accessor` | `cnt ≤ buf.size()`, `size_t` index | `431f5b8` |
+| glTF primitive indices | `import` mesh assembly | per-triangle range-check vs vertex count; UB-safe `float→idx` | `b8ffe90` |
+| UDP reorder buffer | `net` UDP `poll` | `kMaxReorderBuffered` (256) | `ccfbf7d` |
+| UDP peer table | `net` UDP `Connect` | `kMaxPeers` (4096) | `6158744` |
+| UDP unacked backlog | `net` UDP `send_to_` | `kMaxUnacked` (1024) + dead-peer reap | `83416f8` |
+| Recent-projects store | `project::RecentProjects::load` | `kMaxRecent` (16), shared with `add` | `8ed046c` |
+
+Audited and already defensive (verified, no change required): the OBJ
+importer (`emit()` bounds-checks every index with a zero fallback), the
+`net` UDP short-datagram path (`got < sizeof(PktHeader)` drop), the
+`vm::load` exact-size check (`len == header + table + body`), and the
+`serial` / `project` text parsers (every `find` is npos-guarded before
+`substr`). The in-process `net.cpp` loopback transport is fed only by the
+local app and is **not** a trust boundary.
+
+Every boundary above carries a deterministic regression that feeds
+hostile input (UINT32/64-max counts, negative / NaN, out-of-range
+indices, oversized stores) and asserts a clean bounded result — no
+crash, OOB read, or over-allocation — under the standing `/W4 /WX` +
+56/56 gate.
+
 ## Note on history
 
 An interim commit (`b2d53bb`) prematurely declared "Phase 1 COMPLETE"
