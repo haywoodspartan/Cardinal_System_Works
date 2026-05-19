@@ -68,6 +68,16 @@ constexpr usize kMaxReorderBuffered = 256;
 // real concurrent-player count; the app enforces its own lower limit.
 constexpr usize kMaxPeers = 4096;
 
+// Per-peer cap on un-acked reliable datagrams retained for retransmit.
+// A peer that connects then never ACKs (dead client or malicious) would
+// otherwise grow peer.unacked without bound — memory plus an O(n)
+// retransmit scan every poll(). Past the cap the peer is treated as
+// gone (condemned, then reaped on the next poll). Dropping the oldest
+// instead would stall the receiver's in-order delivery forever, so a
+// clean disconnect is the correct ReliableOrdered semantics. Far above
+// any healthy in-flight window.
+constexpr usize kMaxUnacked = 1024;
+
 enum class PktType : u8 {
     Connect = 0, ConnectAck = 1, Data = 2, Disconnect = 3, Ack = 4
 };
@@ -164,6 +174,21 @@ public:
     usize poll(cardinal::vector<NetEvent>& out) override {
         if (sock_ == INVALID_SOCKET) return 0;
         usize n = 0;
+        // Reap peers condemned since the last poll (unacked backlog blew
+        // kMaxUnacked → not acking → effectively gone). Done here, before
+        // any peers_ iteration for receive / retransmit, so no iterator
+        // hazard. remove_peer_ erases by id, so don't advance i on a hit.
+        for (usize i = 0; i < peers_.size(); ) {
+            if (peers_[i].dead) {
+                const PeerId did = peers_[i].id;
+                out.push_back(evt_(NetEventKind::Disconnected, did,
+                                   Channel::ReliableOrdered, nullptr, 0));
+                ++n;
+                remove_peer_(did);
+            } else {
+                ++i;
+            }
+        }
         char buf[2048];
         for (;;) {
             sockaddr_in from{};
@@ -345,6 +370,7 @@ private:
         // buffer for early arrivals. Seqs start at 1 (0 = unreliable).
         u32 in_expected{1};
         cardinal::vector<cardinal::pair<u32, cardinal::vector<char>>> reorder;
+        bool dead{false};        // unacked blew kMaxUnacked → reap next poll
     };
 
     bool open_socket_() {
@@ -371,6 +397,14 @@ private:
     }
 
     void send_to_(Peer& peer, Channel ch, const void* data, u32 size) {
+        if (peer.dead) return;                  // condemned; reaped next poll
+        if (ch == Channel::ReliableOrdered &&
+            peer.unacked.size() >= kMaxUnacked) {
+            // Backlog blew the cap — the peer isn't acking. Treat it as
+            // gone instead of buffering / O(n)-retransmitting forever.
+            peer.dead = true;
+            return;
+        }
         const u32 seq = (ch == Channel::ReliableOrdered)
                       ? ++peer.out_seq : 0u;
         cardinal::vector<char> pkt(sizeof(PktHeader) + size);
