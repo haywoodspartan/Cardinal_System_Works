@@ -29,7 +29,7 @@
 #include <cardinal/core/types.hpp>
 #include <cardinal/scene/math.hpp>
 
-#include <vector>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::render::geo {
 
@@ -67,10 +67,10 @@ struct Meshlet {
 };
 
 struct Mesh {
-    std::vector<Meshlet>     meshlets;
+    cardinal::vector<Meshlet>     meshlets;
     // Source data — each meshlet's index range refers into `indices`,
     // which references vertices in the consumer's own vertex buffer.
-    std::vector<u32>         indices;
+    cardinal::vector<u32>         indices;
 };
 
 // ---------------------------------------------------------------------------

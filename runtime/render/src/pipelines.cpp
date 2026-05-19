@@ -24,18 +24,17 @@
 #include <cardinal/render/tex.hpp>
 #include <cardinal/scene/renderer.hpp>
 
-#include <algorithm>
-#include <atomic>
-#include <memory>
-#include <unordered_map>
-#include <vector>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/atomic.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::render {
 
 namespace {
 
 // Find a knob by id. Returns nullptr if missing.
-Knob* knob_by(std::vector<Knob>& v, const char* id) {
+Knob* knob_by(cardinal::vector<Knob>& v, const char* id) {
     for (auto& k : v) if (k.id == id) return &k;
     return nullptr;
 }
@@ -78,7 +77,7 @@ public:
         return "Single-pass forward shading with CPU-transformed vertices. "
                "View-mode picker, tonemap, render-scale, optional fake-DLSS upscale.";
     }
-    std::vector<Knob>& knobs() noexcept override { return knobs_; }
+    cardinal::vector<Knob>& knobs() noexcept override { return knobs_; }
 
     void on_caps(const rhi::GpuCapabilities& caps) override {
         FeatureGate gate(caps);
@@ -131,8 +130,8 @@ public:
     }
 
 private:
-    static std::vector<Knob> make_knobs() {
-        std::vector<Knob> k;
+    static cardinal::vector<Knob> make_knobs() {
+        cardinal::vector<Knob> k;
 
         // ---- Visualisation -----------------------------------------------
         Knob vm; vm.id="view_mode"; vm.label="View Mode"; vm.group="Visualisation";
@@ -140,7 +139,7 @@ private:
         vm.kind = KnobKind::Enum;
         vm.enum_labels = {"Solid","Wireframe","Polygons","Heightmap","Normals","RTX Preview"};
         vm.e = 0;
-        k.push_back(std::move(vm));
+        k.push_back(cardinal::move(vm));
 
         // ---- Tonemapping --------------------------------------------------
         // Backed by the AlgoRegistry catalogue (7 operators today; user-
@@ -187,7 +186,7 @@ private:
         ex.tooltip = "Stops added before tonemapping. 0 = unmodified.";
         ex.kind = KnobKind::Float;
         ex.f_min = -8.0f; ex.f_max = 8.0f; ex.f_step = 0.1f; ex.f = 0.0f;
-        k.push_back(std::move(ex));
+        k.push_back(cardinal::move(ex));
 
         // ---- Performance --------------------------------------------------
         Knob rs; rs.id="render_scale"; rs.label="Render Scale"; rs.group="Performance";
@@ -195,24 +194,24 @@ private:
                      "0.5 = quarter-area framebuffer (much faster, blurrier).";
         rs.kind = KnobKind::Float;
         rs.f_min = 0.25f; rs.f_max = 2.0f; rs.f_step = 0.05f; rs.f = 1.0f;
-        k.push_back(std::move(rs));
+        k.push_back(cardinal::move(rs));
 
         Knob ms; ms.id="mesh_shaders"; ms.label="Use Mesh Shaders";
         ms.group="Performance";
         ms.tooltip = "Replace the legacy vertex pipeline with mesh + task shaders.";
         ms.kind = KnobKind::Bool; ms.b = false;
-        k.push_back(std::move(ms));
+        k.push_back(cardinal::move(ms));
 
         Knob vrs; vrs.id="vrs"; vrs.label="Variable Rate Shading";
         vrs.group="Performance";
         vrs.tooltip = "Reduce shading rate in low-detail screen regions.";
         vrs.kind = KnobKind::Bool; vrs.b = false;
-        k.push_back(std::move(vrs));
+        k.push_back(cardinal::move(vrs));
 
         Knob fp; fp.id="fp16_math"; fp.label="Prefer FP16 Math"; fp.group="Performance";
         fp.tooltip = "Pick min16 paths in shaders (Rapid Packed Math).";
         fp.kind = KnobKind::Bool; fp.b = true;
-        k.push_back(std::move(fp));
+        k.push_back(cardinal::move(fp));
 
         // ---- Upscaling / frame-gen ----------------------------------------
         Knob du; du.id="dlss_upscale"; du.label="DLSS Super Resolution";
@@ -221,14 +220,14 @@ private:
         du.kind = KnobKind::Enum;
         du.enum_labels = {"Off","Quality","Balanced","Performance","Ultra-Perf","DLAA"};
         du.e = 0;
-        k.push_back(std::move(du));
+        k.push_back(cardinal::move(du));
 
         Knob dg; dg.id="dlss_framegen"; dg.label="DLSS Frame Generation";
         dg.group="Upscaling";
         dg.tooltip = "Synthesise intermediate frames using the Optical Flow Accelerator. "
                      "Requires RTX 40-series.";
         dg.kind = KnobKind::Bool; dg.b = false;
-        k.push_back(std::move(dg));
+        k.push_back(cardinal::move(dg));
 
         // ---- Lighting / shadows -------------------------------------------
         Knob sh; sh.id="shadow_method"; sh.label="Shadow Method"; sh.group="Lighting";
@@ -236,25 +235,25 @@ private:
         sh.kind = KnobKind::Enum;
         sh.enum_labels = {"Off","PCF","PCSS","RTX (hardware)"};
         sh.e = 1;
-        k.push_back(std::move(sh));
+        k.push_back(cardinal::move(sh));
 
         Knob rs2; rs2.id="rt_shadows"; rs2.label="RT Hardware Shadows";
         rs2.group="Lighting";
         rs2.tooltip = "Use hardware ray tracing for sharp + contact-shadow accuracy.";
         rs2.kind = KnobKind::Bool; rs2.b = false;
-        k.push_back(std::move(rs2));
+        k.push_back(cardinal::move(rs2));
 
         Knob ssa; ssa.id="ssao_strength"; ssa.label="SSAO Strength"; ssa.group="Lighting";
         ssa.kind = KnobKind::Float;
         ssa.f_min = 0.0f; ssa.f_max = 2.0f; ssa.f_step = 0.05f; ssa.f = 0.6f;
-        k.push_back(std::move(ssa));
+        k.push_back(cardinal::move(ssa));
 
         // ---- Latency ------------------------------------------------------
         Knob rf; rf.id="reflex"; rf.label="NVIDIA Reflex";
         rf.group="Latency";
         rf.tooltip = "Drive the GPU just-in-time so PC latency stays low.";
         rf.kind = KnobKind::Bool; rf.b = true;
-        k.push_back(std::move(rf));
+        k.push_back(cardinal::move(rf));
 
         return k;
     }
@@ -268,8 +267,8 @@ private:
         }
     }
 
-    std::unique_ptr<scene::ForwardRenderer> renderer_;
-    std::vector<Knob>                       knobs_;
+    cardinal::unique_ptr<scene::ForwardRenderer> renderer_;
+    cardinal::vector<Knob>                       knobs_;
 };
 
 // ---------------------------------------------------------------------------
@@ -289,7 +288,7 @@ public:
         return "Debug-channel renderer for content authoring. "
                "Picks a single visualisation channel; no lighting, no post.";
     }
-    std::vector<Knob>& knobs() noexcept override { return knobs_; }
+    cardinal::vector<Knob>& knobs() noexcept override { return knobs_; }
 
     void on_caps(const rhi::GpuCapabilities&) override { /* nothing gated */ }
 
@@ -339,27 +338,27 @@ public:
     }
 
 private:
-    static std::vector<Knob> make_knobs() {
-        std::vector<Knob> k;
+    static cardinal::vector<Knob> make_knobs() {
+        cardinal::vector<Knob> k;
         Knob ch; ch.id="channel"; ch.label="Channel"; ch.group="Visualisation";
         ch.tooltip = "Which debug visualisation to render.";
         ch.kind = KnobKind::Enum;
         ch.enum_labels = {"Wireframe","Polygons (random)","Heightmap","Normals","RTX Preview"};
         ch.e = 0;
-        k.push_back(std::move(ch));
+        k.push_back(cardinal::move(ch));
 
         Knob bg; bg.id="show_grid"; bg.label="Show ground grid"; bg.group="Overlay";
         bg.kind = KnobKind::Bool; bg.b = true;
-        k.push_back(std::move(bg));
+        k.push_back(cardinal::move(bg));
 
         Knob ax; ax.id="show_axes"; ax.label="Show world axes"; ax.group="Overlay";
         ax.kind = KnobKind::Bool; ax.b = true;
-        k.push_back(std::move(ax));
+        k.push_back(cardinal::move(ax));
         return k;
     }
 
-    std::unique_ptr<scene::ForwardRenderer> renderer_;
-    std::vector<Knob>                       knobs_;
+    cardinal::unique_ptr<scene::ForwardRenderer> renderer_;
+    cardinal::vector<Knob>                       knobs_;
 };
 
 // ---------------------------------------------------------------------------
@@ -397,7 +396,7 @@ public:
                "RHI adds the primitive — until then the surviving clusters drive "
                "the same forward pass as the baseline.";
     }
-    std::vector<Knob>& knobs() noexcept override { return knobs_; }
+    cardinal::vector<Knob>& knobs() noexcept override { return knobs_; }
 
     void on_caps(const rhi::GpuCapabilities& caps) override {
         FeatureGate gate(caps);
@@ -494,14 +493,14 @@ public:
     }
 
 private:
-    static std::vector<Knob> make_knobs() {
-        std::vector<Knob> k;
+    static cardinal::vector<Knob> make_knobs() {
+        cardinal::vector<Knob> k;
 
         Knob vm; vm.id="view_mode"; vm.label="View Mode"; vm.group="Visualisation";
         vm.kind = KnobKind::Enum;
         vm.enum_labels = {"Solid","Wireframe","Polygons","Heightmap","Normals","RTX Preview"};
         vm.e = 0;
-        k.push_back(std::move(vm));
+        k.push_back(cardinal::move(vm));
 
         // ---- Cluster culling -----------------------------------------
         Knob cc; cc.id="enable_cluster_culling"; cc.label="Cluster culling";
@@ -510,7 +509,7 @@ private:
                      "When disabled, every cluster passes through (useful to "
                      "compare Drawn vs Culled in the stats panel).";
         cc.kind = KnobKind::Bool; cc.b = true;
-        k.push_back(std::move(cc));
+        k.push_back(cardinal::move(cc));
 
         Knob lod; lod.id="enable_lod"; lod.label="Distance LOD";
         lod.group="Clusters";
@@ -518,7 +517,7 @@ private:
                       "LOD selection is a stand-in for the Nanite-style hierarchical "
                       "DAG that lands later.";
         lod.kind = KnobKind::Bool; lod.b = true;
-        k.push_back(std::move(lod));
+        k.push_back(cardinal::move(lod));
 
         Knob hms; hms.id="hw_mesh_shaders"; hms.label="Hardware Mesh Shader Dispatch";
         hms.group="Clusters";
@@ -526,7 +525,7 @@ private:
                       "Currently a forward-looking knob — toggling it has no "
                       "effect until the RHI adds the mesh-shader primitive.";
         hms.kind = KnobKind::Bool; hms.b = false;
-        k.push_back(std::move(hms));
+        k.push_back(cardinal::move(hms));
 
         // Cluster cull algorithm — registry-backed so user / plugin culling
         // strategies (e.g. occlusion + Hi-Z) appear here without recompile.
@@ -543,7 +542,7 @@ private:
         tq.kind = KnobKind::Enum;
         tq.enum_labels = {"Off","Low (8x)","Medium (16x)","High (32x)"};
         tq.e = 1;
-        k.push_back(std::move(tq));
+        k.push_back(cardinal::move(tq));
 
         // Tessellation policy — algo-backed.
         k.push_back(make_algo_knob("tess_policy_algo", "Tessellation policy",
@@ -559,7 +558,7 @@ private:
         aq.kind = KnobKind::Enum;
         aq.enum_labels = {"Off (1x)","Low (2x)","Medium (4x)","High (8x)","Ultra (16x)"};
         aq.e = 4;
-        k.push_back(std::move(aq));
+        k.push_back(cardinal::move(aq));
 
         Knob bc; bc.id="texture_compression"; bc.label="Block Compression";
         bc.group="Textures";
@@ -568,7 +567,7 @@ private:
         bc.kind = KnobKind::Enum;
         bc.enum_labels = {"None","BC1","BC3","BC5","BC6H (HDR)","BC7","ASTC 4x4","ASTC 6x6","ASTC 8x8"};
         bc.e = 5;
-        k.push_back(std::move(bc));
+        k.push_back(cardinal::move(bc));
 
         Knob ts; ts.id="streaming_budget_mb"; ts.label="Streaming Budget (MB)";
         ts.group="Textures";
@@ -576,27 +575,27 @@ private:
                      "drops top mips across the residency set until it fits.";
         ts.kind = KnobKind::Int;
         ts.i_min = 64; ts.i_max = 16384; ts.i = 2048;
-        k.push_back(std::move(ts));
+        k.push_back(cardinal::move(ts));
 
         // ---- Shader optimisations ------------------------------------
         Knob fp; fp.id="prefer_fp16"; fp.label="Prefer FP16 (Rapid Packed Math)";
         fp.group="Shader Optimisation";
         fp.kind = KnobKind::Bool; fp.b = true;
-        k.push_back(std::move(fp));
+        k.push_back(cardinal::move(fp));
 
         Knob wo; wo.id="wave_intrinsics"; wo.label="Wave intrinsics";
         wo.group="Shader Optimisation";
         wo.tooltip = "Use SM 6.0 wave reductions (WaveActiveSum/Max/Min) for "
                      "in-shader compaction + lighting accumulation.";
         wo.kind = KnobKind::Bool; wo.b = true;
-        k.push_back(std::move(wo));
+        k.push_back(cardinal::move(wo));
 
         Knob bn; bn.id="bindless"; bn.label="Bindless descriptor arrays";
         bn.group="Shader Optimisation";
         bn.tooltip = "Treat all textures as a single huge descriptor array indexed "
                      "by material ID. Drops binding overhead to zero.";
         bn.kind = KnobKind::Bool; bn.b = true;
-        k.push_back(std::move(bn));
+        k.push_back(cardinal::move(bn));
 
         // Compute precision — the meshlet pipeline benefits a lot from
         // FP4/FP8 because the per-cluster transformed-vertex storage is
@@ -611,7 +610,7 @@ private:
         // ---- RT --------------------------------------------------------
         Knob rs; rs.id="rt_shadows"; rs.label="RT Hardware Shadows";
         rs.group="Lighting"; rs.kind = KnobKind::Bool; rs.b = false;
-        k.push_back(std::move(rs));
+        k.push_back(cardinal::move(rs));
 
         return k;
     }
@@ -648,7 +647,7 @@ private:
 
             // Our scene::Mesh today is a non-indexed triangle soup; build a
             // throwaway identity index list to feed the meshlet generator.
-            std::vector<u32> indices(n);
+            cardinal::vector<u32> indices(n);
             for (u32 i = 0; i < n; ++i) indices[i] = i;
 
             geo::Mesh m = geo::build_meshlets(
@@ -658,13 +657,13 @@ private:
             cardinal::log::infof("render",
                 "ForwardClustered: meshlet '%s' → %u clusters",
                 e.mesh->name().c_str(), static_cast<u32>(m.meshlets.size()));
-            meshlets_.emplace(e.mesh.get(), std::move(m));
+            meshlets_.emplace(e.mesh.get(), cardinal::move(m));
         }
     }
 
-    std::unique_ptr<scene::ForwardRenderer>          renderer_;
-    std::vector<Knob>                                knobs_;
-    std::unordered_map<const scene::Mesh*, geo::Mesh> meshlets_;
+    cardinal::unique_ptr<scene::ForwardRenderer>          renderer_;
+    cardinal::vector<Knob>                                knobs_;
+    cardinal::unordered_map<const scene::Mesh*, geo::Mesh> meshlets_;
     FrameStats                                       last_stats_{};
 };
 
@@ -674,17 +673,17 @@ private:
 class RegistryImpl final : public Registry {
 public:
     RegistryImpl(rhi::Device& dev, rhi::Swapchain& sw) {
-        pipelines_.push_back(std::make_unique<ForwardBaseline>  (dev, sw));
-        pipelines_.push_back(std::make_unique<DebugVisualizer>  (dev, sw));
-        pipelines_.push_back(std::make_unique<ForwardClustered> (dev, sw));
+        pipelines_.push_back(cardinal::make_unique<ForwardBaseline>  (dev, sw));
+        pipelines_.push_back(cardinal::make_unique<DebugVisualizer>  (dev, sw));
+        pipelines_.push_back(cardinal::make_unique<ForwardClustered> (dev, sw));
         for (auto& p : pipelines_) p->on_caps(dev.capabilities());
         cardinal::log::infof("render",
             "Pipeline registry online — %zu pipelines, default '%s'",
             pipelines_.size(), pipelines_[0]->name());
     }
 
-    std::vector<Pipeline*> all() override {
-        std::vector<Pipeline*> out; out.reserve(pipelines_.size());
+    cardinal::vector<Pipeline*> all() override {
+        cardinal::vector<Pipeline*> out; out.reserve(pipelines_.size());
         for (auto& p : pipelines_) out.push_back(p.get());
         return out;
     }
@@ -714,14 +713,14 @@ public:
     }
 
 private:
-    std::vector<std::unique_ptr<Pipeline>> pipelines_;
+    cardinal::vector<cardinal::unique_ptr<Pipeline>> pipelines_;
     size_t                                 active_idx_{0};
 };
 
 }  // namespace
 
-std::unique_ptr<Registry> Registry::create(rhi::Device& dev, rhi::Swapchain& sw) {
-    return std::make_unique<RegistryImpl>(dev, sw);
+cardinal::unique_ptr<Registry> Registry::create(rhi::Device& dev, rhi::Swapchain& sw) {
+    return cardinal::make_unique<RegistryImpl>(dev, sw);
 }
 
 }  // namespace cardinal::render

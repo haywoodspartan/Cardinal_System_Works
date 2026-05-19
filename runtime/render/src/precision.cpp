@@ -13,9 +13,9 @@
 // =============================================================================
 #include <cardinal/render/precision.hpp>
 
-#include <cmath>
-#include <cstring>
-#include <limits>
+#include <cardinal/core/cmath.hpp>
+#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/limits.hpp>
 
 namespace cardinal::render::precision {
 
@@ -51,7 +51,7 @@ u32 format_lane_count_in_dword(Format f) noexcept {
 
 float format_max_finite(Format f) noexcept {
     switch (f) {
-        case Format::FP32:     return std::numeric_limits<float>::max();
+        case Format::FP32:     return cardinal::numeric_limits<float>::max();
         case Format::FP16:     return 65504.0f;
         case Format::FP8_E4M3: return 448.0f;
         case Format::FP8_E5M2: return 57344.0f;
@@ -63,7 +63,7 @@ float format_max_finite(Format f) noexcept {
 
 float format_smallest_subnormal(Format f) noexcept {
     switch (f) {
-        case Format::FP32:     return std::numeric_limits<float>::denorm_min();
+        case Format::FP32:     return cardinal::numeric_limits<float>::denorm_min();
         case Format::FP16:     return 5.96046448e-8f;        // 2^-24
         case Format::FP8_E4M3: return 1.0f / 512.0f;         // 2^-9
         case Format::FP8_E5M2: return 1.0f / 65536.0f;       // 2^-16
@@ -73,12 +73,12 @@ float format_smallest_subnormal(Format f) noexcept {
     return 0.0f;
 }
 
-// Bitcast helpers (constexpr-friendly via std::memcpy).
+// Bitcast helpers (constexpr-friendly via cardinal::memcpy).
 inline u32 fp32_bits(float f) noexcept {
-    u32 u; std::memcpy(&u, &f, 4); return u;
+    u32 u; cardinal::memcpy(&u, &f, 4); return u;
 }
 inline float bits_fp32(u32 u) noexcept {
-    float f; std::memcpy(&f, &u, 4); return f;
+    float f; cardinal::memcpy(&f, &u, 4); return f;
 }
 
 // ---------------------------------------------------------------------------
@@ -266,22 +266,22 @@ inline float dequantise_packed(Spec s, u32 v) noexcept {
         if (m_pk == 0) return sign ? -0.0f : 0.0f;
         // Subnormal: value = (-1)^s * 2^(1 - bias) * (m / 2^mant_bits)
         const float frac = (float)m_pk / (float)(1u << s.mant_bits);
-        const float val  = std::ldexp(frac, 1 - s.bias);
+        const float val  = cardinal::ldexp(frac, 1 - s.bias);
         return sign ? -val : val;
     }
     if (e_pk == max_exp_packed) {
         if (s.has_inf) {
             if (m_pk == 0) return sign
-                ? -std::numeric_limits<float>::infinity()
-                :  std::numeric_limits<float>::infinity();
-            return std::numeric_limits<float>::quiet_NaN();
+                ? -cardinal::numeric_limits<float>::infinity()
+                :  cardinal::numeric_limits<float>::infinity();
+            return cardinal::numeric_limits<float>::quiet_NaN();
         }
         // E4M3: full-exp + max-mant is NaN; otherwise normal.
         if (m_pk == ((1u << s.mant_bits) - 1u))
-            return std::numeric_limits<float>::quiet_NaN();
+            return cardinal::numeric_limits<float>::quiet_NaN();
     }
     const float frac = 1.0f + (float)m_pk / (float)(1u << s.mant_bits);
-    const float val  = std::ldexp(frac, (int)e_pk - s.bias);
+    const float val  = cardinal::ldexp(frac, (int)e_pk - s.bias);
     return sign ? -val : val;
 }
 }  // namespace
@@ -328,13 +328,13 @@ u32 pack8_fp4_e3m0(const float v[8]) noexcept {
     for (int i = 0; i < 8; ++i) r |= ((u32)fp32_to_fp4_e3m0(v[i]) & 0xFu) << (i * 4);
     return r;
 }
-std::array<float, 8> unpack8_fp4_e2m1(u32 p) noexcept {
-    std::array<float, 8> r{};
+cardinal::array<float, 8> unpack8_fp4_e2m1(u32 p) noexcept {
+    cardinal::array<float, 8> r{};
     for (int i = 0; i < 8; ++i) r[i] = fp4_e2m1_to_fp32((u8)((p >> (i * 4)) & 0xFu));
     return r;
 }
-std::array<float, 8> unpack8_fp4_e3m0(u32 p) noexcept {
-    std::array<float, 8> r{};
+cardinal::array<float, 8> unpack8_fp4_e3m0(u32 p) noexcept {
+    cardinal::array<float, 8> r{};
     for (int i = 0; i < 8; ++i) r[i] = fp4_e3m0_to_fp32((u8)((p >> (i * 4)) & 0xFu));
     return r;
 }

@@ -32,8 +32,7 @@
 #include <cardinal/scene/light.hpp>
 #include <cardinal/scene/scene.hpp>
 
-#include <string>
-#include <vector>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::render {
 
@@ -48,10 +47,10 @@ enum class KnobKind : u32 {
 };
 
 struct Knob {
-    std::string  id;                        // stable identifier ("tonemap")
-    std::string  label;                     // human-readable
-    std::string  group;                     // "Lighting" / "AA" / "Performance"
-    std::string  tooltip;                   // longer description
+    cardinal::string  id;                        // stable identifier ("tonemap")
+    cardinal::string  label;                     // human-readable
+    cardinal::string  group;                     // "Lighting" / "AA" / "Performance"
+    cardinal::string  tooltip;                   // longer description
     KnobKind     kind{KnobKind::Bool};
 
     // Storage. Only one slot is meaningful per knob (chosen by `kind`).
@@ -66,12 +65,12 @@ struct Knob {
     float        f_step{0.01f};
 
     // Enum labels (one per option). Index into them via `e`.
-    std::vector<std::string> enum_labels;
+    cardinal::vector<cardinal::string> enum_labels;
 
     // Availability — set by Pipeline::on_caps. When unavailable the panel
     // greys the knob out and shows the reason as a tooltip.
     bool         available{true};
-    std::string  unavailable_reason;
+    cardinal::string  unavailable_reason;
 };
 
 // ---------------------------------------------------------------------------
@@ -129,7 +128,7 @@ public:
     virtual const char* description()  const noexcept = 0;
 
     // Mutable so the editor can write directly. Persistent across switches.
-    virtual std::vector<Knob>& knobs() noexcept = 0;
+    virtual cardinal::vector<Knob>& knobs() noexcept = 0;
 
     // Called once after the device + swapchain are ready (and again if the
     // user hot-swaps the GPU someday). Pipelines mark each knob's
@@ -165,13 +164,13 @@ protected:
 // ---------------------------------------------------------------------------
 class Registry {
 public:
-    static std::unique_ptr<Registry> create(rhi::Device& dev,
+    static cardinal::unique_ptr<Registry> create(rhi::Device& dev,
                                             rhi::Swapchain& sw);
     virtual ~Registry() = default;
     Registry(const Registry&) = delete;
     Registry& operator=(const Registry&) = delete;
 
-    virtual std::vector<Pipeline*> all() = 0;
+    virtual cardinal::vector<Pipeline*> all() = 0;
     virtual Pipeline*              active() = 0;
     virtual PipelineId             active_id() const noexcept = 0;
     virtual void                   set_active(PipelineId id) = 0;
@@ -215,7 +214,7 @@ enum class Feature : u32 {
 
 struct FeatureStatus {
     bool        available{false};
-    std::string reason;        // when unavailable, why
+    cardinal::string reason;        // when unavailable, why
 };
 
 class FeatureGate {

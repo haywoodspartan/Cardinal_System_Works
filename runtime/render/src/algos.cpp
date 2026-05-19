@@ -13,11 +13,11 @@
 #include <cardinal/core/log.hpp>
 #include <cardinal/render/precision.hpp>
 
-#include <array>
-#include <cmath>
-#include <mutex>
-#include <unordered_map>
-#include <vector>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cmath.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/thread.hpp>
+#include <cardinal/core/utility.hpp>
 
 namespace cardinal::render::algo {
 
@@ -63,7 +63,7 @@ const char* category_description(CategoryId id) noexcept {
 namespace {
 
 // Common helper math ---------------------------------------------------------
-inline float saturate(float x) noexcept { return std::min(1.0f, std::max(0.0f, x)); }
+inline float saturate(float x) noexcept { return cardinal::min(1.0f, cardinal::max(0.0f, x)); }
 inline void  saturate3(float* c)  noexcept { for (int i=0;i<3;++i) c[i] = saturate(c[i]); }
 
 // Tonemap operators (linear in / display out, normalised so 1.0 input → ~1.0 output).
@@ -115,17 +115,17 @@ void tonemap_aces_full(const AlgoIn& in, AlgoOut& out) {
 // Timothy Lottes 2016 — perceptual roll-off with adjustable shoulder.
 void tonemap_lottes(const AlgoIn& in, AlgoOut& out) {
     constexpr float a = 1.6f, d = 0.977f, hdr_max = 8.0f, mid_in = 0.18f, mid_out = 0.267f;
-    const float ad   = std::pow(hdr_max, a*d) - std::pow(mid_in, a*d);
-    const float bb   = -std::pow(mid_in, a) + (std::pow(hdr_max, a*d) * mid_out -
-                                               std::pow(hdr_max, a) * mid_out * std::pow(mid_in, a*d) /
-                                               (std::pow(mid_in, a) * mid_out)) /
-                                              (std::pow(hdr_max, a*d) - std::pow(mid_in, a*d));
-    const float c    = (std::pow(hdr_max, a*d) * mid_out - std::pow(hdr_max, a) * mid_out *
-                        std::pow(mid_in, a*d) / (std::pow(mid_in, a) * mid_out)) / ad;
+    const float ad   = cardinal::pow(hdr_max, a*d) - cardinal::pow(mid_in, a*d);
+    const float bb   = -cardinal::pow(mid_in, a) + (cardinal::pow(hdr_max, a*d) * mid_out -
+                                               cardinal::pow(hdr_max, a) * mid_out * cardinal::pow(mid_in, a*d) /
+                                               (cardinal::pow(mid_in, a) * mid_out)) /
+                                              (cardinal::pow(hdr_max, a*d) - cardinal::pow(mid_in, a*d));
+    const float c    = (cardinal::pow(hdr_max, a*d) * mid_out - cardinal::pow(hdr_max, a) * mid_out *
+                        cardinal::pow(mid_in, a*d) / (cardinal::pow(mid_in, a) * mid_out)) / ad;
     for (int i = 0; i < 3; ++i) {
-        const float x = std::max(in.color3[i], 0.0f);
-        const float pa  = std::pow(x, a);
-        out.color3[i] = saturate(pa / (std::pow(pa, d) * bb + c));
+        const float x = cardinal::max(in.color3[i], 0.0f);
+        const float pa  = cardinal::pow(x, a);
+        out.color3[i] = saturate(pa / (cardinal::pow(pa, d) * bb + c));
     }
 }
 
@@ -139,8 +139,8 @@ void hash_wang(const AlgoIn& in, AlgoOut& out) {
     v ^= (v >> 15);
     const float f = static_cast<float>(v & 0xFFFFFFu) / 16777216.0f;
     out.unit3[0] = f;
-    out.unit3[1] = std::fmod(f * 1.6180339887f, 1.0f);
-    out.unit3[2] = std::fmod(f * 2.5034518f, 1.0f);
+    out.unit3[1] = cardinal::fmod(f * 1.6180339887f, 1.0f);
+    out.unit3[2] = cardinal::fmod(f * 2.5034518f, 1.0f);
 }
 void hash_pcg(const AlgoIn& in, AlgoOut& out) {
     // Melissa O'Neill's PCG single-step
@@ -149,15 +149,15 @@ void hash_pcg(const AlgoIn& in, AlgoOut& out) {
     u32 v     = (word >> 22u) ^ word;
     const float f = static_cast<float>(v & 0xFFFFFFu) / 16777216.0f;
     out.unit3[0] = f;
-    out.unit3[1] = std::fmod(f * 1.6180339887f, 1.0f);
-    out.unit3[2] = std::fmod(f * 2.5034518f, 1.0f);
+    out.unit3[1] = cardinal::fmod(f * 1.6180339887f, 1.0f);
+    out.unit3[2] = cardinal::fmod(f * 2.5034518f, 1.0f);
 }
 void hash_hash13(const AlgoIn& in, AlgoOut& out) {
     // 3D Hash13 — float xyz seed (we fake from u32) → 1 float
     const float x = static_cast<float>((in.seed >> 0)  & 0xFF);
     const float y = static_cast<float>((in.seed >> 8)  & 0xFF);
     const float z = static_cast<float>((in.seed >> 16) & 0xFF);
-    auto frac = [](float v) { return v - std::floor(v); };
+    auto frac = [](float v) { return v - cardinal::floor(v); };
     auto fract = [&](float v) {
         return frac(v * 0.1031f);
     };
@@ -176,7 +176,7 @@ void hash_ign(const AlgoIn& in, AlgoOut& out) {
     // seed>>16) as the (x,y) screen coordinates.
     const float x = static_cast<float>(in.seed & 0xFFFFu);
     const float y = static_cast<float>(in.seed >> 16);
-    const float f = std::fmod(52.9829189f * std::fmod(0.06711056f*x + 0.00583715f*y, 1.0f), 1.0f);
+    const float f = cardinal::fmod(52.9829189f * cardinal::fmod(0.06711056f*x + 0.00583715f*y, 1.0f), 1.0f);
     out.unit3[0] = f; out.unit3[1] = f; out.unit3[2] = f;
 }
 
@@ -233,17 +233,17 @@ void cull_full_hiz  (const AlgoIn&, AlgoOut& o) { o.flag = 1; }   // future
 
 // Tessellation factor — these are used CPU-side for LOD selection.
 void tess_distance  (const AlgoIn& in, AlgoOut& o) {
-    const float d = std::max(in.distance, 0.001f);
-    o.factor = std::min(64.0f, std::max(1.0f, 16.0f / d));
+    const float d = cardinal::max(in.distance, 0.001f);
+    o.factor = cardinal::min(64.0f, cardinal::max(1.0f, 16.0f / d));
 }
 void tess_edge      (const AlgoIn& in, AlgoOut& o) {
-    o.factor = std::min(64.0f, std::max(1.0f, in.edge_pixels / 16.0f));
+    o.factor = cardinal::min(64.0f, cardinal::max(1.0f, in.edge_pixels / 16.0f));
 }
 void tess_phong     (const AlgoIn& in, AlgoOut& o) {
     // Same as distance but boosted for curvature. The actual phong blend
     // happens shader-side from per-vertex normals.
-    const float d = std::max(in.distance, 0.001f);
-    o.factor = std::min(64.0f, std::max(1.0f, 24.0f / d));
+    const float d = cardinal::max(in.distance, 0.001f);
+    o.factor = cardinal::min(64.0f, cardinal::max(1.0f, 24.0f / d));
 }
 
 // Sampling patterns — produce a 2D point in [0,1] for sample index `index`.
@@ -315,10 +315,10 @@ void sample_blue_noise(const AlgoIn& in, AlgoOut& out) {
 // Normal encoding — input n on the unit sphere → packed (x, y, 0).
 void normal_octa(const AlgoIn& in, AlgoOut& out) {
     float n[3] = { in.unit3[0], in.unit3[1], in.unit3[2] };
-    const float a = std::abs(n[0]) + std::abs(n[1]) + std::abs(n[2]);
+    const float a = cardinal::abs(n[0]) + cardinal::abs(n[1]) + cardinal::abs(n[2]);
     if (a > 0.0f) for (int i = 0; i < 3; ++i) n[i] /= a;
     if (n[2] < 0.0f) {
-        float ax = std::abs(n[0]), ay = std::abs(n[1]);
+        float ax = cardinal::abs(n[0]), ay = cardinal::abs(n[1]);
         const float sx = (n[0] >= 0.0f) ? 1.0f : -1.0f;
         const float sy = (n[1] >= 0.0f) ? 1.0f : -1.0f;
         n[0] = (1.0f - ay) * sx;
@@ -338,7 +338,7 @@ void normal_stereo(const AlgoIn& in, AlgoOut& out) {
 }
 void normal_spheremap(const AlgoIn& in, AlgoOut& out) {
     // Lambert azimuthal equal-area projection — the original GBuffer impl.
-    const float k = std::sqrt(8.0f * (in.unit3[2] + 1.0f) > 0.0f
+    const float k = cardinal::sqrt(8.0f * (in.unit3[2] + 1.0f) > 0.0f
                               ? 8.0f * (in.unit3[2] + 1.0f) : 1e-6f);
     out.color3[0] = (in.unit3[0] / k) + 0.5f;
     out.color3[1] = (in.unit3[1] / k) + 0.5f;
@@ -351,12 +351,12 @@ void normal_spheremap(const AlgoIn& in, AlgoOut& out) {
 // AlgoRegistry::Impl
 // ---------------------------------------------------------------------------
 struct AlgoRegistry::Impl {
-    std::array<std::vector<Algo>, static_cast<size_t>(CategoryId::Count_)> by_cat;
-    std::mutex mu;
+    cardinal::array<cardinal::vector<Algo>, static_cast<size_t>(CategoryId::Count_)> by_cat;
+    cardinal::mutex mu;
 };
 
-AlgoRegistry::AlgoRegistry() : p_(std::make_unique<Impl>()) {
-    auto reg = [&](Algo a) { register_algo(std::move(a)); };
+AlgoRegistry::AlgoRegistry() : p_(cardinal::make_unique<Impl>()) {
+    auto reg = [&](Algo a) { register_algo(cardinal::move(a)); };
 
     // ---- Tonemap -----------------------------------------------------
     reg({CategoryId::Tonemap, "linear",         "Linear (clamp)",
@@ -519,7 +519,7 @@ AlgoRegistry& AlgoRegistry::instance() {
 
 bool AlgoRegistry::register_algo(Algo a) {
     if (a.category >= CategoryId::Count_) return false;
-    std::lock_guard lk(p_->mu);
+    cardinal::lock_guard lk(p_->mu);
     auto& list = p_->by_cat[static_cast<size_t>(a.category)];
     for (const auto& existing : list) {
         if (existing.id == a.id) {
@@ -534,12 +534,12 @@ bool AlgoRegistry::register_algo(Algo a) {
             "registered user algo '%s' (%s)", a.label.c_str(),
             category_name(a.category));
     }
-    list.push_back(std::move(a));
+    list.push_back(cardinal::move(a));
     return true;
 }
 
-const std::vector<Algo>& AlgoRegistry::list(CategoryId c) const {
-    static const std::vector<Algo> empty;
+const cardinal::vector<Algo>& AlgoRegistry::list(CategoryId c) const {
+    static const cardinal::vector<Algo> empty;
     if (c >= CategoryId::Count_) return empty;
     return p_->by_cat[static_cast<size_t>(c)];
 }
@@ -556,8 +556,8 @@ const Algo* AlgoRegistry::default_for(CategoryId c) const {
     return l.empty() ? nullptr : &l.front();
 }
 
-std::vector<std::string> labels_for(CategoryId c) {
-    std::vector<std::string> out;
+cardinal::vector<cardinal::string> labels_for(CategoryId c) {
+    cardinal::vector<cardinal::string> out;
     for (const auto& a : AlgoRegistry::instance().list(c)) out.push_back(a.label);
     return out;
 }

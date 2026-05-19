@@ -31,10 +31,7 @@
 
 #include <cardinal/core/types.hpp>
 #include <cardinal/core/memory.hpp>
-#include <functional>
-#include <memory>
-#include <string>
-#include <vector>
+#include <cardinal/core/containers.hpp>
 
 namespace cardinal::render::algo {
 
@@ -88,14 +85,14 @@ struct AlgoOut {
 // Most algorithms fit a single CPU functor signature. Cluster-cull uses
 // a different shape — declared separately to avoid forcing the rest into
 // a more awkward variant.
-using AlgoFn = std::function<void(const AlgoIn&, AlgoOut&)>;
+using AlgoFn = cardinal::function<void(const AlgoIn&, AlgoOut&)>;
 
 struct Algo {
     CategoryId  category{CategoryId::Tonemap};
-    std::string id;            // "aces_approx", "wang_hash", ...
-    std::string label;         // "ACES (approx)"
-    std::string tooltip;
-    std::string hlsl_function; // empty if no GPU-side counterpart
+    cardinal::string id;            // "aces_approx", "wang_hash", ...
+    cardinal::string label;         // "ACES (approx)"
+    cardinal::string tooltip;
+    cardinal::string hlsl_function; // empty if no GPU-side counterpart
     AlgoFn      cpu_fn;        // empty if no CPU-side reference impl
     bool        is_default{false};
     bool        is_user{false};// true when registered after engine init
@@ -116,7 +113,7 @@ public:
 
     // Read-only enumeration of every algorithm in a category, in
     // insertion order (the default impl is always first).
-    const std::vector<Algo>& list(CategoryId c) const;
+    const cardinal::vector<Algo>& list(CategoryId c) const;
 
     // Lookup by id (within a category). Returns nullptr when missing.
     const Algo* find(CategoryId c, const char* id) const;
@@ -130,14 +127,14 @@ private:
     AlgoRegistry& operator=(const AlgoRegistry&) = delete;
 
     struct Impl;
-    std::unique_ptr<Impl> p_;
+    cardinal::unique_ptr<Impl> p_;
 };
 
 // ---------------------------------------------------------------------------
 // Helpers — turn a category into a Knob-friendly enum_labels list. Pipelines
 // call these to populate their Knob lists at construction time.
 // ---------------------------------------------------------------------------
-std::vector<std::string> labels_for(CategoryId c);
+cardinal::vector<cardinal::string> labels_for(CategoryId c);
 int                      default_index_for(CategoryId c);
 const char*              hlsl_for_choice(CategoryId c, int idx);
 const char*              id_for_choice  (CategoryId c, int idx);

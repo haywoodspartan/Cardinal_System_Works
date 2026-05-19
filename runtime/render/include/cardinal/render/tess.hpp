@@ -25,8 +25,8 @@
 
 #include <cardinal/core/types.hpp>
 
-#include <algorithm>
-#include <cmath>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cmath.hpp>
 
 namespace cardinal::render::tess {
 
@@ -53,7 +53,7 @@ inline float factor_distance(float camera_to_patch_distance,
     const float d = (camera_to_patch_distance > 0.001f)
                   ? camera_to_patch_distance : 0.001f;
     const float f = scale / d;
-    return std::clamp(f, min_factor, max_factor);
+    return cardinal::clamp(f, min_factor, max_factor);
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +69,7 @@ inline float factor_edge(float edge_length_pixels,
 {
     if (target_pixels_per_segment < 1.0f) target_pixels_per_segment = 1.0f;
     const float f = edge_length_pixels / target_pixels_per_segment;
-    return std::clamp(f, min_factor, max_factor);
+    return cardinal::clamp(f, min_factor, max_factor);
 }
 
 // ---------------------------------------------------------------------------
@@ -80,8 +80,8 @@ inline float factor_edge(float edge_length_pixels,
 inline float phong_blend_weight(float n_dot_n_neighbour) noexcept {
     // 0 when normals coincide (flat patch — no extra detail needed),
     // 1 when normals are perpendicular (sharp curve — full PN smoothing).
-    const float k = 1.0f - std::abs(n_dot_n_neighbour);
-    return std::clamp(k, 0.0f, 1.0f);
+    const float k = 1.0f - cardinal::abs(n_dot_n_neighbour);
+    return cardinal::clamp(k, 0.0f, 1.0f);
 }
 
 // ---------------------------------------------------------------------------

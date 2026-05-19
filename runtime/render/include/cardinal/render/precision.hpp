@@ -38,8 +38,8 @@
 
 #include <cardinal/core/types.hpp>   // foundation: u8..u64 / usize / f32
 
-#include <array>
-#include <cstring>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/cstring.hpp>
 
 namespace cardinal::render::precision {
 
@@ -92,13 +92,13 @@ inline u32 pack4_fp8_e5m2(float a, float b, float c, float d) noexcept {
          | ((u32)fp32_to_fp8_e5m2(c) << 16)
          | ((u32)fp32_to_fp8_e5m2(d) << 24);
 }
-inline std::array<float, 4> unpack4_fp8_e4m3(u32 p) noexcept {
+inline cardinal::array<float, 4> unpack4_fp8_e4m3(u32 p) noexcept {
     return { fp8_e4m3_to_fp32((u8)(p & 0xFF)),
              fp8_e4m3_to_fp32((u8)((p >> 8)  & 0xFF)),
              fp8_e4m3_to_fp32((u8)((p >> 16) & 0xFF)),
              fp8_e4m3_to_fp32((u8)((p >> 24) & 0xFF)) };
 }
-inline std::array<float, 4> unpack4_fp8_e5m2(u32 p) noexcept {
+inline cardinal::array<float, 4> unpack4_fp8_e5m2(u32 p) noexcept {
     return { fp8_e5m2_to_fp32((u8)(p & 0xFF)),
              fp8_e5m2_to_fp32((u8)((p >> 8)  & 0xFF)),
              fp8_e5m2_to_fp32((u8)((p >> 16) & 0xFF)),
@@ -116,8 +116,8 @@ float fp4_e3m0_to_fp32(u8 nib)  noexcept;
 // Pack 8× FP4 into a single dword. Lane 0 = bits 0..3, Lane 7 = bits 28..31.
 u32 pack8_fp4_e2m1(const float v[8]) noexcept;
 u32 pack8_fp4_e3m0(const float v[8]) noexcept;
-std::array<float, 8> unpack8_fp4_e2m1(u32 p) noexcept;
-std::array<float, 8> unpack8_fp4_e3m0(u32 p) noexcept;
+cardinal::array<float, 8> unpack8_fp4_e2m1(u32 p) noexcept;
+cardinal::array<float, 8> unpack8_fp4_e3m0(u32 p) noexcept;
 
 // ---------------------------------------------------------------------------
 // Round-trip — quantise + dequantise an FP32 through the named format.

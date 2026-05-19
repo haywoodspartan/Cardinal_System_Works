@@ -3,9 +3,9 @@
 // =============================================================================
 #include <cardinal/render/geo.hpp>
 
-#include <algorithm>
-#include <cmath>
-#include <cstring>
+#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cmath.hpp>
+#include <cardinal/core/cstring.hpp>
 
 namespace cardinal::render::geo {
 
@@ -34,7 +34,7 @@ void compute_sphere(const scene::Vec3* p, u32 count,
         if (dd > r2) r2 = dd;
     }
     out_center = c;
-    out_radius = std::sqrt(r2);
+    out_radius = cardinal::sqrt(r2);
 }
 
 // Backface cone — average the per-triangle normals (weighted by triangle
@@ -97,7 +97,7 @@ Mesh build_meshlets(const u32* triangle_indices, u32 index_count,
     cur.vertex_offset = 0;
 
     // Map global vertex index → local index inside the current meshlet.
-    // 64 entries → small linear search beats std::unordered_map handily.
+    // 64 entries → small linear search beats cardinal::unordered_map handily.
     u32 local_to_global[kMaxVertsPerMeshlet]{};
     u32 local_count = 0;
 
@@ -214,7 +214,7 @@ Frustum frustum_from_vp(const scene::Mat4& vp) {
         return { a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w };
     };
     auto normalize_plane = [](scene::Vec4& p) {
-        const float l = std::sqrt(p.x*p.x + p.y*p.y + p.z*p.z);
+        const float l = cardinal::sqrt(p.x*p.x + p.y*p.y + p.z*p.z);
         if (l > 1e-6f) { const float inv = 1.0f / l; p.x*=inv; p.y*=inv; p.z*=inv; p.w*=inv; }
     };
 
@@ -248,7 +248,7 @@ bool cluster_passes_backface(const ClusterBounds& b,
     scene::Vec3 to_cluster = b.sphere_center - camera_pos;
     const float l2 = scene::dot(to_cluster, to_cluster);
     if (l2 < 1e-6f) return true;
-    to_cluster = to_cluster * (1.0f / std::sqrt(l2));
+    to_cluster = to_cluster * (1.0f / cardinal::sqrt(l2));
 
     // The cluster is back-facing when EVERY triangle's normal points away
     // from the camera, which is the case when:
@@ -262,7 +262,7 @@ u32 cluster_lod(const ClusterBounds& b, const scene::Vec3& camera_pos,
                 const LodConfig& cfg) noexcept
 {
     const scene::Vec3 v = b.sphere_center - camera_pos;
-    const float d = std::sqrt(scene::dot(v, v));
+    const float d = cardinal::sqrt(scene::dot(v, v));
     if (d < cfg.distance_full)    return 0;
     if (d < cfg.distance_half)    return 1;
     if (d < cfg.distance_quarter) return 2;

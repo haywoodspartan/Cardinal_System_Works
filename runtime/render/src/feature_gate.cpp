@@ -5,7 +5,7 @@
 
 #include <cardinal/core/log.hpp>
 
-#include <cstring>
+#include <cardinal/core/cstring.hpp>
 
 namespace cardinal::render {
 
@@ -124,8 +124,8 @@ FeatureStatus FeatureGate::query(Feature f) const noexcept {
             // GPU arch label as a coarse heuristic.
             {
                 bool blackwell_or_newer =
-                    (std::strstr(caps_.gpu_arch, "Blackwell") != nullptr) ||
-                    (std::strstr(caps_.gpu_arch, "RTX 50")    != nullptr);
+                    (cardinal::strstr(caps_.gpu_arch, "Blackwell") != nullptr) ||
+                    (cardinal::strstr(caps_.gpu_arch, "RTX 50")    != nullptr);
                 return blackwell_or_newer
                     ? ok("Blackwell-class FP4 tensor cores")
                     : fail("Native FP4 needs Blackwell-class hardware (emulated path still works)");
