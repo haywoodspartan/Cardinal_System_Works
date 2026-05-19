@@ -86,9 +86,10 @@ void draw(const char* title, bool* p_open, State& state) {
             for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
                 const auto& e  = state.scratch_entries[state.scratch_filtered[row]];
                 const auto  st = level_style(e.lvl);
-                ImGui::PushStyleColor(ImGuiCol_Text, st.col);
-                ImGui::Text("%s", st.tag);
-                ImGui::PopStyleColor();
+                {
+                    cardinal::ui::StyleColorScope _c(ImGuiCol_Text, st.col);
+                    ImGui::Text("%s", st.tag);
+                }   // PopStyleColor — identical pop point as before
                 ImGui::SameLine(0.0f, 6.0f);
                 ImGui::TextDisabled("%-10s", e.category.c_str());
                 ImGui::SameLine(0.0f, 6.0f);

@@ -32,3 +32,83 @@
 // =============================================================================
 
 #include <imgui.h>
+
+// ---------------------------------------------------------------------------
+// Reusable ImGui scope helpers — the SAME "template reusable structs for
+// reused functions" discipline applied to Dear ImGui's Push/Pop and
+// Begin/End pairs. A dropped Pop*/EndDisabled is a classic, recurring
+// ImGui defect (it silently corrupts every subsequent widget's style /
+// id stack). These RAII guards make the pair impossible to unbalance and
+// live in ONE place so all ~25 Studio panel TUs share the exact same
+// vetted implementation instead of re-hand-rolling Push/Pop 100+ times.
+//
+// Templated where the underlying ImGui call is type-overloaded (PushID
+// over int/const char*/void*, PushStyleVar over float/ImVec2) so one
+// guard serves every overload. Usage:
+//
+//   { cardinal::ui::StyleColorScope c(ImGuiCol_Text, col);
+//     ImGui::Text("..."); }                       // PopStyleColor at }
+//   { cardinal::ui::IdScope id(row);  draw_row(); }   // PopID at }
+//   { cardinal::ui::DisabledScope d(!enabled); ... }  // EndDisabled at }
+// ---------------------------------------------------------------------------
+namespace cardinal::ui {
+
+// ImGui::PushID / PopID. Id ∈ { int, const char*, const void* / T* }.
+template <class Id>
+struct IdScope {
+    explicit IdScope(Id id) noexcept { ImGui::PushID(id); }
+    ~IdScope() { ImGui::PopID(); }
+    IdScope(const IdScope&)            = delete;
+    IdScope& operator=(const IdScope&) = delete;
+};
+template <class Id> IdScope(Id) -> IdScope<Id>;
+
+// ImGui::PushStyleVar / PopStyleVar. V ∈ { float, ImVec2 }.
+template <class V>
+struct StyleVarScope {
+    StyleVarScope(ImGuiStyleVar var, V value) noexcept {
+        ImGui::PushStyleVar(var, value);
+    }
+    ~StyleVarScope() { ImGui::PopStyleVar(); }
+    StyleVarScope(const StyleVarScope&)            = delete;
+    StyleVarScope& operator=(const StyleVarScope&) = delete;
+};
+template <class V> StyleVarScope(ImGuiStyleVar, V) -> StyleVarScope<V>;
+
+// ImGui::PushStyleColor / PopStyleColor (ImU32 or ImVec4 colour).
+struct StyleColorScope {
+    StyleColorScope(ImGuiCol idx, ImU32 col) noexcept {
+        ImGui::PushStyleColor(idx, col);
+    }
+    StyleColorScope(ImGuiCol idx, const ImVec4& col) noexcept {
+        ImGui::PushStyleColor(idx, col);
+    }
+    ~StyleColorScope() { ImGui::PopStyleColor(); }
+    StyleColorScope(const StyleColorScope&)            = delete;
+    StyleColorScope& operator=(const StyleColorScope&) = delete;
+};
+
+// ImGui::BeginDisabled / EndDisabled.
+struct DisabledScope {
+    explicit DisabledScope(bool disabled = true) noexcept {
+        ImGui::BeginDisabled(disabled);
+    }
+    ~DisabledScope() { ImGui::EndDisabled(); }
+    DisabledScope(const DisabledScope&)            = delete;
+    DisabledScope& operator=(const DisabledScope&) = delete;
+};
+
+// Dear-ImGui-demo-style "(?)" hover help marker — the duplicated
+// IsItemHovered()+tooltip idiom, once.
+inline void HelpMarker(const char* desc) {
+    ImGui::TextDisabled("(?)");
+    if (desc && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+        ImGui::BeginTooltip();
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+        ImGui::TextUnformatted(desc);
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
+}
+
+}  // namespace cardinal::ui
