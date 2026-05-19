@@ -14,6 +14,7 @@
 #include <cardinal/anim/anim.hpp>
 #include <cardinal/core/log.hpp>
 
+#include <limits>
 #include <memory>
 
 namespace {
@@ -263,6 +264,48 @@ void test_track_clip_player() {
     }
 }
 
+// ---- non-finite sample time must not OOB (NaN/Inf robustness) ------
+// Regression: for any finite t, if lower_bound() returns begin() then the
+// `t <= front` guard already returned, so i1 >= 1. Only a non-finite t
+// (NaN compares unordered → both clamp guards false) drives lower_bound to
+// begin(), i1=0, i0=i1-1 → SIZE_MAX → keys[SIZE_MAX] OOB read in the
+// noexcept sample(). Defined behaviour: clamp-to-front, never an OOB.
+void test_nonfinite_time() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    const float inf  = std::numeric_limits<float>::infinity();
+
+    an::Curve<float> c;
+    c.add_key(0.0f,  0.0f, InterpMode::Linear);
+    c.add_key(10.0f, 10.0f, InterpMode::Linear);   // value == time
+
+    CHECK(ap(c.sample(qnan),  0.0f));              // NaN → clamp-to-front
+    CHECK(ap(c.sample(-inf),  0.0f));              // Clamp: −inf < 0 → front
+    CHECK(ap(c.sample( inf), 10.0f));              // Clamp: inf > dur → back
+
+    // Loop / PingPong fmod() of a non-finite time yields NaN internally —
+    // still a defined in-gamut value, never an OOB read.
+    an::Curve<float> lp = c; lp.wrap = WrapMode::Loop;
+    CHECK(ap(lp.sample(qnan), 0.0f));
+    CHECK(ap(lp.sample(inf),  0.0f));              // fmod(inf,dur)=NaN→front
+    an::Curve<float> pp = c; pp.wrap = WrapMode::PingPong;
+    CHECK(ap(pp.sample(qnan), 0.0f));
+    CHECK(ap(pp.sample(inf),  0.0f));
+
+    // Player fed a NaN dt: time_ → NaN; tick must not crash and the
+    // sampled write must be the defined clamp-to-front value.
+    float dst = -1.0f;
+    auto tr = std::make_unique<an::Track<float>>(
+        "n", [&](const float& v) { dst = v; });
+    tr->curve().add_key(0.0f,   0.0f, InterpMode::Linear);
+    tr->curve().add_key(10.0f, 100.0f, InterpMode::Linear);
+    auto clip = std::make_shared<an::Clip>("c");
+    clip->add_track(std::move(tr));
+    an::Player p(clip);
+    p.play();
+    p.tick(qnan);                                  // time_ → NaN
+    CHECK(ap(dst, 0.0f));                           // sample(NaN) → front
+}
+
 }  // namespace
 
 int main() {
@@ -273,6 +316,7 @@ int main() {
     test_wrap();
     test_vec3_curve();
     test_track_clip_player();
+    test_nonfinite_time();
 
     if (g_fail == 0) {
         cardinal::log::infof("animtest", "OK  %d checks passed", g_checks);

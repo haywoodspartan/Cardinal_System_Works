@@ -108,6 +108,13 @@ T Curve<T>::sample(float t) const noexcept {
     if (keys.size() == 1) return keys[0].value;
     const float dur = duration();
     t = wrap_time(t, dur, wrap);
+    // A non-finite time (NaN dt/speed in Player::tick, or fmod() of a
+    // non-finite accumulated time in the Loop/PingPong wrap) makes BOTH
+    // ordered clamp guards below false — NaN compares unordered — so
+    // lower_bound() returns begin(), i1 becomes 0 and i0 = i1 - 1 wraps to
+    // SIZE_MAX: an out-of-bounds keys[] read in this noexcept function.
+    // Treat a non-finite time as the clamp-to-front case.
+    if (t != t) return keys.front().value;
     if (t <= keys.front().time) return keys.front().value;
     if (t >= keys.back().time)  return keys.back().value;
     // Binary search for the segment.
