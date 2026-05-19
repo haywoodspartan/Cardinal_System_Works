@@ -64,7 +64,9 @@ bool decode_texture(const cardinal::vector<u8>& bytes, TextureAsset& out) {
     out.height   = rd_u32(bytes.data() + 4);
     out.channels = rd_u32(bytes.data() + 8);
     const u32 n  = rd_u32(bytes.data() + 12);
-    if (16 + n > bytes.size()) return false;
+    // 64-bit arithmetic: `n` is attacker-controlled; `16 + n` in u32
+    // wraps and defeats the bound check → OOB read on the assign below.
+    if (static_cast<usize>(16) + n > bytes.size()) return false;
     out.rgba.assign(bytes.begin() + 16, bytes.begin() + 16 + n);
     return true;
 }
@@ -104,7 +106,9 @@ bool decode_mesh(const cardinal::vector<u8>& bytes, MeshAsset& out) {
     }
     const u32 ic = rd_u32(bytes.data() + off);
     off += 4;
-    if (off + ic * 4 > bytes.size()) return false;
+    // `ic * 4` in u32 overflows for ic >= 2^30 and passes the check,
+    // then resize(ic)/the read loop runs wild — widen to usize.
+    if (off + static_cast<usize>(ic) * 4u > bytes.size()) return false;
     out.indices.resize(ic);
     for (u32 i = 0; i < ic; ++i) out.indices[i] = rd_u32(bytes.data() + off + i * 4);
     return true;
@@ -123,9 +127,11 @@ bool decode_shader(const cardinal::vector<u8>& bytes, ShaderAsset& out) {
     if (bytes.size() < 8) return false;
     out.stage = rd_u32(bytes.data());
     const u32 nl = rd_u32(bytes.data() + 4);
-    if (8 + nl > bytes.size()) return false;
+    // u32 `8 + nl` wraps for huge nl → bypasses the check and the
+    // assign below reads far OOB. All size math in usize (64-bit).
+    if (static_cast<usize>(8) + nl > bytes.size()) return false;
     out.entry_point.assign(reinterpret_cast<const char*>(bytes.data() + 8), nl);
-    usize off = 8 + nl;
+    usize off = static_cast<usize>(8) + nl;
     if (off + 4 > bytes.size()) return false;
     const u32 bl = rd_u32(bytes.data() + off);
     off += 4;
@@ -158,7 +164,8 @@ bool decode_material(const cardinal::vector<u8>& bytes, MaterialAsset& out) {
     out.emission_strength  = rd_f(bytes.data() + 32);
     if (bytes.size() < 40) { out.base_color_texture.clear(); return true; }
     const u32 nl = rd_u32(bytes.data() + 36);
-    if (40 + nl > bytes.size()) return false;
+    // u32 `40 + nl` wraps for huge nl → bypasses the check (OOB assign).
+    if (static_cast<usize>(40) + nl > bytes.size()) return false;
     out.base_color_texture.assign(reinterpret_cast<const char*>(bytes.data() + 40), nl);
     return true;
 }

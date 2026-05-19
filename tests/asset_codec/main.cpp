@@ -258,6 +258,55 @@ void test_registry_fs_negative() {
     CHECK(reg->stats().mount_archives == 0u);
 }
 
+// ---- size-field integer-overflow guards (untrusted cooked bytes) --
+// Every size/length is attacker-controlled. A value near UINT32_MAX
+// used to wrap the old 32-bit `header + n` / `n * elem` checks, slip
+// past the bound test, and drive an OOB read or a multi-GB resize.
+// These must now all reject cleanly — no crash, no over-allocation.
+void test_overflow_guards() {
+    auto put_u32 = [](B& b, cardinal::usize at, cardinal::u32 v) {
+        b[at+0] = static_cast<cardinal::u8>(v);
+        b[at+1] = static_cast<cardinal::u8>(v >> 8);
+        b[at+2] = static_cast<cardinal::u8>(v >> 16);
+        b[at+3] = static_cast<cardinal::u8>(v >> 24);
+    };
+    constexpr cardinal::u32 kMax = 0xFFFFFFFFu;
+
+    // texture: rgba length wraps `16 + n`.
+    {
+        B t(16, 0); put_u32(t, 12, kMax);
+        as::TextureAsset o;
+        CHECK(!as::codec::decode_texture(t, o));
+        put_u32(t, 12, 0xFFFFFFF8u);                   // 16+n wraps to 8
+        CHECK(!as::codec::decode_texture(t, o));
+    }
+    // mesh: index count wraps `ic * 4` (vc=0 so the ic check is reached;
+    // pre-fix this slipped through to a ~4 GB resize(ic)).
+    {
+        B m(8, 0);
+        put_u32(m, 0, 0u);                             // vc = 0
+        put_u32(m, 4, 0x40000000u);                    // ic*4 == 0 in u32
+        as::MeshAsset o;
+        CHECK(!as::codec::decode_mesh(m, o));
+        put_u32(m, 4, kMax);
+        CHECK(!as::codec::decode_mesh(m, o));
+    }
+    // shader: entry-point length wraps `8 + nl`.
+    {
+        B s(8, 0); put_u32(s, 4, kMax);
+        as::ShaderAsset o;
+        CHECK(!as::codec::decode_shader(s, o));
+    }
+    // material: texture-name length wraps `40 + nl` (>=40 reaches it).
+    {
+        B mt(40, 0); put_u32(mt, 36, kMax);
+        as::MaterialAsset o;
+        CHECK(!as::codec::decode_material(mt, o));
+        put_u32(mt, 36, 0xFFFFFFD8u);                  // 40+nl wraps to 0
+        CHECK(!as::codec::decode_material(mt, o));
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -265,6 +314,7 @@ int main() {
     test_mesh();
     test_shader();
     test_material();
+    test_overflow_guards();
     test_registry_inmemory();
     test_registry_fs_negative();
 
