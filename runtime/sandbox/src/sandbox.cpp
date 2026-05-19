@@ -14,14 +14,13 @@
 #include <cardinal/core/log.hpp>
 #include <cardinal/plugin/plugin.hpp>
 
-#include <atomic>
-#include <chrono>
-#include <cstdio>
-#include <cstring>
-#include <filesystem>
-#include <mutex>
-#include <string>
-#include <vector>
+#include <cardinal/core/atomic.hpp>
+#include <cardinal/core/chrono.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/filesystem.hpp>
+#include <cardinal/core/utility.hpp>
 
 #if defined(_WIN32)
     #ifndef WIN32_LEAN_AND_MEAN
@@ -32,7 +31,7 @@
 
 namespace cardinal::sandbox {
 
-namespace fs = std::filesystem;
+namespace fs = cardinal::fs;
 
 // ============================================================================
 // InProcessSandbox — delegates to plugin::Registry, no IPC.
@@ -41,7 +40,7 @@ namespace {
 
 class InProcessSandbox final : public Sandbox {
 public:
-    InProcessSandbox(const Desc& d, std::string dll) : desc_(d), dll_(std::move(dll)) {}
+    InProcessSandbox(const Desc& d, cardinal::string dll) : desc_(d), dll_(cardinal::move(dll)) {}
 
     bool initialize() {
         return cardinal::plugin::Registry::instance().load(dll_.c_str());
@@ -69,8 +68,8 @@ public:
 
 private:
     Desc        desc_;
-    std::string dll_;
-    std::atomic<u64> ticks_{0};
+    cardinal::string dll_;
+    cardinal::atomic<u64> ticks_{0};
 };
 
 #if defined(_WIN32)
@@ -90,9 +89,9 @@ private:
 // ============================================================================
 class SubprocessSandbox final : public Sandbox {
 public:
-    SubprocessSandbox(const Desc& d, std::string dll) : desc_(d), dll_(std::move(dll)) {}
-    SubprocessSandbox(const Desc& d, std::vector<u8> mod)
-        : desc_(d), vm_mode_(true), module_bytes_(std::move(mod)) {}
+    SubprocessSandbox(const Desc& d, cardinal::string dll) : desc_(d), dll_(cardinal::move(dll)) {}
+    SubprocessSandbox(const Desc& d, cardinal::vector<u8> mod)
+        : desc_(d), vm_mode_(true), module_bytes_(cardinal::move(mod)) {}
 
     ~SubprocessSandbox() override { teardown(); }
 
@@ -107,10 +106,10 @@ public:
 
         // Unique pipe name per sandbox. Includes pid + atomic counter so
         // multiple sandboxes in one editor process don't collide.
-        static std::atomic<u32> s_idx{0};
+        static cardinal::atomic<u32> s_idx{0};
         const u32 idx = ++s_idx;
         char namebuf[128];
-        std::snprintf(namebuf, sizeof(namebuf),
+        cardinal::snprintf(namebuf, sizeof(namebuf),
             "\\\\.\\pipe\\cardinal_sandbox_%lu_%u",
             GetCurrentProcessId(), idx);
         pipe_name_ = namebuf;
@@ -129,7 +128,7 @@ public:
         }
 
         // Spawn the runner. Pass pipe name + dll path on the command line.
-        std::string cmdline;
+        cardinal::string cmdline;
         cmdline.reserve(512);
         cmdline += "\"";  cmdline += runner_path_; cmdline += "\"";
         cmdline += " \""; cmdline += pipe_name_;   cmdline += "\"";
@@ -189,7 +188,7 @@ public:
         // VM mode: ship the bytecode module (u32 len + bytes) and let the
         // runner verify + host it in cardinal::vm. DLL mode: ship the dll
         // path (the runner also has it from argv; belt + braces).
-        std::vector<char> p;
+        cardinal::vector<char> p;
         u32 attach_op;
         if (vm_mode_) {
             const u32 mlen = static_cast<u32>(module_bytes_.size());
@@ -215,7 +214,7 @@ public:
 
         // Drain frames until READY or runner death. Inline LOG / ERROR are
         // forwarded to the host's log so the user sees plugin output.
-        u32  op = 0; std::vector<char> payload;
+        u32  op = 0; cardinal::vector<char> payload;
         while (true) {
             if (!read_frame_with_timeout_(op, payload, desc_.attach_timeout_ms)) {
                 last_error_ = "ATTACH timed out / runner died";
@@ -246,13 +245,13 @@ public:
 
     bool tick(f32 dt) override {
         if (!alive_) return false;
-        const auto t0 = std::chrono::steady_clock::now();
+        const auto t0 = cardinal::chrono::steady_clock::now();
         if (!send_frame_(proto::OP_TICK, &dt, sizeof(dt))) {
             last_error_ = "TICK send failed (broken pipe)";
             mark_dead_();
             return false;
         }
-        u32 op = 0; std::vector<char> payload;
+        u32 op = 0; cardinal::vector<char> payload;
         while (true) {
             if (!read_frame_with_timeout_(op, payload, desc_.tick_timeout_ms)) {
                 last_error_ = "TICK timeout (no ACK within budget)";
@@ -264,8 +263,8 @@ public:
             }
             if (op == proto::OP_ACK) {
                 ++ticks_;
-                last_tick_ms_ = std::chrono::duration<f64, std::milli>(
-                    std::chrono::steady_clock::now() - t0).count();
+                last_tick_ms_ = cardinal::chrono::duration<f64, cardinal::milli>(
+                    cardinal::chrono::steady_clock::now() - t0).count();
                 return true;
             }
             if (op == proto::OP_LOG)   { forward_log_(payload); continue; }
@@ -316,13 +315,13 @@ public:
 private:
     // -------- helpers ----------
 
-    static std::string current_exe_dir_() {
+    static cardinal::string current_exe_dir_() {
         char buf[MAX_PATH] = {0};
         GetModuleFileNameA(nullptr, buf, MAX_PATH);
         return fs::path(buf).parent_path().string();
     }
 
-    std::string resolve_runner_path_() const {
+    cardinal::string resolve_runner_path_() const {
         // 1. Explicit override.
         if (!desc_.runner_override.empty() && fs::exists(desc_.runner_override))
             return desc_.runner_override;
@@ -333,7 +332,7 @@ private:
         char buf[MAX_PATH] = {0};
         if (SearchPathA(nullptr, "cardinal_sandbox_runner.exe", nullptr,
                         MAX_PATH, buf, nullptr) > 0) {
-            return std::string(buf);
+            return cardinal::string(buf);
         }
         return {};
     }
@@ -359,7 +358,7 @@ private:
     // Blocking read with timeout against the pipe + the process handle.
     // Returns false if timed out OR runner died OR pipe broken.
     bool read_frame_with_timeout_(u32& opcode,
-                                  std::vector<char>& payload,
+                                  cardinal::vector<char>& payload,
                                   u32 timeout_ms)
     {
         if (!read_with_timeout_(&opcode, sizeof(opcode), timeout_ms)) return false;
@@ -373,8 +372,8 @@ private:
 
     bool read_with_timeout_(void* p, u32 n, u32 timeout_ms) {
         char* b = static_cast<char*>(p);
-        const auto deadline = std::chrono::steady_clock::now()
-                              + std::chrono::milliseconds(timeout_ms);
+        const auto deadline = cardinal::chrono::steady_clock::now()
+                              + cardinal::chrono::milliseconds(timeout_ms);
         while (n > 0) {
             // Use overlapped read to make timeout work.
             OVERLAPPED ov{};
@@ -388,8 +387,8 @@ private:
                 return false;
             }
             // Wait on (read-completed, process-died, deadline).
-            const auto now = std::chrono::steady_clock::now();
-            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            const auto now = cardinal::chrono::steady_clock::now();
+            const auto remaining = cardinal::chrono::duration_cast<cardinal::chrono::milliseconds>(
                 deadline - now).count();
             const DWORD wait_ms = remaining <= 0 ? 0u : static_cast<DWORD>(remaining);
             HANDLE waits[2] = { evt, process_ };
@@ -414,18 +413,18 @@ private:
         return true;
     }
 
-    static u32 read_u32_(const std::vector<char>& buf, size_t& pos) {
+    static u32 read_u32_(const cardinal::vector<char>& buf, size_t& pos) {
         u32 v = 0;
         if (pos + 4 <= buf.size()) {
-            std::memcpy(&v, buf.data() + pos, 4);
+            cardinal::memcpy(&v, buf.data() + pos, 4);
             pos += 4;
         }
         return v;
     }
 
-    static std::string read_str_(const std::vector<char>& buf, size_t& pos) {
+    static cardinal::string read_str_(const cardinal::vector<char>& buf, size_t& pos) {
         const u32 n = read_u32_(buf, pos);
-        std::string s;
+        cardinal::string s;
         if (pos + n <= buf.size()) {
             s.assign(buf.data() + pos, n);
             pos += n;
@@ -433,22 +432,22 @@ private:
         return s;
     }
 
-    void parse_ready_(const std::vector<char>& payload) {
+    void parse_ready_(const cardinal::vector<char>& payload) {
         size_t pos = 0;
         plugin_name_    = read_str_(payload, pos);
         plugin_version_ = read_str_(payload, pos);
     }
 
-    static std::string parse_string_(const std::vector<char>& payload) {
+    static cardinal::string parse_string_(const cardinal::vector<char>& payload) {
         size_t pos = 0;
         return read_str_(payload, pos);
     }
 
-    void forward_log_(const std::vector<char>& payload) {
+    void forward_log_(const cardinal::vector<char>& payload) {
         size_t pos = 0;
         const u32 level = read_u32_(payload, pos);
-        const std::string cat = read_str_(payload, pos);
-        const std::string msg = read_str_(payload, pos);
+        const cardinal::string cat = read_str_(payload, pos);
+        const cardinal::string msg = read_str_(payload, pos);
         switch (level) {
             case proto::LOG_TRACE: cardinal::log::infof (cat.c_str(), "%s", msg.c_str()); break;
             case proto::LOG_INFO:  cardinal::log::infof (cat.c_str(), "%s", msg.c_str()); break;
@@ -486,33 +485,33 @@ private:
     }
 
     Desc            desc_;
-    std::string     dll_;
+    cardinal::string     dll_;
     bool            vm_mode_{false};
-    std::vector<u8> module_bytes_;
-    std::string     runner_path_;
-    std::string     pipe_name_;
+    cardinal::vector<u8> module_bytes_;
+    cardinal::string     runner_path_;
+    cardinal::string     pipe_name_;
 
     HANDLE      pipe_{INVALID_HANDLE_VALUE};
     HANDLE      process_{nullptr};
     u32         pid_{0};
 
-    std::atomic<bool> alive_{true};
-    std::string plugin_name_;
-    std::string plugin_version_;
+    cardinal::atomic<bool> alive_{true};
+    cardinal::string plugin_name_;
+    cardinal::string plugin_version_;
     u64         ticks_{0};
     f64         last_tick_ms_{0.0};
-    std::string last_error_;
+    cardinal::string last_error_;
 };
 
 #endif  // _WIN32
 
 }  // namespace
 
-std::unique_ptr<Sandbox> Sandbox::create(const Desc& desc, const char* dll_path) {
+cardinal::unique_ptr<Sandbox> Sandbox::create(const Desc& desc, const char* dll_path) {
     if (dll_path == nullptr || *dll_path == '\0') return nullptr;
 #if defined(_WIN32)
     if (desc.mode == Mode::Subprocess) {
-        auto s = std::make_unique<SubprocessSandbox>(desc, std::string(dll_path));
+        auto s = cardinal::make_unique<SubprocessSandbox>(desc, cardinal::string(dll_path));
         if (!s->initialize()) return nullptr;
         return s;
     }
@@ -522,19 +521,19 @@ std::unique_ptr<Sandbox> Sandbox::create(const Desc& desc, const char* dll_path)
             "Subprocess mode not yet implemented on this OS — falling back to InProcess");
     }
 #endif
-    auto s = std::make_unique<InProcessSandbox>(desc, std::string(dll_path));
+    auto s = cardinal::make_unique<InProcessSandbox>(desc, cardinal::string(dll_path));
     if (!s->initialize()) return nullptr;
     return s;
 }
 
-std::unique_ptr<Sandbox> Sandbox::create_vm(const Desc& desc,
+cardinal::unique_ptr<Sandbox> Sandbox::create_vm(const Desc& desc,
                                             const u8* module_bytes, usize len)
 {
     if (module_bytes == nullptr || len == 0) return nullptr;
 #if defined(_WIN32)
     // The capability sandbox is always process-isolated (that's the point).
-    std::vector<u8> mod(module_bytes, module_bytes + len);
-    auto s = std::make_unique<SubprocessSandbox>(desc, std::move(mod));
+    cardinal::vector<u8> mod(module_bytes, module_bytes + len);
+    auto s = cardinal::make_unique<SubprocessSandbox>(desc, cardinal::move(mod));
     if (!s->initialize()) return nullptr;
     return s;
 #else

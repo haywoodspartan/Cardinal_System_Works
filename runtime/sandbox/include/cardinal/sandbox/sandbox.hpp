@@ -58,9 +58,6 @@
 
 #include <cardinal/core/types.hpp>
 
-#include <memory>
-#include <string>
-
 namespace cardinal::sandbox {
 
 // Wire protocol opcodes — exposed publicly so the runner exe + the host
@@ -101,7 +98,7 @@ struct Desc {
     // Optional override path to cardinal_sandbox_runner.exe. When empty,
     // the host searches <host-exe-dir>/cardinal_sandbox_runner.exe first,
     // then PATH.
-    std::string runner_override{};
+    cardinal::string runner_override{};
     // Tick timeout — if a sandbox doesn't ACK within this many ms, the
     // host kills the runner with TerminateProcess and marks the sandbox
     // dead. Default 250 ms; raise for genuinely heavy per-tick scripts.
@@ -119,16 +116,16 @@ struct Status {
     u64         pid{0};            // Subprocess: child OS pid; InProcess: 0
     u64         ticks{0};
     f64         last_tick_ms{0.0}; // wall-clock time of the most recent tick
-    std::string plugin_name;       // populated after a successful ATTACH
-    std::string plugin_version;
-    std::string last_error;        // last LOG-error or IPC failure message
+    cardinal::string plugin_name;       // populated after a successful ATTACH
+    cardinal::string plugin_version;
+    cardinal::string last_error;        // last LOG-error or IPC failure message
 };
 
 class Sandbox {
 public:
     // Returns nullptr on attach failure (compile errors / DLL missing /
     // runner spawn failed / pipe broken before READY).
-    static std::unique_ptr<Sandbox> create(const Desc& desc, const char* dll_path);
+    static cardinal::unique_ptr<Sandbox> create(const Desc& desc, const char* dll_path);
 
     // Capability-sandbox variant: instead of a native DLL, ship a
     // cardinal::vm bytecode module to the child, which verifies + runs it
@@ -137,7 +134,7 @@ public:
     // isolated. Always uses the child process (mode is forced to
     // Subprocess); returns nullptr if that's unavailable on this OS or the
     // module fails to verify/attach. `module_bytes` is copied.
-    static std::unique_ptr<Sandbox> create_vm(const Desc& desc,
+    static cardinal::unique_ptr<Sandbox> create_vm(const Desc& desc,
                                               const u8* module_bytes,
                                               usize len);
 
