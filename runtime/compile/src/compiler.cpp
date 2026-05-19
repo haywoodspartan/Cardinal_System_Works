@@ -12,11 +12,12 @@
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/platform.hpp>
 
-#include <chrono>
-#include <condition_variable>
-#include <deque>
-#include <mutex>
-#include <thread>
+#include <cardinal/core/chrono.hpp>
+#include <cardinal/core/containers.hpp>
+#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/future.hpp>
+#include <cardinal/core/thread.hpp>
+#include <cardinal/core/utility.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
 #include <Windows.h>
@@ -29,10 +30,10 @@ using Microsoft::WRL::ComPtr;
 
 namespace cardinal::compile {
 
-CompileFuture::CompileFuture(std::future<CompileResult> fut) : fut_(std::move(fut)) {}
+CompileFuture::CompileFuture(cardinal::future<CompileResult> fut) : fut_(cardinal::move(fut)) {}
 bool CompileFuture::is_ready() const noexcept {
     return fut_.valid() &&
-           fut_.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+           fut_.wait_for(cardinal::chrono::seconds(0)) == cardinal::future_status::ready;
 }
 CompileResult CompileFuture::take() {
     if (!fut_.valid()) return CompileResult{ false, {}, "future already consumed", false, 0 };
@@ -62,7 +63,7 @@ struct Dxc {
 // Compile a single request. Returns false on DXC-reported failure (errors
 // is then populated). Crashes are handled by the SEH wrapper around this.
 bool compile_one(Dxc& d, const CompileRequest& req,
-                 std::vector<u8>& out_bytes, std::string& out_err)
+                 cardinal::vector<u8>& out_bytes, cardinal::string& out_err)
 {
     LPCWSTR target = L"vs_6_5";
     switch (req.stage) {
@@ -95,7 +96,7 @@ bool compile_one(Dxc& d, const CompileRequest& req,
         ComPtr<IDxcBlobUtf8> errs;
         result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errs), nullptr);
         out_err = (errs && errs->GetStringLength() > 0)
-                  ? std::string(errs->GetStringPointer(), errs->GetStringLength())
+                  ? cardinal::string(errs->GetStringPointer(), errs->GetStringLength())
                   : "DXC failed without error blob";
         return false;
     }
@@ -113,8 +114,8 @@ bool compile_one(Dxc& d, const CompileRequest& req,
 struct SehArgs {
     Dxc*                     dxc;
     const CompileRequest*    req;
-    std::vector<u8>*         out_bytes;
-    std::string*             out_err;
+    cardinal::vector<u8>*         out_bytes;
+    cardinal::string*             out_err;
 };
 
 // All RAII has been hoisted to the caller; this function holds only PODs.
@@ -130,17 +131,17 @@ DWORD invoke_compile_seh(SehArgs* a, bool* out_ok) noexcept {
 
 CompileResult run_with_seh(Dxc& d, const CompileRequest& req) {
     CompileResult r{};
-    std::vector<u8> bytes;
-    std::string err;
+    cardinal::vector<u8> bytes;
+    cardinal::string err;
     SehArgs args{ &d, &req, &bytes, &err };
     bool ok = false;
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t0 = cardinal::chrono::steady_clock::now();
     const DWORD seh = invoke_compile_seh(&args, &ok);
-    r.elapsed_us = static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
-                       std::chrono::steady_clock::now() - t0).count());
+    r.elapsed_us = static_cast<u64>(cardinal::chrono::duration_cast<cardinal::chrono::microseconds>(
+                       cardinal::chrono::steady_clock::now() - t0).count());
     if (seh != 0) {
         char buf[128];
-        std::snprintf(buf, sizeof(buf),
+        cardinal::snprintf(buf, sizeof(buf),
             "compiler crashed (SEH 0x%08lx) on %s",
             seh, req.filename.empty() ? req.entry_point.c_str() : req.filename.c_str());
         r.ok       = false;
@@ -148,8 +149,8 @@ CompileResult run_with_seh(Dxc& d, const CompileRequest& req) {
         r.error    = buf;
     } else {
         r.ok        = ok;
-        r.blob.bytes= std::move(bytes);
-        r.error     = std::move(err);
+        r.blob.bytes= cardinal::move(bytes);
+        r.error     = cardinal::move(err);
     }
     return r;
 }
@@ -169,34 +170,34 @@ public:
             cardinal::log::warnf("compile",
                 "DXC initialisation failed — compile worker is degraded");
         }
-        thread_ = std::thread([this]{ run(); });
+        thread_ = cardinal::thread([this]{ run(); });
     }
     ~WorkerImpl() override { shutdown(); }
 
     CompileFuture submit(const CompileRequest& req) override {
-        std::promise<CompileResult> prom;
+        cardinal::promise<CompileResult> prom;
         auto fut = prom.get_future();
         {
-            std::lock_guard lk(mu_);
+            cardinal::lock_guard lk(mu_);
             if (stopping_) {
                 CompileResult err{ false, {}, "worker is shutting down", false, 0 };
-                prom.set_value(std::move(err));
-                return CompileFuture(std::move(fut));
+                prom.set_value(cardinal::move(err));
+                return CompileFuture(cardinal::move(fut));
             }
-            queue_.push_back({ req, std::move(prom) });
+            queue_.push_back({ req, cardinal::move(prom) });
         }
         cv_.notify_one();
-        return CompileFuture(std::move(fut));
+        return CompileFuture(cardinal::move(fut));
     }
 
     u32  pending() const noexcept override {
-        std::lock_guard lk(mu_);
+        cardinal::lock_guard lk(mu_);
         return static_cast<u32>(queue_.size());
     }
 
     void shutdown() override {
         {
-            std::lock_guard lk(mu_);
+            cardinal::lock_guard lk(mu_);
             if (stopping_) return;
             stopping_ = true;
         }
@@ -207,17 +208,17 @@ public:
 private:
     struct Job {
         CompileRequest             req;
-        std::promise<CompileResult> prom;
+        cardinal::promise<CompileResult> prom;
     };
 
     void run() {
         for (;;) {
             Job j;
             {
-                std::unique_lock lk(mu_);
+                cardinal::unique_lock lk(mu_);
                 cv_.wait(lk, [&]{ return stopping_ || !queue_.empty(); });
                 if (stopping_ && queue_.empty()) return;
-                j = std::move(queue_.front());
+                j = cardinal::move(queue_.front());
                 queue_.pop_front();
             }
             CompileResult r = run_with_seh(dxc_, j.req);
@@ -225,22 +226,22 @@ private:
                 cardinal::log::errorf("compile",
                     "worker survived crash: %s", r.error.c_str());
             }
-            j.prom.set_value(std::move(r));
+            j.prom.set_value(cardinal::move(r));
         }
     }
 
     Dxc                                 dxc_;
-    std::thread                         thread_;
-    mutable std::mutex                  mu_;
-    std::condition_variable             cv_;
-    std::deque<Job>                     queue_;
+    cardinal::thread                         thread_;
+    mutable cardinal::mutex                  mu_;
+    cardinal::condition_variable             cv_;
+    cardinal::deque<Job>                     queue_;
     bool                                stopping_{false};
 };
 
 }  // namespace
 
-std::unique_ptr<Worker> Worker::create() {
-    return std::make_unique<WorkerImpl>();
+cardinal::unique_ptr<Worker> Worker::create() {
+    return cardinal::make_unique<WorkerImpl>();
 }
 
 }  // namespace cardinal::compile

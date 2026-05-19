@@ -21,9 +21,8 @@
 #include <cardinal/core/types.hpp>
 #include <cardinal/rhi/rhi.hpp>
 
-#include <future>
-#include <memory>
-#include <string>
+#include <cardinal/core/future.hpp>   // also pulls core/types.hpp
+                                      // (unique_ptr / string vocabulary)
 
 namespace cardinal::compile {
 
@@ -31,34 +30,34 @@ namespace cardinal::compile {
 struct CompileResult {
     bool             ok{false};
     rhi::ShaderBlob  blob;            // populated on success
-    std::string      error;           // populated on failure
+    cardinal::string      error;           // populated on failure
     bool             crashed{false};  // true when the worker caught SEH
     u64              elapsed_us{0};   // wall-clock time spent in DXC
 };
 
 struct CompileRequest {
     rhi::ShaderStage stage{rhi::ShaderStage::Vertex};
-    std::string      source;
-    std::string      entry_point;
-    std::string      filename;        // for error messages, optional
+    cardinal::string      source;
+    cardinal::string      entry_point;
+    cardinal::string      filename;        // for error messages, optional
 };
 
 // Opaque future-style handle returned by submit(). The caller polls
 // `is_ready()` from the main thread, then `take()` to consume the result.
 class CompileFuture {
 public:
-    explicit CompileFuture(std::future<CompileResult> fut);
+    explicit CompileFuture(cardinal::future<CompileResult> fut);
     bool          is_ready() const noexcept;
     CompileResult take();          // blocks until ready
 private:
-    std::future<CompileResult> fut_;
+    cardinal::future<CompileResult> fut_;
 };
 
 // Worker. One per process is plenty — DXC isn't multithread-safe inside a
 // single instance, but its serial throughput is fine for an engine.
 class Worker {
 public:
-    static std::unique_ptr<Worker> create();
+    static cardinal::unique_ptr<Worker> create();
     virtual ~Worker() = default;
 
     // Submit a compile. Always returns a valid future, even if the worker
