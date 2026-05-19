@@ -275,6 +275,24 @@ bool Archive::load_blocking(const cardinal::string& key,
         if (error_out) *error_out = "could not reopen " + path_;
         return false;
     }
+    // e->offset / e->size come from the (untrusted) index. Validate
+    // against the real file size BEFORE resize() — a corrupt entry with
+    // a huge size would otherwise bad_alloc, and a bogus offset would
+    // seek/read out of range. (offset <= fsz checked first so the
+    // fsz - offset subtraction can't underflow.)
+    cardinal::fseek(f, 0, SEEK_END);
+    const long endp = cardinal::ftell(f);
+    if (endp < 0) {
+        cardinal::fclose(f);
+        if (error_out) *error_out = "could not size " + path_;
+        return false;
+    }
+    const u64 fsz = static_cast<u64>(endp);
+    if (e->offset > fsz || e->size > fsz - e->offset) {
+        cardinal::fclose(f);
+        if (error_out) *error_out = "entry out of range: " + key;
+        return false;
+    }
     cardinal::fseek(f, static_cast<long>(e->offset), SEEK_SET);
     out_bytes.resize(static_cast<usize>(e->size));
     const usize got = cardinal::fread(out_bytes.data(), 1, out_bytes.size(), f);
@@ -301,6 +319,18 @@ Archive::load_async(const cardinal::string& key) const
         }
         FILE* fp = cardinal::fopen(self_path.c_str(), "rb");
         if (fp == nullptr) {
+            g_streams_inflight.fetch_sub(1, cardinal::memory_order_relaxed);
+            return bytes;
+        }
+        // Same untrusted-index guard as load_blocking: bound offset+size
+        // by the real file size before resize() (returns empty on a
+        // corrupt entry rather than bad_alloc / OOB read).
+        cardinal::fseek(fp, 0, SEEK_END);
+        const long endp = cardinal::ftell(fp);
+        if (endp < 0 ||
+            desc_copy.offset > static_cast<u64>(endp) ||
+            desc_copy.size   > static_cast<u64>(endp) - desc_copy.offset) {
+            cardinal::fclose(fp);
             g_streams_inflight.fetch_sub(1, cardinal::memory_order_relaxed);
             return bytes;
         }

@@ -249,6 +249,65 @@ int main() {
             CHECK(ha != nullptr);                       // no OOM / crash
             if (ha) CHECK(ha->entry_count() == 4u);     // EOF-bounded loop
         }
+
+        // Untrusted per-entry offset/size must be bounded by the real
+        // file before load_blocking() resize()s. A corrupt size used to
+        // resize(0xFFFF...) and bad_alloc-terminate; a wild offset read
+        // out of range. Build a 1-entry pack, corrupt the index fields,
+        // and require a clean rejection (no crash).
+        {
+            const auto spath = (dir / "corrupt_entry.cpk").string();
+            const std::vector<u8> payload = { 1, 2, 3 };
+            {
+                pk::Builder b(spath);
+                CHECK(b.add("x", AssetType::Unknown, payload));
+                cardinal::string e2; CHECK(b.finalize(&e2));
+            }
+            std::ifstream in(spath, std::ios::binary | std::ios::ate);
+            const std::streamsize n = in.tellg();
+            in.seekg(0);
+            std::vector<u8> raw(static_cast<cardinal::usize>(n));
+            in.read(reinterpret_cast<char*>(raw.data()), n);
+            in.close();
+            auto rdu64 = [&](cardinal::usize o) {
+                u64 v = 0;
+                for (int i = 0; i < 8; ++i)
+                    v |= static_cast<u64>(raw[o + static_cast<cardinal::usize>(i)])
+                         << (8 * i);
+                return v;
+            };
+            const u64 io = rdu64(12);                    // index_offset (hdr+12)
+            const cardinal::usize tail =
+                static_cast<cardinal::usize>(io) + 2u + 1u;  // kl(2) + key "x"(1)
+            CHECK(raw.size() >= tail + 28u);   // 28 B fixed tail ends at EOF
+            // Variant 1 — size = 2^64-1 (the bad_alloc locker).
+            {
+                std::vector<u8> bad = raw;
+                for (int i = 0; i < 8; ++i) bad[tail + 12u + static_cast<cardinal::usize>(i)] = 0xFFu;
+                const auto bp = (dir / "bad_size.cpk").string();
+                write_raw(bp, bad);
+                auto ba = pk::Archive::open(bp);
+                CHECK(ba != nullptr);                    // open() doesn't size-check
+                if (ba) {
+                    std::vector<u8> out; cardinal::string le;
+                    CHECK(!ba->load_blocking("x", out, &le));   // no bad_alloc
+                    CHECK(!le.empty());
+                }
+            }
+            // Variant 2 — offset way past EOF, size left valid.
+            {
+                std::vector<u8> bad = raw;
+                for (int i = 0; i < 8; ++i) bad[tail + 4u + static_cast<cardinal::usize>(i)] = 0xFFu;
+                const auto bp = (dir / "bad_offset.cpk").string();
+                write_raw(bp, bad);
+                auto ba = pk::Archive::open(bp);
+                CHECK(ba != nullptr);
+                if (ba) {
+                    std::vector<u8> out;
+                    CHECK(!ba->load_blocking("x", out));        // range-rejected
+                }
+            }
+        }
     }
 
     std::error_code rec;
