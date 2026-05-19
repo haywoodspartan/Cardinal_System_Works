@@ -48,7 +48,13 @@ static_assert(tx::mip_count_for_size(256u, 256u) == 9u, "256->9 mips");
 static_assert(tx::mip_count_for_size(1u, 1u)     == 1u, "1x1->1 mip");
 static_assert(tx::mip_count_for_size(1024u, 1u)  == 11u, "1024x1->11");
 static_assert(tx::mip_dim_at(256u, 8u)  == 1u, "256 mip8 = 1");
-static_assert(tx::mip_dim_at(256u, 31u) == 1u, "clamped >=1");  // <32: defined
+static_assert(tx::mip_dim_at(256u, 31u) == 1u, "clamped >=1");
+// Over-shift: level >= 32 (a u32 shift >= bit width). These would be a
+// hard constant-expression error pre-fix; mip_dim_at now guards it and
+// returns the documented >=1 minimum.
+static_assert(tx::mip_dim_at(256u, 32u) == 1u, "mip32 over-shift -> 1");
+static_assert(tx::mip_dim_at(256u, 99u) == 1u, "mip99 over-shift -> 1");
+static_assert(tx::mip_dim_at(1u, 4000u) == 1u, "huge level -> 1");
 static_assert(tx::mip_dim_at(640u, 2u)  == 160u, "640>>2");
 static_assert(tx::mip_chain_bytes(256u,256u,CompressedFormat::None,4u)
               == 349524ull, "RGBA8 256 chain");
@@ -136,6 +142,10 @@ void test_mip_geometry() {
     CHECK(tx::mip_dim_at(256u, 9u) == 1u);             // 256>>9=0 -> 1
     CHECK(tx::mip_dim_at(1u, 1u)   == 1u);
     CHECK(tx::mip_dim_at(640u, 1u) == 320u);
+    // Over-shift guard at runtime too (level >= 32 == UB pre-fix).
+    CHECK(tx::mip_dim_at(256u, 32u)   == 1u);
+    CHECK(tx::mip_dim_at(256u, 99u)   == 1u);
+    CHECK(tx::mip_dim_at(4096u, 64u)  == 1u);
 }
 
 // ---- mip_bytes: uncompressed + block, tiny-mip rounding ----------

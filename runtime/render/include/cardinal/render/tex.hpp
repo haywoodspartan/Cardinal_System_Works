@@ -96,7 +96,14 @@ constexpr u32 mip_count_for_size(u32 w, u32 h) noexcept {
 }
 
 constexpr u32 mip_dim_at(u32 d, u32 level) noexcept {
-    return (d >> level) > 0 ? (d >> level) : 1u;
+    // A shift count >= the operand's bit width is undefined behaviour in
+    // C++ (and a hard error in a constant expression). Any level that
+    // big has long since collapsed the dimension to 0, so it clamps to
+    // the documented >=1 minimum. Guarding here keeps callers (mip_bytes
+    // / mip_chain_bytes / plan_for_budget) UB-free for arbitrary levels.
+    if (level >= 32u) return 1u;
+    const u32 v = d >> level;
+    return v > 0u ? v : 1u;
 }
 
 // Bytes per mip level (uncompressed RGBA8 = 4bpp, BC7 = 1bpp etc.)
