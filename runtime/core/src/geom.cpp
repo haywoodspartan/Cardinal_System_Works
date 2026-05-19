@@ -292,8 +292,15 @@ Hit raycast_sphere(const Ray& r, const Sphere& s, f32 max_t) noexcept {
     const f32 disc = b*b - c;
     if (disc < 0.0f) return h;
     const f32 sq = std::sqrt(disc);
-    const f32 t = -b - sq;
-    if (t < 0.0f || t > max_t) return h;
+    // Near root = entry point. If it is behind the ray origin the origin
+    // is inside the sphere (the two roots straddle 0 whenever
+    // |origin-center| < radius); fall back to the far root = exit point
+    // so a ray cast from inside a sphere still reports a hit — the same
+    // "origin inside => still a hit" behaviour raycast_aabb already has.
+    // The common outside-hit path (near root >= 0) is unchanged.
+    f32 t = -b - sq;
+    if (t < 0.0f) t = -b + sq;            // origin inside / sphere straddles
+    if (t < 0.0f || t > max_t) return h;  // fully behind, or beyond max_t
     h.hit = true; h.t = t;
     h.point = Vec3{ r.origin.x + r.direction.x * t,
                     r.origin.y + r.direction.y * t,

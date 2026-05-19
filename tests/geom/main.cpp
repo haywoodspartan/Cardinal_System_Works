@@ -180,6 +180,18 @@ void test_raycasts() {
     CHECK(hs.hit && ap(hs.t, 4.0f, 1e-3f));
     CHECK(!g::raycast_sphere(
         g::Ray{ Vec3{0,5,-5}, Vec3{0,0,1} }, g::Sphere{ Vec3{0,0,0}, 1.0f }).hit);
+    // Origin INSIDE the sphere must still hit — at the exit point.
+    // Regression: the near-root-only test returned a false MISS for any
+    // ray cast from within a sphere (AI line-of-sight / projectiles /
+    // picking from inside a volume), inconsistent with raycast_aabb.
+    g::Hit hin = g::raycast_sphere(
+        g::Ray{ Vec3{0,0,0}, Vec3{0,0,1} }, g::Sphere{ Vec3{0,0,0}, 1.0f });
+    CHECK(hin.hit && ap(hin.t, 1.0f, 1e-3f));      // exits at z = +1
+    CHECK(ap(hin.point.z, 1.0f, 1e-3f));
+    // Off-centre interior origin also hits the exit.
+    g::Hit hin2 = g::raycast_sphere(
+        g::Ray{ Vec3{0.25f,0,0}, Vec3{1,0,0} }, g::Sphere{ Vec3{0,0,0}, 1.0f });
+    CHECK(hin2.hit && ap(hin2.t, 0.75f, 1e-3f));   // exits at x = +1
 
     g::Triangle tri{ Vec3{-1,-1,0}, Vec3{1,-1,0}, Vec3{0,1,0} };
     g::Hit ht = g::raycast_triangle(
