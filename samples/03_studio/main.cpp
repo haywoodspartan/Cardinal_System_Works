@@ -2225,11 +2225,17 @@ int main(int argc, char** argv) {
         // Push camera + gizmo target into Studio so its viewport overlay
         // can render the 3-axis translate handle on the selected entity.
         {
-            const u32 vw_g = sw->viewport_width(), vh_g = sw->viewport_height();
-            const float aspect_g = (vh_g > 0)
-                ? static_cast<float>(vw_g) / static_cast<float>(vh_g) : 1.0f;
-            studio->set_viewport_camera(scene.camera().view(),
-                                        scene.camera().proj(aspect_g));
+            // Camera/projection is set PER PANEL in the viewport draw loop
+            // above — scene.camera().proj(aspect_i) for each panel's own
+            // extent, immediately before that panel's draw_viewport_panel,
+            // which is what the gizmo / world-grid / hover-chunk /
+            // gizmo-drag overlays consume. The single global-aspect
+            // set_viewport_camera(proj(aspect_g)) that used to live here
+            // was the source of the detached-window overlay skew (a
+            // torn-out panel's aspect != viewport 0's); it is redundant
+            // (always overwritten by the per-panel call before any
+            // consumer reads gizmo_proj_) and is removed. Do NOT reinstate
+            // a global-aspect camera here.
             studio->set_gizmo_snap(snap_enabled, snap_step);
             // Reconcile: the context menu / spawn / toolbar paths still
             // mutate the single `selected_id`. Fold that back into the
