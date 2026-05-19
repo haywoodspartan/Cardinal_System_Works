@@ -186,6 +186,15 @@ public:
         w_ = d.width; h_ = d.height; fmt_ = d.format;
         if (w_ == 0 || h_ == 0) return false;
         const bool is_depth = (d.format == Format::D32_Float);
+        // ALLOW_DEPTH_STENCIL — and therefore the DEPTH_WRITE create state
+        // + an optimised depth clear value — is keyed on the *usage*, not
+        // the format. A plain Sampled colour texture has neither flag, and
+        // D3D12 rejects DEPTH_WRITE (or a clear value) on a resource that
+        // lacks ALLOW_DEPTH_STENCIL with E_INVALIDARG. Depth targets must
+        // still start in DEPTH_WRITE so the shadow-pass barrier cycle
+        // (begin/end_shadow_pass) stays balanced.
+        const bool is_depth_target =
+            (d.usage & static_cast<u32>(TextureUsage::DepthRenderTarget)) != 0u;
 
         D3D12_HEAP_PROPERTIES heap{};
         heap.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -207,10 +216,11 @@ public:
         cv.Format             = DXGI_FORMAT_D32_FLOAT;
         cv.DepthStencil.Depth = 1.0f;
 
-        state_ = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        state_ = is_depth_target ? D3D12_RESOURCE_STATE_DEPTH_WRITE
+                                 : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         if (FAILED(dev->CreateCommittedResource(
                 &heap, D3D12_HEAP_FLAG_NONE, &rd, state_,
-                is_depth ? &cv : nullptr, IID_PPV_ARGS(&res_)))) {
+                is_depth_target ? &cv : nullptr, IID_PPV_ARGS(&res_)))) {
             cardinal::log::errorf("rhi/d3d12", "create_texture resource failed");
             return false;
         }
