@@ -35,7 +35,12 @@ struct WorldPartition::Impl {
         CellId    id;
         CellDesc  desc;
         CellState state{CellState::Unloaded};
-        u64       last_loaded_ms{0};
+        // Monotonic load sequence — set every time the cell becomes
+        // Loaded. The deterministic LRU tiebreak when evicting
+        // equal-priority cells under the soft cap (see tick()). Was the
+        // dead `last_loaded_ms` field; revived for the LRU contract the
+        // header documents.
+        u64       load_seq{0};
     };
     cardinal::unordered_map<CellId, Entry> cells;
     cardinal::unordered_map<u32, Viewer>   viewers;
@@ -43,6 +48,8 @@ struct WorldPartition::Impl {
     OnUnload on_unload{};
     CellId   next_cell_id{1};
     u32      next_viewer_id{1};
+    u64      next_load_seq{1};      // ++ on each load; 0 = never loaded
+
     u64      cells_loaded_total{0};
     u64      cells_unloaded_total{0};
 };
@@ -157,9 +164,16 @@ void WorldPartition::tick() {
     const u32 cap = impl_->desc.max_resident_cells;
 
     // Sort want_load by priority desc so the most important come first.
+    // Highest priority first; CellId breaks ties so the load order (and
+    // therefore the on_load callback order + the load_seq the LRU
+    // tiebreak below depends on) is fully deterministic regardless of
+    // the unordered_map's iteration order.
     cardinal::sort(want_load.begin(), want_load.end(),
         [this](CellId a, CellId b) {
-            return impl_->cells[a].desc.priority > impl_->cells[b].desc.priority;
+            const u32 pa = impl_->cells[a].desc.priority;
+            const u32 pb = impl_->cells[b].desc.priority;
+            if (pa != pb) return pa > pb;
+            return a < b;
         });
 
     // If we'll exceed cap, also evict lowest-priority current cells.
@@ -174,9 +188,21 @@ void WorldPartition::tick() {
                 evictable.push_back(id);
             }
         }
+        // Evict lowest priority first; among EQUAL priority evict the
+        // oldest-loaded (true LRU — the contract the header documents
+        // and what load_seq exists for); CellId is the final tiebreak so
+        // the eviction set is a strict total order. Was: priority-only
+        // comparison via a non-stable sort over unordered_map order, so
+        // which equal-priority cell unloaded varied run-to-run.
         cardinal::sort(evictable.begin(), evictable.end(),
             [this](CellId a, CellId b) {
-                return impl_->cells[a].desc.priority < impl_->cells[b].desc.priority;
+                const Impl::Entry& ea = impl_->cells[a];
+                const Impl::Entry& eb = impl_->cells[b];
+                if (ea.desc.priority != eb.desc.priority)
+                    return ea.desc.priority < eb.desc.priority;
+                if (ea.load_seq != eb.load_seq)
+                    return ea.load_seq < eb.load_seq;      // older first
+                return a < b;
             });
         const i64 over = static_cast<i64>(currently_loaded) +
                          static_cast<i64>(want_load.size()) -
@@ -199,7 +225,8 @@ void WorldPartition::tick() {
         auto& e = impl_->cells[id];
         if (e.state == CellState::Loaded) continue;
         if (impl_->on_load) impl_->on_load(id, e.desc);
-        e.state = CellState::Loaded;
+        e.state    = CellState::Loaded;
+        e.load_seq = impl_->next_load_seq++;
         ++impl_->cells_loaded_total;
     }
 }
@@ -208,7 +235,8 @@ void WorldPartition::force_load(CellId id) {
     auto it = impl_->cells.find(id);
     if (it == impl_->cells.end() || it->second.state == CellState::Loaded) return;
     if (impl_->on_load) impl_->on_load(id, it->second.desc);
-    it->second.state = CellState::Loaded;
+    it->second.state    = CellState::Loaded;
+    it->second.load_seq = impl_->next_load_seq++;
     ++impl_->cells_loaded_total;
 }
 void WorldPartition::force_unload(CellId id) {

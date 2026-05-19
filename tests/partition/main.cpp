@@ -341,6 +341,48 @@ void test_cap_eviction() {
     }
 }
 
+// ---- equal-priority eviction is LRU (oldest-loaded) + deterministic --
+// Regression for a real determinism defect: `evictable` was sorted by
+// priority ALONE via a non-stable sort over unordered_map iteration
+// order, so among EQUAL-priority cells which one unloaded varied
+// run-to-run (rehash-dependent) — and it contradicted the header's
+// documented LRU contract. The revived load_seq field now breaks
+// priority ties by oldest-loaded, with CellId as the final total-order
+// tiebreak (and want_load is CellId-tiebroken so load_seq itself is
+// deterministic). Pin: the OLDEST-loaded equal-priority cell is the
+// one evicted, identically across two independent runs. Pre-fix this
+// assertion was nondeterministic.
+void test_cap_eviction_lru_determinism() {
+    auto run = []() {
+        pn::WorldPartitionDesc desc; desc.max_resident_cells = 2u;
+        auto wp = pn::WorldPartition::create(desc);
+        auto& W = *wp;
+        // 3 co-located cells, SAME priority, all in one viewer's range.
+        // Added A,B,C → CellIds ascending → A loads first → smallest
+        // load_seq → must be the LRU eviction victim.
+        const pn::CellId A = W.add_cell(dist_cell(1000.f, 2000.f, 0,0,0, 7u));
+        const pn::CellId B = W.add_cell(dist_cell(1000.f, 2000.f, 0,0,0, 7u));
+        const pn::CellId C = W.add_cell(dist_cell(1000.f, 2000.f, 0,0,0, 7u));
+        W.add_viewer(viewer_at(0,0,0));
+        W.tick();                       // soft cap can't pre-empt → all 3 in
+        const u32 after1 = W.stats().loaded;
+        W.tick();                       // over cap → evict oldest-loaded (A)
+        struct R { u32 loaded1; int sA, sB, sC; };
+        return R{ after1,
+                  static_cast<int>(W.state(A)),
+                  static_cast<int>(W.state(B)),
+                  static_cast<int>(W.state(C)) };
+    };
+    const auto r1 = run();
+    const auto r2 = run();
+    CHECK(r1.loaded1 == 3u);                                        // soft cap let all 3 in
+    CHECK(r1.sA == static_cast<int>(pn::CellState::Unloaded));       // oldest → evicted
+    CHECK(r1.sB == static_cast<int>(pn::CellState::Loaded));         // newer → kept
+    CHECK(r1.sC == static_cast<int>(pn::CellState::Loaded));         // newest → kept
+    CHECK(r2.sA == r1.sA && r2.sB == r1.sB && r2.sC == r1.sC);       // deterministic
+    CHECK(r2.loaded1 == r1.loaded1);
+}
+
 // ---- force_load / force_unload no-op rules ------------------------
 void test_force() {
     auto wp = pn::WorldPartition::create();
@@ -421,6 +463,7 @@ int main() {
     test_modes_and_gating();
     test_multi_viewer_union();
     test_cap_eviction();
+    test_cap_eviction_lru_determinism();
     test_force();
     test_stats_describe();
 

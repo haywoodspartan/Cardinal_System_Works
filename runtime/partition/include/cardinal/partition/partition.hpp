@@ -15,7 +15,9 @@
 //     partition unions every viewer's needs
 //   * Hysteresis — `load_radius` < `unload_radius` so cells don't churn at
 //     the boundary
-//   * Soft cap — total resident count limited; LRU eviction when over
+//   * Soft cap — resident count limited; over-cap eviction is
+//     lowest-priority first, oldest-loaded (LRU) breaking ties, then
+//     CellId — a strict total order, so eviction is fully deterministic
 //
 // On per-cell load / unload the system fires callbacks; the integrator
 // spawns / despawns actors, allocates / frees streamed assets, etc.
