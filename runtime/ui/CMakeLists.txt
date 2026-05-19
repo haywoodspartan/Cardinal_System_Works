@@ -21,6 +21,10 @@ set(CARDINAL_UI_SOURCES
     # out of the studio.cpp god-file. Behaviour-identical; further
     # cohesive groups (gizmo math, panel forwarders) follow incrementally.
     src/studio_vk_diag.cpp
+    # Studio decomposition step 2: the pure gizmo-math primitives
+    # (project_/mouse_world_ray_/ray_plane_) — verbatim, member-free,
+    # behaviour-identical; StudioImpl keeps thin forwarders.
+    src/studio_gizmo_math.cpp
     # StudioEngine — the "roof" layer. Wraps cardinal::engine with the
     # Studio frame pump (dockspace, menu bar, panels, FlyCamera input).
     # Apps that want the editor experience link cardinal::ui and use
