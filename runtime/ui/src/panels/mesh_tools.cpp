@@ -10,7 +10,8 @@ namespace cardinal::ui::panels::mesh_tools_panel {
 void draw(State* st, bool selection_has_mesh,
           const char* title, bool* p_open)
 {
-    if (!ImGui::Begin(title ? title : "Mesh Tools", p_open)) {
+    if (!ImGui::Begin(title ? title : "Mesh Tools", p_open,
+                      ImGuiWindowFlags_NoMove)) {
         ImGui::End();
         return;
     }

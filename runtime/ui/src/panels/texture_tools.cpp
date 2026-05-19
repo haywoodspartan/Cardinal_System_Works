@@ -102,7 +102,8 @@ void export_ppm(const State& s) {
 }  // namespace
 
 void draw(State* st, const char* title, bool* p_open) {
-    if (!ImGui::Begin(title ? title : "Texture Tools", p_open)) {
+    if (!ImGui::Begin(title ? title : "Texture Tools", p_open,
+                      ImGuiWindowFlags_NoMove)) {
         ImGui::End();
         return;
     }

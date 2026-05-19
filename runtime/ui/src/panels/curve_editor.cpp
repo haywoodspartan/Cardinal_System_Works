@@ -13,7 +13,8 @@
 namespace cardinal::ui::panels::curve_editor_panel {
 
 void draw(cardinal::anim::Curve<float>* curve, const char* title, bool* p_open) {
-    if (!ImGui::Begin(title ? title : "Curve Editor", p_open)) {
+    if (!ImGui::Begin(title ? title : "Curve Editor", p_open,
+                      ImGuiWindowFlags_NoMove)) {
         ImGui::End();
         return;
     }

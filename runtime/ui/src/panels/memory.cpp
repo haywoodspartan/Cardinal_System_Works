@@ -51,7 +51,8 @@ void mb_progress(double frac, const char* overlay) {
 }  // namespace
 
 void draw(cardinal::budget::Broker* broker, const char* title, bool* p_open) {
-    if (!ImGui::Begin(title ? title : "Memory & Budgets", p_open)) {
+    if (!ImGui::Begin(title ? title : "Memory & Budgets", p_open,
+                      ImGuiWindowFlags_NoMove)) {
         ImGui::End();
         return;
     }

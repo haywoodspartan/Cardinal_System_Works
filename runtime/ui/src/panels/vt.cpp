@@ -51,7 +51,8 @@ void draw_heatmap(const cardinal::vt::PageTable& pt, cardinal::u32 mip, float si
 }  // namespace
 
 void draw(cardinal::vt::System* sys, const char* title, bool* p_open) {
-    if (!ImGui::Begin(title ? title : "Virtual Textures", p_open)) {
+    if (!ImGui::Begin(title ? title : "Virtual Textures", p_open,
+                      ImGuiWindowFlags_NoMove)) {
         ImGui::End();
         return;
     }

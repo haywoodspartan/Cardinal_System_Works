@@ -65,7 +65,8 @@ void edit_property(cardinal::game::PropertyDef& p) {
 void draw(cardinal::game::Game* game, cardinal::u32* selected_actor_id_inout,
           const char* title, bool* p_open)
 {
-    if (!ImGui::Begin(title ? title : "Game Classes", p_open)) {
+    if (!ImGui::Begin(title ? title : "Game Classes", p_open,
+                      ImGuiWindowFlags_NoMove)) {
         ImGui::End();
         return;
     }
