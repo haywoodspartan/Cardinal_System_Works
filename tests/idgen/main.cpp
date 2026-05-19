@@ -213,6 +213,40 @@ void test_pool_fuzz() {
     CHECK(mono);
 }
 
+// ---- SlotPool: generation wrap skips the reserved sentinel ----------
+// The 4000-step fuzz cannot reach 2^32 recycles of one slot, so the
+// generation-overflow contract was previously unpinned. A naive
+// ++generation wraps 0xFFFFFFFF -> 0; generation 0 is "invalid"
+// (Handle::valid()), so a recycled live slot would vend an UNUSABLE
+// handle and the next free would wrap to 1, ABA-colliding with the
+// slot's original gen-1 owner. next_generation() is the single source
+// of truth that skips 0 on wrap; pin it exactly at the boundary.
+void test_generation_wrap() {
+    CHECK(co::next_generation(1u)          == 2u);
+    CHECK(co::next_generation(2u)          == 3u);
+    CHECK(co::next_generation(0xFFFFFFFEu) == 0xFFFFFFFFu);  // last no-wrap
+    CHECK(co::next_generation(0xFFFFFFFFu) == 1u);           // wrap skips 0
+    CHECK(co::next_generation(0u)          == 1u);           // total: 0 never propagates
+
+    // Core invariant the bug violated: the next generation is NEVER 0,
+    // so a recycled slot's handle is always valid(). Sweep the boundary
+    // neighbourhood + a deterministic spread.
+    bool never_zero = true;
+    const u32 probes[] = { 0u, 1u, 2u, 1000u, 0x7FFFFFFFu, 0x80000000u,
+                           0xFFFFFFFDu, 0xFFFFFFFEu, 0xFFFFFFFFu };
+    for (u32 v : probes)
+        if (co::next_generation(v) == 0u) never_zero = false;
+    CHECK(never_zero);
+
+    // It stays monotone +1 everywhere except the single wrap point.
+    bool mono_except_wrap = true;
+    for (u32 v : probes) {
+        if (v == 0xFFFFFFFFu) continue;
+        if (co::next_generation(v) != v + 1u) mono_except_wrap = false;
+    }
+    CHECK(mono_except_wrap);
+}
+
 // ---- IdGen ----------------------------------------------------------
 void test_idgen() {
     co::IdGen<u64> g;                            // default first = 1
@@ -269,6 +303,7 @@ int main() {
     test_pool_reuse_guard();
     test_pool_lifo();
     test_pool_fuzz();
+    test_generation_wrap();
     test_idgen();
 
     if (g_fail == 0) {

@@ -31,6 +31,22 @@ private:
     std::atomic<T> counter_;
 };
 
+// Advance a 32-bit slot generation, skipping the reserved sentinel 0 on
+// wrap. Handle generation 0 means "invalid" (Handle::valid()), so a
+// generation that ++'d straight through 0xFFFFFFFF -> 0 would make a
+// live recycled slot vend an UNUSABLE handle (object unreferenceable),
+// and the next free would wrap it to 1 — ABA-colliding with the slot's
+// original gen-1 owner (silent aliasing, the exact corruption this type
+// exists to prevent). Wrapping 0xFFFFFFFF -> 1 keeps every recycled
+// handle valid and distinct from the immediately-prior owner. (Full ABA
+// avoidance across 2^32-1 recycles of one slot would require a 64-bit
+// generation — a Handle ABI change, deliberately out of scope; this
+// closes the concrete gen-0 defect.) Single source of truth so the
+// pool and any future generational scheme cannot drift.
+constexpr u32 next_generation(u32 g) noexcept {
+    return (g == 0xFFFFFFFFu) ? 1u : (g + 1u);
+}
+
 template <typename Tag>
 class SlotPool {
 public:
@@ -55,7 +71,9 @@ public:
         // pushed onto the free list twice (that would later vend one
         // slot to two live handles — silent aliasing corruption). This
         // is the use-after-free guard this type exists to provide.
-        ++generations_[h.index];
+        // next_generation() skips the reserved 0 on 32-bit wrap so a
+        // recycled slot never vends an invalid (gen-0) handle.
+        generations_[h.index] = next_generation(generations_[h.index]);
         free_.push_back(h.index);
         return true;
     }
