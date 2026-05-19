@@ -16,6 +16,11 @@ set(CARDINAL_UI_HEADERS
 
 set(CARDINAL_UI_SOURCES
     src/studio.cpp
+    # Studio decomposition step 1: the zero-StudioImpl-coupling Vulkan
+    # diagnostic helpers (vk_result_name + throttled check_vk) carved
+    # out of the studio.cpp god-file. Behaviour-identical; further
+    # cohesive groups (gizmo math, panel forwarders) follow incrementally.
+    src/studio_vk_diag.cpp
     # StudioEngine — the "roof" layer. Wraps cardinal::engine with the
     # Studio frame pump (dockspace, menu bar, panels, FlyCamera input).
     # Apps that want the editor experience link cardinal::ui and use
