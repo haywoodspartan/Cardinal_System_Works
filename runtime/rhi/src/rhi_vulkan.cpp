@@ -329,10 +329,13 @@ private:
         // Transient descriptor pool for this frame's storage-buffer
         // binds. Reset wholesale at begin_frame (after the in_flight
         // fence wait guarantees the GPU is done with frame-N-k's sets)
-        // so per-frame allocations recycle without per-set frees. Stays
-        // VK_NULL_HANDLE until the first bind_storage_buffer needs it
-        // (lazy create — push-constant-only apps pay nothing).
-        VkDescriptorPool desc_pool{VK_NULL_HANDLE};
+        // so per-frame allocations recycle without per-set frees. Grows
+        // on demand: a multi-viewport editor blows past any fixed set
+        // count, so a fresh block is appended whenever the frame's draws
+        // exhaust the current pools (canonical transient-pool-chain).
+        // Empty until the first bind needs it (push-only apps pay zero).
+        cardinal::vector<VkDescriptorPool> desc_pools;
+        u32                                desc_pool_cur{0};
     };
     cardinal::array<FrameSync, frames_in_flight> frames_{};
     u32 frame_index_{0};
@@ -2355,8 +2358,8 @@ bool VulkanSwapchain::create_per_frame_objects() {
 
 void VulkanSwapchain::destroy_per_frame_objects() {
     for (auto& f : frames_) {
-        if (f.desc_pool != VK_NULL_HANDLE)
-            vkDestroyDescriptorPool(dev_.device_, f.desc_pool, nullptr);
+        for (VkDescriptorPool dp : f.desc_pools)
+            vkDestroyDescriptorPool(dev_.device_, dp, nullptr);
         if (f.cmd  != VK_NULL_HANDLE) vkFreeCommandBuffers(dev_.device_, f.pool, 1, &f.cmd);
         if (f.pool != VK_NULL_HANDLE) vkDestroyCommandPool(dev_.device_, f.pool, nullptr);
         if (f.in_flight       != VK_NULL_HANDLE) vkDestroyFence(dev_.device_, f.in_flight, nullptr);
@@ -2596,35 +2599,61 @@ void VulkanSwapchain::rebuild_and_bind_descriptor_set_() {
 
     FrameSync& f = frames_[frame_index_];
 
-    // Lazy per-frame transient pool — sized for the engine's shape;
-    // reset wholesale each begin_frame so allocations never accumulate.
-    if (f.desc_pool == VK_NULL_HANDLE) {
+    // Per-frame transient pool *chain*. A single fixed pool can't cover a
+    // multi-viewport editor's per-frame set count — and the engine uses
+    // up to kMaxStorageSlots storage + kMaxStorageSlots samplers per set,
+    // so the old 64-set / 64-descriptor pool actually ran dry at ~32 sets
+    // (2 storage each) and then silently dropped the draw's descriptors,
+    // GPU-faulting. Append a fresh block whenever the current one is
+    // exhausted; all blocks are reset (not freed) at begin_frame, so the
+    // chain self-tunes to the workload and never silently under-allocates.
+    constexpr u32 kBlockSets = 64;
+    auto make_pool = [&]() -> VkDescriptorPool {
         VkDescriptorPoolSize ps[2]{};
         ps[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        ps[0].descriptorCount = 64;
+        ps[0].descriptorCount = kBlockSets * kMaxStorageSlots;
         ps[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        ps[1].descriptorCount = 64;
+        ps[1].descriptorCount = kBlockSets * kMaxStorageSlots;
         VkDescriptorPoolCreateInfo pci{};
         pci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pci.maxSets       = 64;
+        pci.maxSets       = kBlockSets;
         pci.poolSizeCount = 2;
         pci.pPoolSizes    = ps;
-        if (!vk_check(
-                vkCreateDescriptorPool(dev_.device_, &pci, nullptr, &f.desc_pool),
-                "vkCreateDescriptorPool")) {
-            return;
+        VkDescriptorPool p = VK_NULL_HANDLE;
+        if (!vk_check(vkCreateDescriptorPool(dev_.device_, &pci, nullptr, &p),
+                      "vkCreateDescriptorPool")) {
+            return VK_NULL_HANDLE;
         }
+        return p;
+    };
+
+    if (f.desc_pools.empty()) {
+        VkDescriptorPool p = make_pool();
+        if (p == VK_NULL_HANDLE) return;
+        f.desc_pools.push_back(p);
     }
 
     VkDescriptorSetAllocateInfo dai{};
     dai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    dai.descriptorPool     = f.desc_pool;
     dai.descriptorSetCount = 1;
     dai.pSetLayouts        = &dsl;
     VkDescriptorSet set = VK_NULL_HANDLE;
-    if (!vk_check(vkAllocateDescriptorSets(dev_.device_, &dai, &set),
-                  "vkAllocateDescriptorSets")) {
-        return;                                    // pool exhausted this frame
+    for (;;) {
+        dai.descriptorPool = f.desc_pools[f.desc_pool_cur];
+        const VkResult r = vkAllocateDescriptorSets(dev_.device_, &dai, &set);
+        if (r == VK_SUCCESS) break;
+        if (r != VK_ERROR_OUT_OF_POOL_MEMORY &&
+            r != VK_ERROR_FRAGMENTED_POOL) {
+            vk_check(r, "vkAllocateDescriptorSets");
+            return;
+        }
+        // Current block is full this frame — advance to / append the next.
+        ++f.desc_pool_cur;
+        if (f.desc_pool_cur >= f.desc_pools.size()) {
+            VkDescriptorPool p = make_pool();
+            if (p == VK_NULL_HANDLE) return;
+            f.desc_pools.push_back(p);
+        }
     }
 
     const u32 nstore = vp->storage_buffer_slots();
@@ -2725,9 +2754,9 @@ u32 VulkanSwapchain::begin_frame(float r, float g, float b, float a) {
     // slot's previous submission, so every transient descriptor set
     // allocated from it (kFramesInFlight ago) is now safe to recycle.
     // One reset is far cheaper than per-set frees.
-    if (f.desc_pool != VK_NULL_HANDLE) {
-        vkResetDescriptorPool(dev_.device_, f.desc_pool, 0);
-    }
+    for (VkDescriptorPool dp : f.desc_pools)
+        vkResetDescriptorPool(dev_.device_, dp, 0);
+    f.desc_pool_cur = 0;          // refill from the first block again
 
     vkAcquireNextImageKHR(dev_.device_, swapchain_, UINT64_MAX,
         f.image_available, VK_NULL_HANDLE, &acquired_image_);
