@@ -288,6 +288,40 @@ void test_failures(const std::filesystem::path& dir) {
     imp::ImportScene d = imp::import_file(str_of(bad), &err);
     CHECK(!d.ok);
     CHECK(!err.empty());
+
+    // Hostile glTF accessor counts must not OOM / crash: a negative
+    // count casts to ~SIZE_MAX on resize(), a huge one over-allocates.
+    // The decoded buffer is only 36 B, so read_accessor must reject and
+    // yield an empty/bounded mesh — never terminate the process.
+    {
+        const float pos[9] = { 0,0,0, 1,0,0, 0,1,0 };
+        std::vector<unsigned char> bb(sizeof(pos));
+        std::memcpy(bb.data(), pos, sizeof(pos));
+        const cardinal::string uri =
+            "data:application/octet-stream;base64," + b64(bb);
+        auto gltf_with_count = [&](const char* cnt) {
+            return cardinal::string(
+                "{\"asset\":{\"version\":\"2.0\"},"
+                "\"buffers\":[{\"byteLength\":36,\"uri\":\"") + uri + "\"}],"
+                "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,"
+                "\"byteLength\":36}],"
+                "\"accessors\":[{\"bufferView\":0,\"byteOffset\":0,"
+                "\"componentType\":5126,\"count\":" + cnt + ",\"type\":\"VEC3\"}],"
+                "\"meshes\":[{\"primitives\":[{\"attributes\":"
+                "{\"POSITION\":0}}]}],"
+                "\"nodes\":[{\"mesh\":0}],"
+                "\"scenes\":[{\"nodes\":[0]}],\"scene\":0}";
+        };
+        for (const char* badc : { "-1", "999999999", "2147483647" }) {
+            const auto gp = dir / "hostile.gltf";
+            write_file(gp, gltf_with_count(badc));
+            cardinal::string ge;
+            imp::ImportScene hs = imp::import_file(str_of(gp), &ge); // must return
+            if (!hs.meshes.empty())
+                CHECK(hs.meshes[0].positions.empty());
+            CHECK(hs.total_vertices() == 0u);                        // bounded
+        }
+    }
 }
 
 }  // namespace

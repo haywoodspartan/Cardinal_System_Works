@@ -279,13 +279,26 @@ cardinal::vector<float> read_accessor(const GltfCtx& g, int acc_idx, int& ncomp)
     const cardinal::vector<u8>& buf = g.buffers[buf_i];
     const int csz   = comp_size(ct);
     const int estep = (stride > 0) ? stride : (csz * ncomp);
-    out.resize(static_cast<cardinal::size_t>(cnt) * ncomp);
+    // `cnt` comes straight from untrusted JSON. A negative value casts to
+    // ~SIZE_MAX (instant bad_alloc on resize); a huge value OOMs. An
+    // accessor can't hold more elements than the decoded buffer has bytes
+    // (each element consumes >= 1 byte), so bound cnt by the real buffer.
+    // Also rejects an unknown `type` (ncomp == 0) before the size math.
+    if (cnt < 0 || ncomp <= 0 ||
+        static_cast<cardinal::size_t>(cnt) > buf.size()) {
+        return out;                       // hostile / impossible accessor
+    }
+    out.resize(static_cast<cardinal::size_t>(cnt) *
+               static_cast<cardinal::size_t>(ncomp));
     for (int i = 0; i < cnt; ++i) {
         const cardinal::size_t base = static_cast<cardinal::size_t>(bv_off) + a_off
                                + static_cast<cardinal::size_t>(i) * estep;
         for (int c = 0; c < ncomp; ++c) {
             const cardinal::size_t off = base + static_cast<cardinal::size_t>(c) * csz;
-            out[i * ncomp + c] = (off + csz <= buf.size())
+            out[static_cast<cardinal::size_t>(i) *
+                    static_cast<cardinal::size_t>(ncomp) +
+                static_cast<cardinal::size_t>(c)]
+                = (off + csz <= buf.size())
                 ? read_comp(buf.data() + off, ct, norm) : 0.0f;
         }
     }
