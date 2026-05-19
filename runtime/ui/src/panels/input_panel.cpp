@@ -44,7 +44,8 @@ const char* binding_code_name(const cardinal::input::Binding& b) {
 }  // namespace
 
 void draw(cardinal::input::Manager* mgr, const char* title, bool* p_open) {
-    if (!ImGui::Begin(title ? title : "Input", p_open)) { ImGui::End(); return; }
+    if (!ImGui::Begin(title ? title : "Input", p_open,
+                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
     if (mgr == nullptr) {
         ImGui::TextDisabled("(no input::Manager bound)");
         ImGui::End();

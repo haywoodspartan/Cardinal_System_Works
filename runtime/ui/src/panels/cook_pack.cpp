@@ -93,7 +93,8 @@ void draw(cardinal::project::Project* project,
           State* state,
           const char* title, bool* p_open)
 {
-    if (!ImGui::Begin(title ? title : "Cook & Pack", p_open)) { ImGui::End(); return; }
+    if (!ImGui::Begin(title ? title : "Cook & Pack", p_open,
+                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
     if (project == nullptr || registry == nullptr || state == nullptr) {
         ImGui::TextDisabled("(no project, cooker registry, or state bound)");
         ImGui::End();

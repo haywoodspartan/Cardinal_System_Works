@@ -16,7 +16,8 @@ namespace cardinal::ui::panels::save_load_panel {
 void draw(cardinal::game::Game* game, cardinal::sky::Sky* sky,
           const char* title, bool* p_open)
 {
-    if (!ImGui::Begin(title ? title : "Save / Load", p_open)) { ImGui::End(); return; }
+    if (!ImGui::Begin(title ? title : "Save / Load", p_open,
+                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
     if (game == nullptr) {
         ImGui::TextDisabled("(no game::Game bound)");
         ImGui::End();

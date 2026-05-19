@@ -129,7 +129,8 @@ void draw(cardinal::actor::World* world,
           cardinal::u32* selected_actor_id_inout,
           const char* title, bool* p_open)
 {
-    if (!ImGui::Begin(title ? title : "Actors", p_open)) { ImGui::End(); return; }
+    if (!ImGui::Begin(title ? title : "Actors", p_open,
+                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
     if (world == nullptr) {
         ImGui::TextDisabled("(no actor::World bound)");
         ImGui::End();

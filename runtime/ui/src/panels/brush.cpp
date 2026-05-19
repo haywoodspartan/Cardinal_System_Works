@@ -10,7 +10,8 @@
 namespace cardinal::ui::panels::brush_panel {
 
 void draw(cardinal::edit::brush::Brush* b, const char* title, bool* p_open) {
-    if (!ImGui::Begin(title ? title : "Brush", p_open)) { ImGui::End(); return; }
+    if (!ImGui::Begin(title ? title : "Brush", p_open,
+                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
     if (b == nullptr) {
         ImGui::TextDisabled("(no brush bound)");
         ImGui::End();

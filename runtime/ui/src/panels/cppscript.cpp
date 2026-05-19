@@ -50,7 +50,8 @@ void draw(cardinal::cppscript::Engine* engine,
           State& state,
           SandboxLookup lookup_sandbox)
 {
-    if (!ImGui::Begin(title ? title : "Code Sandbox", p_open)) { ImGui::End(); return; }
+    if (!ImGui::Begin(title ? title : "Code Sandbox", p_open,
+                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
 
     if (engine == nullptr) {
         ImGui::TextDisabled("(no cppscript::Engine bound)");
