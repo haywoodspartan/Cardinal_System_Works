@@ -315,6 +315,20 @@ void test_recent_projects() {
         r4.load();                                   // clears, file absent
         CHECK(r4.entries().empty());
     }
+    {   // load() enforces the same cap as add() even when the store has
+        // > kMaxRecent lines (older build / hand-edited / corrupt) —
+        // keeps the first (most-recent-first) 16.
+        const std::string big = sf + ".big";
+        std::string blob;
+        for (int i = 0; i < 25; ++i) blob += "/p/" + std::to_string(i) + "\n";
+        CHECK(write_file(big, blob));
+        pj::RecentProjects r5(big);
+        r5.load();
+        CHECK(r5.entries().size() == sz(16));
+        CHECK(r5.entries().front() == "/p/0");       // first line kept
+        CHECK(r5.entries().back()  == "/p/15");      // 16..24 dropped
+        std::error_code ec2; fs::remove(big, ec2);
+    }
     std::error_code ec;
     fs::remove(sf, ec);
     fs::remove(sf + ".cap", ec);

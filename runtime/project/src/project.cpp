@@ -297,13 +297,18 @@ cardinal::shared_ptr<Project> instantiate_template(const InstantiateOptions& opt
 // ---------------------------------------------------------------------------
 // RecentProjects
 // ---------------------------------------------------------------------------
+// Single source of truth for the "keep N most-recent" invariant — used
+// by BOTH add() and load() so a store file with more entries (older
+// build, hand-edited, corrupt) can't load past the cap.
+inline constexpr usize kMaxRecent = 16;
+
 RecentProjects::RecentProjects(cardinal::string store_path)
     : store_(cardinal::move(store_path)) {}
 
 void RecentProjects::add(const cardinal::string& root) {
     entries_.erase(cardinal::remove(entries_.begin(), entries_.end(), root), entries_.end());
     entries_.insert(entries_.begin(), root);
-    if (entries_.size() > 16) entries_.resize(16);
+    if (entries_.size() > kMaxRecent) entries_.resize(kMaxRecent);
 }
 void RecentProjects::remove(const cardinal::string& root) {
     entries_.erase(cardinal::remove(entries_.begin(), entries_.end(), root), entries_.end());
@@ -313,7 +318,9 @@ void RecentProjects::load() {
     cardinal::ifstream f(store_);
     if (!f) return;
     cardinal::string line;
-    while (cardinal::getline(f, line)) if (!line.empty()) entries_.push_back(line);
+    while (cardinal::getline(f, line))
+        if (!line.empty() && entries_.size() < kMaxRecent)
+            entries_.push_back(line);
 }
 void RecentProjects::save() const {
     cardinal::ofstream f(store_, cardinal::ios::binary | cardinal::ios::trunc);
