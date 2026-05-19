@@ -126,7 +126,21 @@ float Engine::compute_3d_attenuation_(const cardinal::scene::Vec3& pos) const no
 InstanceId Engine::play_2d(const cardinal::string& cue_id, ChannelId ch,
                            float volume, float pitch, bool loop)
 {
-    return play_3d(cue_id, {0,0,0}, ch, volume, pitch, loop) | (1ull << 63);   // mark 2D
+    // A 2D sound takes NO 3D distance attenuation and must stay
+    // controllable through the returned handle. play_3d hardcodes
+    // is_3d=true; the old `| (1ull<<63)` "2D marker" made the returned
+    // id never equal the stored s.id, so stop/fade_in/fade_out/
+    // set_emitter_position silently no-op'd on every 2D instance, and
+    // the sound stayed 3D-at-origin (listener-distance attenuated — an
+    // ambient/UI cue would wrongly fade with camera distance). Create
+    // via play_3d, clear is_3d for that instance, return the real id.
+    const InstanceId id = play_3d(cue_id, {0,0,0}, ch, volume, pitch, loop);
+    if (id != 0) {
+        cardinal::lock_guard<cardinal::mutex> lg(mtx_);
+        for (auto& s : instances_)
+            if (s.id == id) { s.is_3d = false; break; }
+    }
+    return id;
 }
 
 InstanceId Engine::play_3d(const cardinal::string& cue_id, const cardinal::scene::Vec3& pos,
