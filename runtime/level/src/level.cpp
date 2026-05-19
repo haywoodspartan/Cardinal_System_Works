@@ -1,6 +1,8 @@
 #include <cardinal/level/level.hpp>
 
 #include <cardinal/actor/component.hpp>
+#include <cardinal/scene/scene.hpp>
+#include <cardinal/scene/assets.hpp>
 #include <cardinal/core/log.hpp>
 
 #include <cardinal/core/algorithm.hpp>    // cardinal::sort/max
@@ -102,6 +104,155 @@ cardinal::vector<const Placement*> LevelManager::placements() const {
     r.reserve(placements_.size());
     for (const auto& p : placements_) r.push_back(p.get());
     return r;
+}
+
+// ---------------------------------------------------------------------------
+// AssetPlacement
+// ---------------------------------------------------------------------------
+cardinal::shared_ptr<AssetPlacement>
+AssetPlacement::create(cardinal::actor::World& world,
+                       cardinal::scene::Scene& scene) {
+    return cardinal::shared_ptr<AssetPlacement>(
+        new AssetPlacement(world, scene));
+}
+
+PlaceResult AssetPlacement::place(const char* asset_id,
+                                  cardinal::rhi::Device* device,
+                                  const cardinal::scene::Vec3& position) {
+    PlaceResult out{};
+    if (asset_id == nullptr) return out;
+
+    // 1. Render representation via the existing catalog factory.
+    cardinal::scene::AssetSpawnContext ctx{};
+    ctx.scene    = &scene_;
+    ctx.device   = device;
+    ctx.position = position;
+    const auto res = cardinal::scene::AssetCatalog::instance()
+                         .spawn(asset_id, ctx);
+    if (res.entity_ids.empty()) {
+        cardinal::log::warnf("level/place",
+            "asset '%s' produced no entities", asset_id);
+        return out;
+    }
+    const u32 primary = res.primary_id ? res.primary_id
+                                       : res.entity_ids.front();
+    cardinal::scene::Entity* pe = scene_.find_by_id(primary);
+
+    // 2. Authoritative backing actor.
+    cardinal::actor::Actor* a =
+        world_.spawn(pe ? pe->name : cardinal::string("PlacedAsset"));
+    if (a == nullptr) return out;
+    // World::spawn already attaches a default TransformComponent — fetch
+    // it (a second add_component would leave get_component returning the
+    // origin default).
+    auto* tc = a->get_component<cardinal::actor::TransformComponent>();
+    if (tc == nullptr)
+        tc = a->add_component<cardinal::actor::TransformComponent>();
+    if (pe) {
+        tc->translation    = pe->transform.translation;
+        tc->rotation_euler = pe->transform.rotation_euler;
+        tc->scale          = pe->transform.scale;
+    } else {
+        tc->translation = position;
+    }
+    auto* mc = a->get_component<cardinal::actor::MeshComponent>();
+    if (mc == nullptr)
+        mc = a->add_component<cardinal::actor::MeshComponent>();
+    mc->asset_id = asset_id;
+    if (pe) mc->tint = pe->tint;
+    auto* tg = a->get_component<cardinal::actor::TagComponent>();
+    if (tg == nullptr)
+        tg = a->add_component<cardinal::actor::TagComponent>();
+    tg->add("placed");
+
+    // 3. Track + capture each render entity's offset from the actor
+    //    origin so composites translate as a rigid group.
+    PlacedAsset rec{};
+    rec.asset_id       = asset_id;
+    rec.actor          = a->id();
+    rec.primary_entity = primary;
+    rec.entities.push_back(primary);
+    rec.local_offset.push_back({0.0f, 0.0f, 0.0f});
+    for (u32 eid : res.entity_ids) {
+        if (eid == primary) continue;
+        rec.entities.push_back(eid);
+        cardinal::scene::Vec3 off{0, 0, 0};
+        if (auto* e = scene_.find_by_id(eid)) {
+            off = { e->transform.translation.x - tc->translation.x,
+                    e->transform.translation.y - tc->translation.y,
+                    e->transform.translation.z - tc->translation.z };
+        }
+        rec.local_offset.push_back(off);
+    }
+    placed_.push_back(cardinal::move(rec));
+
+    out.actor          = a->id();
+    out.primary_entity = primary;
+    return out;
+}
+
+void AssetPlacement::sync_to_scene() {
+    for (const auto& p : placed_) {
+        cardinal::actor::Actor* a = world_.find(p.actor);
+        if (a == nullptr || !a->alive()) continue;
+        auto* tc = a->get_component<cardinal::actor::TransformComponent>();
+        if (tc == nullptr) continue;
+        auto* mc = a->get_component<cardinal::actor::MeshComponent>();
+        for (usize i = 0; i < p.entities.size(); ++i) {
+            cardinal::scene::Entity* e = scene_.find_by_id(p.entities[i]);
+            if (e == nullptr) continue;
+            const cardinal::scene::Vec3& off = p.local_offset[i];
+            e->transform.translation = { tc->translation.x + off.x,
+                                         tc->translation.y + off.y,
+                                         tc->translation.z + off.z };
+            if (i == 0) {
+                // Primary is a full 1:1 bind; sub-parts keep authored
+                // rotation/scale and just follow the group translation.
+                e->transform.rotation_euler = tc->rotation_euler;
+                e->transform.scale          = tc->scale;
+                if (mc != nullptr) {
+                    e->tint    = mc->tint;
+                    e->visible = mc->visible;
+                }
+            }
+        }
+    }
+}
+
+void AssetPlacement::sync_from_scene() {
+    for (auto& p : placed_) {
+        cardinal::actor::Actor* a = world_.find(p.actor);
+        if (a == nullptr || !a->alive()) continue;
+        cardinal::scene::Entity* e = scene_.find_by_id(p.primary_entity);
+        if (e == nullptr) continue;
+        if (auto* tc =
+                a->get_component<cardinal::actor::TransformComponent>()) {
+            tc->translation    = e->transform.translation;
+            tc->rotation_euler = e->transform.rotation_euler;
+            tc->scale          = e->transform.scale;
+        }
+        if (auto* mc = a->get_component<cardinal::actor::MeshComponent>())
+            mc->tint = e->tint;
+    }
+}
+
+bool AssetPlacement::remove(cardinal::actor::ActorId actor) {
+    for (usize i = 0; i < placed_.size(); ++i) {
+        if (placed_[i].actor != actor) continue;
+        for (u32 eid : placed_[i].entities) scene_.remove_entity(eid);
+        world_.destroy(actor);
+        placed_.erase(placed_.begin() + static_cast<cardinal::isize>(i));
+        return true;
+    }
+    return false;
+}
+
+void AssetPlacement::clear() {
+    for (auto& p : placed_) {
+        for (u32 eid : p.entities) scene_.remove_entity(eid);
+        world_.destroy(p.actor);
+    }
+    placed_.clear();
 }
 
 // ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ add_executable(Cardinal_Test_Level main.cpp)
 target_link_libraries(Cardinal_Test_Level PRIVATE
     cardinal::level
     cardinal::actor
+    cardinal::scene
     cardinal::core
     cardinal::compile_flags)
 set_target_properties(Cardinal_Test_Level PROPERTIES FOLDER tests)

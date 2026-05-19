@@ -98,6 +98,78 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// AssetPlacement — drop scene::AssetCatalog assets into the level as real
+// actors.
+//
+// The fix for "place objects/actors/meshes with the studio tools in full":
+// scene::AssetCatalog factories only build scene::Scene render entities, so
+// placed assets were invisible to actor::World, the Actor Outliner, Game,
+// serial save/load, and the level. AssetPlacement makes the placed asset a
+// first-class actor::Actor (Transform + Mesh + "placed" Tag) — so every
+// actor-based Studio tool sees it — while a linked scene::Entity stays the
+// render mirror (the renderer already walks scene entities).
+//
+// Authority model (per the chosen design): the ACTOR is authoritative.
+//   - place()           : spawn render entity(ies) + the backing actor.
+//   - sync_to_scene()   : actor Transform/tint -> scene entity (call each
+//                         frame before render; pushes Outliner / serial-
+//                         load / programmatic actor edits to the view).
+//   - sync_from_scene() : scene entity -> actor (call right after the
+//                         Studio gizmo / inspector, which edit the scene
+//                         entity, so the authoritative actor + save-load
+//                         pick the move up).
+// Single-mesh assets are a 1:1 actor<->entity bind (full gizmo fidelity).
+// Composite assets (e.g. tree = trunk+leaves) translate as a rigid group
+// off the actor; sub-part authored rotation/scale is preserved.
+// ---------------------------------------------------------------------------
+}  // namespace cardinal::level
+
+namespace cardinal::scene { class Scene; }
+namespace cardinal::rhi   { class Device; }
+
+namespace cardinal::level {
+
+struct PlacedAsset {
+    cardinal::string                          asset_id;
+    cardinal::actor::ActorId                  actor{0};
+    u32                                       primary_entity{0};
+    cardinal::vector<u32>                     entities;          // primary first
+    cardinal::vector<cardinal::scene::Vec3>   local_offset;      // vs actor origin
+};
+
+struct PlaceResult {
+    cardinal::actor::ActorId actor{0};          // 0 == failed
+    u32                      primary_entity{0}; // feed Studio selection
+};
+
+class AssetPlacement {
+public:
+    static cardinal::shared_ptr<AssetPlacement>
+        create(cardinal::actor::World& world, cardinal::scene::Scene& scene);
+
+    PlaceResult place(const char* asset_id,
+                      cardinal::rhi::Device* device,
+                      const cardinal::scene::Vec3& position);
+
+    void sync_to_scene();     // actor (authoritative) -> scene render mirror
+    void sync_from_scene();   // scene edit (Studio gizmo/inspector) -> actor
+
+    bool   remove(cardinal::actor::ActorId actor);
+    void   clear();
+    usize  count() const noexcept { return placed_.size(); }
+    const cardinal::vector<PlacedAsset>& placements() const noexcept {
+        return placed_;
+    }
+
+private:
+    AssetPlacement(cardinal::actor::World& w, cardinal::scene::Scene& s)
+        : world_(w), scene_(s) {}
+    cardinal::actor::World&       world_;
+    cardinal::scene::Scene&       scene_;
+    cardinal::vector<PlacedAsset> placed_;
+};
+
+// ---------------------------------------------------------------------------
 // HLOD — Hierarchical LOD.
 //
 // Build a tree from a set of (id, world position, world AABB). Internal

@@ -19,6 +19,9 @@
 // =============================================================================
 
 #include <cardinal/level/level.hpp>
+#include <cardinal/scene/scene.hpp>
+#include <cardinal/scene/assets.hpp>
+#include <cardinal/actor/component.hpp>
 #include <cardinal/core/log.hpp>
 
 #include <string>
@@ -283,10 +286,75 @@ void test_select_hlod() {
 
 }  // namespace
 
+// ---- AssetPlacement: actor-authoritative placement + scene mirror ----
+void test_asset_placement() {
+    // Headless test asset (no rhi::Device): factory just adds a scene
+    // entity at ctx.position. register_asset is id-idempotent.
+    {
+        cardinal::scene::AssetDesc d{};
+        d.id      = "test.box";
+        d.label   = "Test Box";
+        d.category= "Test";
+        d.factory = [](const cardinal::scene::AssetSpawnContext& ctx)
+                        -> cardinal::scene::AssetSpawnResult {
+            if (ctx.scene == nullptr) return {};
+            auto& e = ctx.scene->add_entity("TestBox");
+            e.transform.translation = ctx.position;
+            e.tint = { 1.0f, 0.0f, 0.0f };
+            return cardinal::scene::AssetSpawnResult{ { e.id }, e.id };
+        };
+        cardinal::scene::AssetCatalog::instance().register_asset(
+            cardinal::move(d));
+    }
+
+    ac::World          w;
+    cardinal::scene::Scene scene;
+    auto pl = lv::AssetPlacement::create(w, scene);
+    CHECK(pl != nullptr);
+
+    const auto r = pl->place("test.box", nullptr, v3(5, 0, -3));
+    CHECK(r.actor != 0u);
+    CHECK(r.primary_entity != 0u);
+    CHECK(pl->count() == sz(1));
+
+    // The placed asset is a first-class actor (Outliner/Game/serial see
+    // it) carrying Transform + Mesh + "placed" Tag.
+    ac::Actor* a = w.find(r.actor);
+    CHECK(a != nullptr);
+    auto* tc = a ? a->get_component<ac::TransformComponent>() : nullptr;
+    auto* mc = a ? a->get_component<ac::MeshComponent>()      : nullptr;
+    auto* tg = a ? a->get_component<ac::TagComponent>()       : nullptr;
+    CHECK(tc != nullptr && apv(tc->translation, 5, 0, -3));
+    CHECK(mc != nullptr && mc->asset_id == "test.box");
+    CHECK(tg != nullptr && tg->has("placed"));
+    CHECK(scene.find_by_id(r.primary_entity) != nullptr);
+
+    // Studio gizmo edits the scene entity -> sync_from_scene pulls it
+    // onto the authoritative actor (so save-load / Outliner track it).
+    scene.find_by_id(r.primary_entity)->transform.translation = v3(9, 1, 2);
+    pl->sync_from_scene();
+    CHECK(tc != nullptr && apv(tc->translation, 9, 1, 2));
+
+    // Programmatic actor edit (Outliner / serial-load) -> sync_to_scene
+    // pushes it to the render mirror.
+    tc->translation = v3(-4, 6, 8);
+    pl->sync_to_scene();
+    CHECK(apv(scene.find_by_id(r.primary_entity)->transform.translation,
+              -4, 6, 8));
+
+    // Remove unwinds both the actor and the render entity.
+    CHECK(pl->remove(r.actor));
+    CHECK(pl->count() == sz(0));
+    CHECK(scene.find_by_id(r.primary_entity) == nullptr);
+    ac::Actor* dead = w.find(r.actor);
+    CHECK(dead == nullptr || !dead->alive());
+}
+
 int main() {
     test_level_manager();
     test_build_hlod();
     test_select_hlod();
+    test_asset_placement();
 
     if (g_fail == 0) {
         cardinal::log::infof("lvltest", "OK  %d checks passed", g_checks);

@@ -1098,6 +1098,13 @@ int main(int argc, char** argv) {
         level_manager->spawn(inst, {0, 0, -10});
     }
 
+    // Asset placement — the bridge that makes "place an asset" produce a
+    // first-class actor (visible to the Actor Outliner / Game / serial
+    // save-load / level) while a scene::Entity stays the render mirror.
+    // Every palette drop + "spawn here" goes through this; sync keeps the
+    // authoritative actor and the rendered entity coherent each frame.
+    auto placement = cardinal::level::AssetPlacement::create(aworld, scene);
+
     // HLOD — build a tree from the scene's mesh entities so the panel has
     // something to show. Small scenes get small trees; that's fine.
     cardinal::level::HlodTree hlod_tree;
@@ -1644,11 +1651,13 @@ int main(int argc, char** argv) {
                         for (const auto& a : cat.all()) {
                             if (a.category != cat_name) continue;
                             if (ImGui::MenuItem(a.label.c_str())) {
-                                scn::AssetSpawnContext ctx{};
-                                ctx.scene = &scene; ctx.device = device.get();
-                                ctx.position = spawn_at;
-                                auto r = cat.spawn(a.id.c_str(), ctx);
-                                if (r.primary_id) selected_id = r.primary_id;
+                                // Through AssetPlacement: spawns the render
+                                // entity AND a first-class actor (Outliner
+                                // / Game / serial / level all see it).
+                                auto pr = placement->place(
+                                    a.id.c_str(), device.get(), spawn_at);
+                                if (pr.primary_entity)
+                                    selected_id = pr.primary_entity;
                             }
                             if (ImGui::IsItemHovered() && !a.tooltip.empty()) {
                                 ImGui::SetTooltip("%s", a.tooltip.c_str());
@@ -2066,40 +2075,31 @@ int main(int argc, char** argv) {
         // record the action in the undo stack so the user can take it back.
         auto spawn_asset_at = [&](const char* asset_id, scn::Vec3 pos) {
             if (asset_id == nullptr || *asset_id == '\0') return;
-            scn::AssetSpawnContext ctx{};
-            ctx.scene  = &scene; ctx.device = device.get();
-            ctx.position = pos;
-            auto r = scn::AssetCatalog::instance().spawn(asset_id, ctx);
-            if (r.primary_id == 0) return;
-            selected_id = r.primary_id;
+            // Route through AssetPlacement: the spawn is now a first-class
+            // actor (Actor Outliner / Game / serial save-load / level all
+            // see it) with a scene::Entity render mirror — not a
+            // scene-only entity that the rest of the toolchain can't touch.
+            auto pr = placement->place(asset_id, device.get(), pos);
+            if (pr.actor == 0u) return;
+            selected_id = pr.primary_entity;
 
-            // Capture the spawned ids for the undo's revert path.
-            std::string id_copy = asset_id;
-            std::vector<u32> spawned = r.entity_ids;
-            // Snapshot every spawned entity so we can recreate on redo
-            // even after they were undone.
-            struct Snap { std::string name; scn::Vec3 pos, scale, tint; std::shared_ptr<scn::Mesh> mesh; };
-            std::vector<Snap> snaps;
-            snaps.reserve(spawned.size());
-            for (u32 eid : spawned) {
-                if (auto* e = scene.find_by_id(eid)) {
-                    snaps.push_back({ e->name, e->transform.translation,
-                                      e->transform.scale, e->tint, e->mesh });
-                }
-            }
+            // Undo/redo removes + re-places the whole placement (actor +
+            // render entities) as a unit. A shared cell tracks the live
+            // actor id because each redo mints a fresh actor/entity set.
+            auto live = std::make_shared<cardinal::actor::ActorId>(pr.actor);
+            std::string  id_copy = asset_id;
+            scn::Vec3    at      = pos;
+            auto*        pl      = placement.get();
+            rhi::Device* dev     = device.get();
             edit::Command cmd;
             cmd.label  = "Spawn " + id_copy;
-            cmd.revert = [spawned, &scene]() {
-                for (u32 eid : spawned) scene.remove_entity(eid);
+            cmd.revert = [live, pl]() {
+                if (*live != 0u) { pl->remove(*live); *live = 0u; }
             };
-            cmd.apply  = [snaps, &scene]() {
-                for (const auto& s : snaps) {
-                    auto& e = scene.add_entity(s.name);
-                    e.transform.translation = s.pos;
-                    e.transform.scale       = s.scale;
-                    e.tint                  = s.tint;
-                    e.mesh                  = s.mesh;
-                }
+            cmd.apply  = [live, pl, id_copy, at, dev, &selected_id]() {
+                auto rr = pl->place(id_copy.c_str(), dev, at);
+                *live = rr.actor;
+                if (rr.primary_entity) selected_id = rr.primary_entity;
             };
             undo.push_executed(std::move(cmd));
         };
@@ -2765,6 +2765,14 @@ int main(int argc, char** argv) {
         }
 
         studio->end_frame();
+
+        // Writeback: the Studio gizmo / inspector edit the scene::Entity
+        // (the render surface). Push those edits onto each placement's
+        // authoritative actor so the Actor Outliner, Game, level, and
+        // serial save-load all see the up-to-date transform/tint. Runs
+        // once per frame after every panel/gizmo edit is committed.
+        placement->sync_from_scene();
+
         // RenderSubmitEnd — closes the render-side bracket. The Present
         // Start/End markers live inside the swapchain's end_frame()/
         // present pair (they wrap DXGI's Present call to capture OS-block
