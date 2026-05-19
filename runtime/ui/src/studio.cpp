@@ -229,19 +229,23 @@ public:
         // its contents. Title-bar-only move is also the expected
         // pro-editor behaviour (UE / Unity / Blender all do this).
         io.ConfigWindowsMoveFromTitleBarOnly = true;
-        // ...but ConfigWindowsMoveFromTitleBarOnly alone is NOT enough
-        // with docking. ImGui's cancel-move gate (imgui.cpp 1.91.9
-        // UpdateMouseMovingWindowEndFrame) only fires for a root window
-        // when `!(Flags & NoTitleBar) || DockIsActive`. A panel dragged
-        // out so it is the sole window in a floating node has its host
-        // node hidden (HostWindowHiddenBecauseSingleWindow): the root
-        // window then has NoTitleBar set AND DockIsActive == false, so
-        // the gate is skipped and a body click drags the whole node /
-        // OS window. ConfigDockingAlwaysTabBar keeps every floating /
-        // detached node's tab+title bar (DockIsActive stays true so the
-        // `|| DockIsActive` branch fires) — this closes the bypass for
-        // EVERY panel in one place, not per-window.
-        io.ConfigDockingAlwaysTabBar = true;
+        // DO NOT add `io.ConfigDockingAlwaysTabBar = true;` here. It DOES
+        // fix the residual "a SOLO torn-out panel still drags from its
+        // body" issue (with the node host window hidden, that window has
+        // NoTitleBar + DockIsActive==false so ImGui's move-cancel gate is
+        // skipped). BUT with ConfigDockingAlwaysTabBar the solo detached
+        // node keeps a separate DockNodeHost window, which becomes an
+        // EXTRA ImGui platform viewport → an additional secondary Vulkan
+        // swapchain via Platform_CreateVkSurface. That re-enters the
+        // fragile secondary-submit path documented below and aborts the
+        // device (VK_ERROR_DEVICE_LOST in ImGui_ImplVulkan_RenderWindow)
+        // when the user manipulates the separated window. A Vulkan crash
+        // strictly outweighs body-drag-moves-window, which is a known,
+        // NON-fatal limitation for solo torn-out panels only. A safe
+        // per-ImGuiWindowClass alternative (collapse torn-out viewports
+        // to one swapchain while other panels keep the tab bar) is
+        // tracked separately — do not re-enable the global flag until
+        // the Vulkan secondary-swapchain path is hardened.
         // Master window system: any panel can be dragged outside the main
         // window and become its own OS-native window. ImGui_ImplWin32 spawns
         // those secondary windows; the renderer backend creates a per-window
