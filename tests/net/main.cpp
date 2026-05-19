@@ -198,6 +198,58 @@ void test_interpolation() {
     if (out.size() == sz(1)) CHECK(approx(out[0].position.x, 10.0f, 1.0e-3f));
 }
 
+// ---- 3b. client interpolation: non-finite render_time --------------
+// Regression: a NaN render_time defeats BOTH ordered clamp guards (NaN
+// compares unordered). With one buffered snapshot the a/b pair read
+// history_[1] OUT OF BOUNDS (UB / crash); with >=2 it lerps alpha=NaN
+// → every proxy teleports to NaN. NaN must hold the newest snapshot
+// (like "past newest"); +/-Inf is ordered and already clamps. NaN/Inf
+// laundered through volatile (foundation discipline: no <cmath>).
+double nan_d() { volatile double z = 0.0; return z / z; }    // 0/0 = NaN
+double inf_d() { volatile double z = 0.0; return 1.0 / z; }   // 1/0 = +Inf
+
+void test_interpolation_nonfinite() {
+    // --- two snapshots: NaN must NOT produce NaN transforms ---
+    {
+        auto t = fresh();
+        Replicator repl(*t);
+        { std::vector<RepState> in{mk(7u, 0.0f)};  repl.server_broadcast(in);
+          std::vector<NetEvent> ev; t->poll(ev); repl.client_buffer(ev, 100.0); }
+        { std::vector<RepState> in{mk(7u, 10.0f)}; repl.server_broadcast(in);
+          std::vector<NetEvent> ev; t->poll(ev); repl.client_buffer(ev, 101.0); }
+        CHECK(repl.history_size() == sz(2));
+
+        std::vector<RepState> out;
+        const cardinal::usize n = repl.client_sample(nan_d(), out);
+        CHECK(n == sz(1));
+        if (out.size() == sz(1)) {
+            const float x = out[0].position.x;
+            CHECK(x == x);                        // finite, not NaN
+            CHECK(approx(x, 10.0f, 1.0e-3f));     // held newest snapshot
+        }
+        repl.client_sample(inf_d(), out);          // +Inf → newest
+        if (out.size() == sz(1)) CHECK(approx(out[0].position.x, 10.0f, 1.0e-3f));
+        repl.client_sample(-inf_d(), out);         // -Inf → oldest
+        if (out.size() == sz(1)) CHECK(approx(out[0].position.x, 0.0f, 1.0e-3f));
+    }
+    // --- one snapshot: NaN must not read history_[1] OUT OF BOUNDS ---
+    {
+        auto t = fresh();
+        Replicator repl(*t);
+        { std::vector<RepState> in{mk(3u, 4.0f)}; repl.server_broadcast(in);
+          std::vector<NetEvent> ev; t->poll(ev); repl.client_buffer(ev, 50.0); }
+        CHECK(repl.history_size() == sz(1));
+        std::vector<RepState> out;
+        const cardinal::usize n = repl.client_sample(nan_d(), out);
+        CHECK(n == sz(1));                          // no OOB; returns the snap
+        if (out.size() == sz(1)) {
+            const float x = out[0].position.x;
+            CHECK(out[0].id == 3u);
+            CHECK(x == x && approx(x, 4.0f, 1.0e-3f));
+        }
+    }
+}
+
 // ---- 4. loss-sim determinism + invariants ---------------------------
 // One run: `iters` ticks, each sending one Unreliable snapshot and one
 // ReliableOrdered lifecycle event; returns how many of each the client
@@ -320,6 +372,7 @@ int main() {
     test_quantization();
     test_seq_gating_reorder();
     test_interpolation();
+    test_interpolation_nonfinite();
     test_loss_sim();
     test_lifecycle();
 

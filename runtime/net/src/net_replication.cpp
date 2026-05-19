@@ -290,7 +290,15 @@ cardinal::usize Replicator::client_sample(
         out = history_.front().states;
         return out.size();
     }
-    if (render_time >= history_.back().t) {
+    // A non-finite render_time (NaN from a bad host clock / interp_delay)
+    // makes BOTH ordered clamp guards false — NaN compares unordered — so
+    // with one buffered snapshot the a/b pair below reads history_[1] OUT
+    // OF BOUNDS, and with >=2 it lerps with alpha = NaN, teleporting every
+    // proxy to NaN. (+/-Inf is ordered and already handled by these
+    // clamps.) Route NaN into the "past newest" clamp: hold the freshest
+    // buffered snapshot — stable, in-gamut, never OOB. (x != x iff NaN;
+    // this TU is deliberately <cmath>-free.)
+    if (render_time != render_time || render_time >= history_.back().t) {
         out = history_.back().states;
         return out.size();
     }
