@@ -15,8 +15,12 @@
 #include <cardinal/core/platform.hpp>
 
 #include <atomic>
+#include <csignal>      // signal / raise / SIGABRT — abort()/assert path
+#include <cstdint>      // uintptr_t — _invalid_parameter_handler signature
 #include <cstdio>
+#include <cstdlib>      // _set_purecall_handler / _set_invalid_parameter_handler
 #include <cstring>
+#include <exception>    // std::set_terminate — uncaught / escaped exceptions
 #include <mutex>
 
 #if CARDINAL_PLATFORM_WINDOWS
@@ -67,6 +71,10 @@ std::string          g_last_dump_path;
 
 #if CARDINAL_PLATFORM_WINDOWS
 LPTOP_LEVEL_EXCEPTION_FILTER g_prev_filter{nullptr};
+// Previous non-SEH fatal handlers, restored by uninstall().
+std::terminate_handler       g_prev_terminate{nullptr};
+_purecall_handler            g_prev_purecall{nullptr};
+_invalid_parameter_handler   g_prev_invparam{nullptr};
 HMODULE                      g_dbghelp{nullptr};
 PFN_MiniDumpWriteDump        g_pfn_minidump{nullptr};
 PFN_SymInitialize            g_pfn_sym_init{nullptr};
@@ -345,6 +353,42 @@ bool write_dump_internal(EXCEPTION_POINTERS* eptr, const char* reason) {
     return ok;
 }
 
+// Shared tail for the non-SEH fatal paths (abort()/assert, std::terminate,
+// pure-virtual, CRT invalid-parameter). There is no EXCEPTION_POINTERS
+// here, so write_dump_internal falls back to RtlCaptureContext — the
+// symbolised stack still pinpoints the failing frame, exactly what was
+// missing for the Vulkan-exit VMA assert (assert→abort→SIGABRT never
+// reached the SEH filter).
+void capture_fatal(const char* reason) {
+    bool expected = false;
+    if (!g_in_handler.compare_exchange_strong(expected, true)) return;
+    write_dump_internal(nullptr, reason);
+}
+
+void on_terminate() {
+    capture_fatal("std::terminate (uncaught / escaped exception)");
+    if (g_prev_terminate) g_prev_terminate();
+    _Exit(3);                       // never return from a terminate handler
+}
+
+void __cdecl on_signal_abort(int) {
+    capture_fatal("abort() / assert (SIGABRT)");
+    ::signal(SIGABRT, SIG_DFL);     // restore default, then die for real
+    ::raise(SIGABRT);
+}
+
+void __cdecl on_purecall() {
+    capture_fatal("pure virtual function call");
+    _Exit(3);
+}
+
+void __cdecl on_invalid_parameter(const wchar_t*, const wchar_t*,
+                                   const wchar_t*, unsigned int,
+                                   uintptr_t) {
+    capture_fatal("CRT invalid parameter");
+    _Exit(3);                       // returning would continue in UB
+}
+
 LONG WINAPI top_level_filter(EXCEPTION_POINTERS* eptr) {
     // Re-entrancy guard — if our own dump-writing crashes, don't loop.
     bool expected = false;
@@ -367,6 +411,14 @@ bool install(const CrashConfig& cfg) {
     if (!g_installed.compare_exchange_strong(expected, true)) return true;
     g_cfg = cfg;
     g_prev_filter = SetUnhandledExceptionFilter(&top_level_filter);
+    // Non-SEH fatal paths the unhandled-exception filter never sees:
+    // assert()/abort() (SIGABRT), uncaught / noexcept-escaped C++
+    // exceptions (std::terminate), pure-virtual calls, and CRT
+    // invalid-parameter. All route into the same symbolised dump+log.
+    g_prev_terminate = std::set_terminate(&on_terminate);
+    g_prev_purecall  = _set_purecall_handler(&on_purecall);
+    g_prev_invparam  = _set_invalid_parameter_handler(&on_invalid_parameter);
+    ::signal(SIGABRT, &on_signal_abort);
     cardinal::log::infof("crash",
         "crash reporter armed (dump_dir=%s detail=%s also_default=%s)",
         cfg.dump_dir.empty() ? "<exe>/crashes" : cfg.dump_dir.c_str(),
@@ -386,6 +438,13 @@ void uninstall() noexcept {
     if (!g_installed.compare_exchange_strong(expected, false)) return;
     SetUnhandledExceptionFilter(g_prev_filter);
     g_prev_filter = nullptr;
+    std::set_terminate(g_prev_terminate);
+    _set_purecall_handler(g_prev_purecall);
+    _set_invalid_parameter_handler(g_prev_invparam);
+    ::signal(SIGABRT, SIG_DFL);
+    g_prev_terminate = nullptr;
+    g_prev_purecall  = nullptr;
+    g_prev_invparam  = nullptr;
 #endif
 }
 
