@@ -182,6 +182,16 @@ bool decode_png_magic(const cardinal::vector<u8>& bytes, u32& w, u32& h,
     };
     w = rd_be_u32(16);
     h = rd_be_u32(20);
+    // w/h come straight from an untrusted IHDR (any file in assets/ whose
+    // first 8 bytes are the PNG signature). Unbounded, rgba.assign(w*h*4)
+    // attempts a multi-GiB allocation for a corrupt/oversized .png — or,
+    // once w*h*4 wraps 2^64, a bogus tiny buffer paired with giant
+    // declared dimensions. std::bad_alloc out of this non-noexcept cook
+    // path takes down the whole cook job. Reject zero/absurd dimensions
+    // and let the caller fall back to its 4x4 placeholder (identical
+    // handling to any other undecodable source).
+    constexpr u32 kMaxDim = 16384u;         // GPU max texture side
+    if (w == 0 || h == 0 || w > kMaxDim || h > kMaxDim) return false;
     // Without zlib we can't decode the IDAT — emit a placeholder RGBA8 of
     // the correct size so the asset has the right dimensions.
     rgba.assign(static_cast<usize>(w) * h * 4, 0xC0);

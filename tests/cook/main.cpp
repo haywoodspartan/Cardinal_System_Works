@@ -201,6 +201,75 @@ void test_mesh_cooker(const std::filesystem::path& dir) {
     CHECK(!c4.payload.empty());            // always emits geometry
 }
 
+// ---- TextureCooker: hostile/oversized PNG dimensions ----------------
+// Regression: decode_png_magic reads width/height straight from an
+// untrusted IHDR and did rgba.assign(w*h*4) UNBOUNDED — a corrupt or
+// oversized .png (any file with the 8-byte PNG signature) drove a
+// multi-GiB allocation (or, once w*h*4 wraps 2^64, a tiny buffer with
+// giant declared dims). std::bad_alloc out of the non-noexcept cook()
+// took down the whole cook job. Contract: zero/absurd dims are rejected
+// and fall back to the 4x4 magenta placeholder (like any undecodable
+// source); valid dims up to the GPU cap still decode unchanged.
+std::vector<u8> fake_png(u32 w, u32 h) {
+    std::vector<u8> b(24, 0);
+    const u8 sig[8] = {0x89,'P','N','G',0x0D,0x0A,0x1A,0x0A};
+    for (int i = 0; i < 8; ++i) b[i] = sig[i];
+    b[16] = static_cast<u8>(w >> 24); b[17] = static_cast<u8>(w >> 16);
+    b[18] = static_cast<u8>(w >> 8);  b[19] = static_cast<u8>(w);
+    b[20] = static_cast<u8>(h >> 24); b[21] = static_cast<u8>(h >> 16);
+    b[22] = static_cast<u8>(h >> 8);  b[23] = static_cast<u8>(h);
+    return b;
+}
+
+void test_texture_cooker_hostile_png() {
+    auto cooker = ck::make_texture_cooker();
+    CHECK(cooker != nullptr);
+    if (!cooker) return;
+    ck::CookContext ctx{};
+
+    auto blob_dims = [](const CookedAsset& c, u32& w, u32& h) {
+        std::vector<u8> pl(c.payload.begin(), c.payload.end());
+        if (pl.size() < 16) { w = 0; h = 0; return; }
+        w = rd_u32(pl, 0); h = rd_u32(pl, 4);     // encode_texture_blob: w,h,..
+    };
+
+    // Hostile 131072 x 131072 ⇒ w*h*4 ≈ 68 GiB. Pre-fix: bad_alloc out
+    // of a non-noexcept cook ⇒ process death. Post-fix: rejected ⇒ 4x4.
+    {
+        CookedAsset c = cooker->cook(fake_png(0x20000u, 0x20000u), ctx);
+        CHECK(c.type == AssetType::Texture);
+        CHECK(c.payload.size() < sz(4096));        // bounded, not gigabytes
+        u32 w = 0, h = 0; blob_dims(c, w, h);
+        CHECK(w == 4u && h == 4u);                 // placeholder
+    }
+    // One past the GPU cap (16385) ⇒ also rejected ⇒ placeholder.
+    {
+        CookedAsset c = cooker->cook(fake_png(16385u, 1u), ctx);
+        u32 w = 0, h = 0; blob_dims(c, w, h);
+        CHECK(w == 4u && h == 4u);
+        CHECK(c.payload.size() < sz(4096));
+    }
+    // Zero dimension ⇒ placeholder (no 0-area texture).
+    {
+        CookedAsset c = cooker->cook(fake_png(0u, 256u), ctx);
+        u32 w = 0, h = 0; blob_dims(c, w, h);
+        CHECK(w == 4u && h == 4u);
+    }
+    // Valid small dims still decode to the declared size unchanged.
+    {
+        CookedAsset c = cooker->cook(fake_png(2u, 2u), ctx);
+        u32 w = 0, h = 0; blob_dims(c, w, h);
+        CHECK(w == 2u && h == 2u);
+        CHECK(c.payload.size() == sz(16) + sz(2) * sz(2) * sz(4));  // hdr+rgba
+    }
+    // Exactly at the cap (16384) is still a legit texture, decoded.
+    {
+        CookedAsset c = cooker->cook(fake_png(16384u, 1u), ctx);
+        u32 w = 0, h = 0; blob_dims(c, w, h);
+        CHECK(w == 16384u && h == 1u);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -217,6 +286,7 @@ int main() {
 
     test_codec();
     test_type_lookups();
+    test_texture_cooker_hostile_png();
     test_mesh_cooker(dir);
 
     std::error_code rec;
