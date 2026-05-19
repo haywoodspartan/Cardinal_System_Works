@@ -70,8 +70,18 @@ cardinal::vector<Actor*> World::find_by_tag(const cardinal::string& tag) {
 usize World::actor_count() const noexcept { return actors_.size(); }
 
 void World::tick(float dt) {
-    // Live actors only — destroyed actors are swept later.
-    for (auto& a : actors_) {
+    // Live actors only — destroyed actors are swept later. Iterate by
+    // INDEX with a snapshot count, NOT a range-for: a ticking actor
+    // very commonly spawns new actors, and World::spawn does
+    // actors_.push_back which can REALLOCATE this vector mid-iteration.
+    // A range-for/iterator would then dangle into the freed old buffer
+    // — whose unique_ptrs were moved-from to null by the realloc — and
+    // the next `a->alive()` is a null deref (crash). operator[] re-reads
+    // actors_.data() each step (realloc-safe); the pre-spawn count `n`
+    // defers freshly-spawned actors to next frame (already the intended
+    // begin_play-before-first-tick semantics).
+    for (usize i = 0, n = actors_.size(); i < n; ++i) {
+        Actor* a = actors_[i].get();
         if (!a->alive()) continue;
         a->tick(dt);
     }

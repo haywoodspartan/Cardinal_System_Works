@@ -76,6 +76,71 @@ struct CounterComp : ac::Component {
     void on_detach(ac::Actor&) override            { if (d) ++*d; }
 };
 
+// A component whose on_tick spawns into the World — the canonical
+// "spawn from a tick" gameplay pattern that reallocates World::actors_
+// mid-iteration.
+struct SpawnerComp : ac::Component {
+    ac::World* w{nullptr};
+    int*       spawns{nullptr};
+    SpawnerComp() = default;
+    SpawnerComp(ac::World* w_, int* s_) : w(w_), spawns(s_) {}
+    const char* type_name() const noexcept override { return "Spawner"; }
+    void on_tick(ac::Actor&, float) override {
+        if (!w || !spawns) return;
+        if (*spawns == 0)
+            for (int k = 0; k < 512; ++k) w->spawn("spawned-in-tick");
+        ++*spawns;
+    }
+};
+
+// ---- spawn-during-tick must not invalidate the tick iterator ------
+// Regression: World::tick / Actor::tick used range-for over a vector
+// whose element-add (world.spawn / actor.add_component — an extremely
+// common pattern from a tick) reallocates it mid-iteration. The freed
+// old buffer holds moved-from (null) unique_ptrs, so the next
+// `a->alive()` is a DETERMINISTIC null-deref crash. Index-snapshot
+// iteration is realloc-safe and defers freshly-spawned actors to the
+// next frame (the intended begin_play-before-first-tick semantics).
+void test_spawn_during_tick() {
+    ac::World w;
+    const int kOrig = 8;
+    cardinal::vector<int> ticks(static_cast<cardinal::usize>(kOrig), 0);
+    int spawns = 0;
+
+    ac::Actor* first = w.spawn("orig0");                 // index 0 = spawner
+    first->add_component<SpawnerComp>(&w, &spawns);
+    first->add_component<CounterComp>(nullptr, &ticks[0], nullptr, nullptr);
+    for (int i = 1; i < kOrig; ++i) {
+        ac::Actor* a = w.spawn("orig");
+        a->add_component<CounterComp>(nullptr,
+            &ticks[static_cast<cardinal::usize>(i)], nullptr, nullptr);
+    }
+    const cardinal::usize before = w.actor_count();
+    CHECK(before == sz(kOrig));
+
+    w.tick(0.016f);   // PRE-FIX: actors_ reallocs mid-iter → null-deref crash
+
+    CHECK(spawns == 1);
+    CHECK(w.actor_count() == before + sz(512));          // whole batch added
+    bool all_ticked_once = true;
+    for (int i = 0; i < kOrig; ++i)
+        if (ticks[static_cast<cardinal::usize>(i)] != 1) all_ticked_once = false;
+    CHECK(all_ticked_once);                              // every original ×1
+    CHECK(w.find_by_name("spawned-in-tick") != nullptr); // it exists...
+    // ...but a just-spawned actor must NOT have ticked this frame: no
+    // CounterComp on them, and the count proves they were deferred.
+
+    // Second tick: the 512 new actors now iterate too — still no crash,
+    // no further batch (spawns>0), originals tick again exactly once.
+    w.tick(0.016f);
+    CHECK(spawns == 2);
+    CHECK(w.actor_count() == before + sz(512));          // unchanged
+    bool all_ticked_twice = true;
+    for (int i = 0; i < kOrig; ++i)
+        if (ticks[static_cast<cardinal::usize>(i)] != 2) all_ticked_twice = false;
+    CHECK(all_ticked_twice);
+}
+
 // ---- Actor + component management ---------------------------------
 void test_actor_components() {
     ac::World w;
@@ -295,6 +360,7 @@ void test_transform_matrix() {
 
 int main() {
     test_actor_components();
+    test_spawn_during_tick();
     test_tag_component();
     test_lifecycle();
     test_world_lifecycle();
