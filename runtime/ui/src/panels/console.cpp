@@ -18,7 +18,8 @@ void draw(const ConsoleEvalFn& eval,
           bool* p_open,
           ConsolePanelState& state)
 {
-    if (!ImGui::Begin(title ? title : "Console", p_open)) { ImGui::End(); return; }
+    if (!ImGui::Begin(title ? title : "Console", p_open,
+                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
 
     // Autocomplete suggestion strip — sits between the scrollback and
     // the input. Driven by the engine console registry's prefix search;

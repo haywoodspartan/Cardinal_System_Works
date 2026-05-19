@@ -16,7 +16,8 @@ namespace cardinal::ui::panels::nav_panel {
 void draw(cardinal::nav::Grid* grid, State& s,
           const char* title, bool* p_open)
 {
-    if (!ImGui::Begin(title ? title : "Navigation", p_open)) { ImGui::End(); return; }
+    if (!ImGui::Begin(title ? title : "Navigation", p_open,
+                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
     if (grid == nullptr) {
         ImGui::TextDisabled("(no nav::Grid bound)");
         ImGui::End();

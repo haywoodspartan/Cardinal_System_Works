@@ -22,7 +22,8 @@ void draw(State& s, cardinal::f32 frame_ms_now,
     if (s.history_count < IM_ARRAYSIZE(s.frame_history)) ++s.history_count;
     s.last_frame_ms = frame_ms_now;
 
-    if (!ImGui::Begin(title ? title : "Profiler", p_open)) { ImGui::End(); return; }
+    if (!ImGui::Begin(title ? title : "Profiler", p_open,
+                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
 
     if (ImGui::CollapsingHeader("Frame", ImGuiTreeNodeFlags_DefaultOpen)) {
         // Compute a max for the y-axis from the visible history.
