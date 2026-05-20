@@ -1384,7 +1384,23 @@ public:
             const auto ray = cardinal::scene::unproject_ndc_ray(
                 ndc_x, ndc_y, gizmo_view_, gizmo_proj_);
             cardinal::scene::Vec3 hit{};
-            if (cardinal::scene::ray_plane_y_intersect(ray, grid_y, &hit)) {
+            // Same float→i32 UB-cast pattern fixed in 8 runtime modules
+            // (tex_ops/mesh_ops/world/scene/physics/brush/vgeom/render
+            // — c420695 et al.). The grid-overlay chunk_size cs is
+            // user-set on world_overlay_; the ray intersection hit can
+            // be at extreme distance / non-finite if the camera matrices
+            // come from a torn-out / DPI-scaled platform window with
+            // degenerate aspect. Any non-finite hit.x/hit.z or non-
+            // finite/zero cs would produce `floor(NaN) = NaN` →
+            // `static_cast<i32>(NaN)` UB. Gate the hover-chunk reporting
+            // on a fresh isfinite/positive-cs check (canNOT early-
+            // return — the enclosing function has a matching
+            // PopClipRect at the bottom).
+            const bool cast_safe = cardinal::scene::ray_plane_y_intersect(ray, grid_y, &hit)
+                                && cardinal::isfinite(hit.x)
+                                && cardinal::isfinite(hit.z)
+                                && cardinal::isfinite(cs) && cs > 0.0f;
+            if (cast_safe) {
                 const i32 hcx = static_cast<i32>(cardinal::floor(hit.x / cs));
                 const i32 hcz = static_cast<i32>(cardinal::floor(hit.z / cs));
                 // Outline the hovered chunk.
