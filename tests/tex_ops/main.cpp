@@ -334,6 +334,57 @@ void test_compose() {
     CHECK(cnear(tx::get_px(dst3, 2u, 0u, 0u), C(100, 100, 100, 254), 1));
 }
 
+// ---- Non-finite inputs MUST NOT produce UB float→u8 casts ---------
+// fclamp_u8's two ordered compares (`f < 0.0f`, `f > 255.0f`) are
+// NaN-blind — NaN falls through to `static_cast<u8>(NaN + 0.5f)`
+// which is UNDEFINED BEHAVIOR for the float→int cast. Multiple
+// callers can produce NaN: noise_value via NaN contrast, levels via
+// NaN gamma/black_pt/white_pt (cardinal::pow propagates NaN), and
+// noise_fractal via NaN persistence (sum/norm = NaN). Fix at the
+// chokepoint (fclamp_u8) + route the bare cast in noise_value
+// through fclamp_u8 — every output byte must be defined regardless
+// of finite-or-not input parameters.
+void test_nonfinite_inputs() {
+    volatile float z = 0.0f;
+    const float qnan = z / z;          // 0/0 = NaN
+    const float inf  = 1.0f / z;       // 1/0 = +Inf
+
+    // noise_value with NaN contrast — output must be all-finite u8.
+    auto a = tx::noise_value(8u, 8u, 1337u, 4.0f, qnan);
+    CHECK(a.size() == sz(8 * 8 * 4));
+    // Every byte is u8 by type — but the SANITIZED behaviour is that
+    // the per-pixel n*255 path mapped NaN → 0. Verify the image is
+    // all-black (255 for alpha).
+    for (u32 y = 0; y < 8; ++y)
+        for (u32 x = 0; x < 8; ++x)
+            CHECK(ceq(tx::get_px(a, 8u, x, y), C(0, 0, 0, 255)));
+
+    // noise_value with +Inf contrast — also routes through clamp →
+    // fclamp_u8, defined output.
+    auto b = tx::noise_value(8u, 8u, 1337u, 4.0f, inf);
+    CHECK(b.size() == sz(8 * 8 * 4));   // no crash, no UB
+
+    // noise_fractal with NaN persistence — `amp *= NaN` makes amp NaN
+    // after one octave; sum/norm = NaN/NaN = NaN; fclamp_u8(NaN*255)
+    // must NOT invoke UB.
+    auto c = tx::noise_fractal(8u, 8u, 1337u, 4.0f, 3u, qnan);
+    CHECK(c.size() == sz(8 * 8 * 4));
+
+    // levels with NaN gamma — `pow(f, 1/gamma)` cascades NaN into
+    // fclamp_u8. Must NOT crash, must produce defined output.
+    auto img = tx::solid(4u, 4u, C(128, 128, 128, 255));
+    tx::levels(img, 4u, 4u, /*black*/0.0f, /*white*/1.0f, qnan);
+    CHECK(img.size() == sz(4 * 4 * 4));
+
+    // levels with NaN black_pt + NaN white_pt — the `white <= black`
+    // guard at the function head is NaN-blind so NaN flows through;
+    // the inner `(f - black) / (white - black)` is NaN; clamp passes
+    // through; fclamp_u8 catches it.
+    auto img2 = tx::solid(4u, 4u, C(128, 128, 128, 255));
+    tx::levels(img2, 4u, 4u, qnan, qnan, 1.0f);
+    CHECK(img2.size() == sz(4 * 4 * 4));
+}
+
 }  // namespace
 
 int main() {
@@ -348,6 +399,7 @@ int main() {
     test_levels();
     test_channel_swap();
     test_compose();
+    test_nonfinite_inputs();
 
     if (g_fail == 0) {
         cardinal::log::infof("textest", "OK  %d checks passed", g_checks);

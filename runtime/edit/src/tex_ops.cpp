@@ -9,6 +9,19 @@ namespace cardinal::edit::tex_ops {
 namespace {
 
 inline u8 fclamp_u8(float f) noexcept {
+    // Reject NaN/±Inf BEFORE the cast. The ordered compares below are
+    // NaN-blind (NaN < 0 and NaN > 255 are both unordered-false), so
+    // a NaN f would fall through to `static_cast<u8>(NaN + 0.5f)` —
+    // UNDEFINED BEHAVIOR for the float→int cast on a non-finite
+    // source. Multiple callers can produce NaN: noise_fractal's
+    // `sum / max(1e-6, norm)` is NaN if persistence is NaN, levels'
+    // `pow(NaN, ...)` cascades NaN, and any direct call site with a
+    // NaN-poisoned f would hit the same UB. Returning 0 on non-finite
+    // matches the "out-of-range clamp" semantic the function intends.
+    // Parked-supervised item #4 in feedback_integration_coverage_map.md;
+    // also touches the asset/cook pipeline via tex_ops cooker paths
+    // (tests/content_pipeline exercises this indirectly).
+    if (!cardinal::isfinite(f)) return 0;
     if (f < 0.0f) return 0;
     if (f > 255.0f) return 255;
     return static_cast<u8>(f + 0.5f);
@@ -98,7 +111,15 @@ cardinal::vector<u8> noise_value(u32 w, u32 h, u32 seed, float scale, float cont
             const float fx = static_cast<float>(x) / w * scale;
             const float fy = static_cast<float>(y) / h * scale;
             float n = value_noise_2d(fx, fy, seed);
+            // cardinal::clamp is NaN-passthrough; a NaN contrast →
+            // `0.5 + (n-0.5)*NaN = NaN`, clamp returns NaN, then
+            // `static_cast<u8>(NaN * 255.0f)` is UB on the float→int
+            // cast. Sanitize n to 0 on non-finite BEFORE the cast so
+            // existing-byte-identity callers (tests pin contrast==0 →
+            // 127 via truncation, NOT rounding — see test_noise_value
+            // L177-180) keep the same semantic on finite inputs.
             n = cardinal::clamp(0.5f + (n - 0.5f) * contrast, 0.0f, 1.0f);
+            if (!cardinal::isfinite(n)) n = 0.0f;
             const u8 v = static_cast<u8>(n * 255.0f);
             put_px(out, w, x, y, Color{v,v,v,255});
         }
