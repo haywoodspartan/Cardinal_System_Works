@@ -323,6 +323,79 @@ void test_select() {
     CHECK(culled.stats.master_tri_count == h->master_tri_count);
 }
 
+// ---- vg::select MUST NOT invoke UB on non-finite cluster centers ----
+// compute_bounds (cook.cpp:411) does naive sum/mean over vertex
+// positions, so a single NaN vertex in the master mesh propagates
+// into Cluster::center for every cluster touching that vert (the
+// VertHash sanitize in 1c537cf only protects the dedup-by-position
+// hash key, not the bounding-sphere math). Once a Cluster::center
+// has a NaN component, the select-side Morton quantisation reaches
+// `static_cast<u32>(cardinal::clamp((c.x - base_x) * inv, 0.0f,
+// 2097151.0f))`. cardinal::clamp is documented NaN-passthrough,
+// so clamp(NaN) = NaN and the cast is UB per [conv.fpint]p1.
+// Without the fix the per-cluster Morton sort along the LOD-cut
+// emission path is the canonical UB site.
+void test_select_nonfinite_verts() {
+    volatile float z = 0.0f;
+    const float qnan = z / z;
+
+    // Reuse the cook-nonfinite layout: 3 tris with one bad coord each.
+    // cook() places a degenerate cluster at NaN-influenced position;
+    // select() then quantises every cluster centre via the affected
+    // cast. Throwing in a clean leading tri keeps the hierarchy
+    // non-trivial enough that select() reaches the multi-cluster
+    // Morton sort path (n > 1 in select.cpp:243).
+    cardinal::vector<vg::Vertex> verts;
+    auto MK = [](float x, float y, float z) {
+        vg::Vertex v{};
+        v.position = { x, y, z };
+        v.normal   = { 0.0f, 0.0f, 1.0f };
+        v.color    = { 0.5f, 0.5f, 0.5f };
+        return v;
+    };
+    // Lead with 6 clean tris (a tiny grid) so cook builds >1 cluster.
+    for (int i = 0; i < 6; ++i) {
+        const float fx = static_cast<float>(i);
+        verts.push_back(MK(fx,        0.0f, 0.0f));
+        verts.push_back(MK(fx + 1.0f, 0.0f, 0.0f));
+        verts.push_back(MK(fx,        1.0f, 0.0f));
+    }
+    // One NaN-tainted tri inserted in the middle — its cluster will
+    // have a NaN center.
+    verts.push_back(MK(qnan, 0.0f, 0.0f));
+    verts.push_back(MK(0.0f, qnan, 0.0f));
+    verts.push_back(MK(0.0f, 0.0f, qnan));
+
+    vg::CookDesc d{};
+    d.vertices     = verts.data();
+    d.vertex_count = static_cast<u32>(verts.size());
+    auto h = vg::cook(d);
+    CHECK(h != nullptr);
+    if (!h) return;
+
+    vg::SelectInput in{};
+    in.hierarchy = h.get();
+    in.model     = M4::identity();
+    // Camera pointed at the finite half of the mesh; LOD tolerance
+    // tight enough to force descent past the root into ≥2 clusters,
+    // which is what reaches select.cpp:243 (n > 1) and the Morton
+    // sort/cast.
+    in.view      = M4::look_at({ 3.0f, 0.5f, 5.0f }, { 3.0f, 0.5f, 0.0f },
+                                { 0, 1, 0 });
+    in.proj      = M4::perspective(1.0f, 16.0f / 9.0f, 0.05f, 10000.0f);
+    in.viewport_pixel_height = 1080.0f;
+    in.pixel_error_tolerance = 1.0e-6f;
+
+    // Without the fix, the per-cluster Morton quantise reaches
+    // `static_cast<u32>(NaN)` — UB. With the fix, the cast routes
+    // non-finite axes to bucket 0 and select() completes.
+    vg::SelectOutput out;
+    vg::select(in, out);
+    CHECK(out.stats.master_tri_count == h->master_tri_count);
+    // Indices reported must be in-range for the hierarchy.
+    for (u32 id : out.cluster_ids) CHECK(id < h->clusters.size());
+}
+
 }  // namespace
 
 int main() {
@@ -330,6 +403,7 @@ int main() {
     test_cook_nonfinite_verts();
     test_cook_hierarchy();
     test_select();
+    test_select_nonfinite_verts();
 
     if (g_fail == 0) {
         cardinal::log::infof("vgeomtest", "OK  %d checks passed", g_checks);

@@ -252,11 +252,29 @@ void select(const SelectInput& in, SelectOutput& out) {
         const f32 base_y = root.center.y - root.radius;
         const f32 base_z = root.center.z - root.radius;
 
+        // NaN-safe quantise: cardinal::clamp is documented NaN-
+        // passthrough, so `clamp(NaN, 0, 2097151)` returns NaN, then
+        // `static_cast<u32>(NaN)` is UB per [conv.fpint]p1 (same
+        // float→int UB cast family as world dd37414 / scene+physics
+        // ad55e96 / brush 79e437d / vgeom cook 1c537cf / render
+        // c420695+c72f44f / studio 3b7dd77 / core-geom this commit's
+        // sibling). Realistic ingress: compute_bounds (cook.cpp:411)
+        // does naive sum/mean over vertex positions, so a single NaN
+        // vertex in the master mesh propagates into Cluster::center
+        // for every cluster touching that vert. Coerce non-finite to
+        // bucket 0 (same defined collapse the rest of the family
+        // uses).
+        auto qclamp = [](float v) -> u32 {
+            if (!cardinal::isfinite(v)) return 0u;
+            if (v < 0.0f) return 0u;
+            if (v > 2097151.0f) return 2097151u;
+            return static_cast<u32>(v);
+        };
         for (usize i = 0; i < n; ++i) {
             const Vec3& c = in.hierarchy->clusters[out.cluster_ids[i]].center;
-            mqx[i] = static_cast<u32>(cardinal::clamp((c.x - base_x) * inv, 0.0f, 2097151.0f));
-            mqy[i] = static_cast<u32>(cardinal::clamp((c.y - base_y) * inv, 0.0f, 2097151.0f));
-            mqz[i] = static_cast<u32>(cardinal::clamp((c.z - base_z) * inv, 0.0f, 2097151.0f));
+            mqx[i] = qclamp((c.x - base_x) * inv);
+            mqy[i] = qclamp((c.y - base_y) * inv);
+            mqz[i] = qclamp((c.z - base_z) * inv);
         }
         cardinal::core::simd::morton_encode_3d_array(
             mort_codes.data(), mqx.data(), mqy.data(), mqz.data(), n);
