@@ -43,6 +43,26 @@ bool Engine::initialize_(const EngineDesc& desc) {
 }
 
 void Engine::register_cue(Cue cue) {
+    // Cue fields are public direct floats — same desc-direct-field NaN
+    // sink class as sky::SkyKey (a93fd8f), particles::EmitterDesc
+    // (35f8da7), etc. Each non-finite field reaches an instance and
+    // poisons its lifetime/render contract:
+    //   * NaN duration_s → `play_head_s >= duration_s` and
+    //     `s.duration_s > 0.0f` are unordered-false → IMMORTAL instance
+    //     (never expires), AND the sine-render loop's break condition
+    //     `t >= s.duration_s` is also false → loop runs to its sample-
+    //     count guard every render (no early-out cost saving).
+    //   * NaN sine_frequency_hz → `sin(2π * NaN * t) = NaN` → NaN
+    //     audio sample bus.
+    //   * NaN gain → `v = sin(...) * NaN = NaN` → same NaN bus.
+    // Sanitize at the ingress; each fallback matches the struct's
+    // compile-time default (audio.hpp:50/51/52). User's stored desc
+    // values are dropped to safe defaults (NOT preserved here —
+    // register_cue is a configuration commit, not an editor mutation;
+    // a bad cue should never persist).
+    if (!cardinal::isfinite(cue.duration_s))        cue.duration_s        = 1.0f;
+    if (!cardinal::isfinite(cue.sine_frequency_hz)) cue.sine_frequency_hz = 440.0f;
+    if (!cardinal::isfinite(cue.gain))              cue.gain              = 1.0f;
     cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     cues_[cue.id] = cardinal::move(cue);
 }

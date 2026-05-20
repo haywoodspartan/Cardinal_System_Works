@@ -539,6 +539,44 @@ void test_nonfinite_inputs() {
         if (!a.empty())
             CHECK(ap(a[0].final_attenuated_volume, 0.0f, 1e-4f));
     }
+    {   // register_cue must sanitize Cue float fields — duration_s,
+        // sine_frequency_hz, gain. NaN duration_s would make the
+        // instance immortal (`play_head_s >= duration_s` unordered-
+        // false). NaN sine_frequency_hz or gain would render NaN
+        // samples to the audio bus. Each field is sanitized to the
+        // struct's compile-time default.
+        auto e = au::Engine::create();
+        au::Cue bad;
+        bad.id                = "bad";
+        bad.kind              = au::CueKind::SineWave;
+        bad.duration_s        = qnan;
+        bad.sine_frequency_hz = qnan;
+        bad.gain              = inf;
+        e->register_cue(bad);
+        const au::Cue* c = e->find_cue("bad");
+        CHECK(c != nullptr);
+        if (c) {
+            // Sanitized to compile-time defaults at registration.
+            CHECK(ap(c->duration_s,        1.0f));
+            CHECK(ap(c->sine_frequency_hz, 440.0f));
+            CHECK(ap(c->gain,              1.0f));
+        }
+        // Sanity: play through the cue — instance must expire on its
+        // sanitized 1.0s duration AND render samples must be finite
+        // (no NaN bus).
+        e->play_2d("bad", au::kChannelSfx, 1.0f, 1.0f, false);
+        e->tick(0.5f);
+        CHECK(e->active_instances().size() == 1u);   // alive at 0.5
+        float buf[32]; for (float& x : buf) x = 7.0f;
+        e->render(buf, 16, 1);
+        bool finite_bus = true;
+        for (u32 i = 0; i < 16u; ++i)
+            if (!(buf[i] == buf[i])) finite_bus = false;
+        CHECK(finite_bus);
+        e->tick(1.0f);
+        // 0.5 + 1.0 ≥ 1.0 → expires (would be immortal without the fix).
+        CHECK(e->active_instances().empty());
+    }
     {   // Non-finite dt is a no-op; the next valid tick is correct.
         auto e = au::Engine::create();
         e->register_cue(sine_cue("sine", 1.0f));
