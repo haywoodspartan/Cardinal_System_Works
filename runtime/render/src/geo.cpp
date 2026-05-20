@@ -329,8 +329,21 @@ float simplify_cluster(const cardinal::vector<scene::Vec3>& gpos,
     if (gridN > 32u) gridN = 32u;
 
     auto axis_cell = [&](float v, float lo, float e) -> u32 {
-        if (e <= 1e-12f) return 0u;
-        int c = static_cast<int>((v - lo) / e * static_cast<float>(gridN));
+        // `e <= 1e-12f` is NaN-blind (NaN unordered to 1e-12 → false).
+        // A NaN ext (gpos with any NaN component → mn/mx min/max
+        // propagates NaN → ext = mx - mn = NaN) reaches the cast as
+        // NaN, and `static_cast<int>(NaN)` is UB per [conv.fpint]p1.
+        // Same float→int UB cast class as world dd37414, scene
+        // ad55e96, brush 79e437d, vgeom 1c537cf, render
+        // subdiv_level_for_factor c420695, studio 3b7dd77. Treat
+        // any non-finite input as "cell 0" (the same defined
+        // collapse used by other axis-bucketing functions in this
+        // family). Preserves the meshlet build path for hostile
+        // input rather than UB on cast.
+        if (!cardinal::isfinite(e) || e <= 1e-12f) return 0u;
+        const float scaled = (v - lo) / e * static_cast<float>(gridN);
+        if (!cardinal::isfinite(scaled)) return 0u;
+        int c = static_cast<int>(scaled);
         if (c < 0) c = 0;
         if (c >= static_cast<int>(gridN)) c = static_cast<int>(gridN) - 1;
         return static_cast<u32>(c);
@@ -391,8 +404,20 @@ float simplify_cluster(const cardinal::vector<scene::Vec3>& gpos,
 u32 morton3(const scene::Vec3& c, const scene::Vec3& mn,
             const scene::Vec3& ext) noexcept {
     auto q = [](float v, float lo, float e) -> u32 {
-        if (e <= 1e-12f) return 0u;
-        int i = static_cast<int>((v - lo) / e * 1023.0f);
+        // Same NaN-cast UB class as axis_cell (this file) and the
+        // world/scene/brush/vgeom/studio fixes — `e <= 1e-12f` is
+        // NaN-blind, and `static_cast<int>(NaN)` is UB per
+        // [conv.fpint]p1. Realistic path: build_cluster_dag's sort
+        // comparator (this file, line 597+) calls morton3 on
+        // dag.nodes[A].bounds.sphere_center. A NaN sphere_center
+        // (from a NaN mesh vertex propagated through bounds
+        // computation) makes both ma and mb produce UB values; the
+        // u32 sort then operates on UB-tainted keys. Coerce
+        // non-finite axis to "bucket 0" — defined and deterministic.
+        if (!cardinal::isfinite(e) || e <= 1e-12f) return 0u;
+        const float scaled = (v - lo) / e * 1023.0f;
+        if (!cardinal::isfinite(scaled)) return 0u;
+        int i = static_cast<int>(scaled);
         if (i < 0)    i = 0;
         if (i > 1023) i = 1023;
         return static_cast<u32>(i);

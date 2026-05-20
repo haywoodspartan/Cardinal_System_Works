@@ -392,6 +392,82 @@ void test_cluster_dag() {
     CHECK(fine2.size() == fine.size());
 }
 
+// ---- build_cluster_dag must NOT UB on NaN vertex positions ----------
+// build_cluster_dag's internals reach two float→int casts that the
+// subdiv_level_for_factor fix (c420695) missed:
+//
+//   * simplify_cluster's axis_cell lambda: `int c = static_cast<int>
+//     ((v - lo) / e * gridN)` where (v, lo, e) come from gpos / its
+//     min-max range. A NaN gpos[i].x propagates into mn/mx via
+//     cardinal::min/max (NaN-blind → returns the NaN operand), then
+//     into ext, then into the cast — `static_cast<int>(NaN)` is UB
+//     per [conv.fpint]p1.
+//   * morton3's q lambda: same shape, but reached via
+//     build_cluster_dag's per-level sort (line 597) which sorts by
+//     morton3(node.bounds.sphere_center, ...). A NaN sphere_center
+//     hits the same UB cast.
+//
+// Realistic ingress: a Mesh asset whose vertex stream has any NaN
+// component (decode_mesh accepts what asset.cpp:113 reads via
+// rd_f → bit_cast<float> — a corrupt blob with the bit pattern of
+// NaN passes through verbatim). Without the fix this test would
+// UB on the cast; with the fix the build runs and produces a
+// non-empty DAG (the NaN vertex sinks into "cell 0" and "bucket 0"
+// like any other defined collapse in this UB-cast family).
+void test_cluster_dag_nan_positions() {
+    // Reuse the test_cluster_dag grid layout, but poison one vertex's
+    // X component with qNaN.
+    const int N = 8;
+    std::vector<float> pos;
+    pos.reserve(static_cast<usize>((N+1)*(N+1)*3));
+    volatile float z = 0.0f;
+    const float qnan = z / z;
+    for (int y = 0; y <= N; ++y)
+        for (int x = 0; x <= N; ++x) {
+            pos.push_back(static_cast<float>(x));
+            pos.push_back(static_cast<float>(y));
+            pos.push_back(0.0f);
+        }
+    // Poison the middle vertex. Putting NaN in the interior of the
+    // grid maximises the chance that axis_cell / morton3 see the
+    // NaN during the BVH-like partition steps.
+    const usize mid = static_cast<usize>(((N/2) * (N+1) + (N/2)) * 3);
+    pos[mid] = qnan;
+
+    auto vid = [&](int x, int y){ return static_cast<u32>(y*(N+1)+x); };
+    std::vector<u32> idx;
+    for (int y = 0; y < N; ++y)
+        for (int x = 0; x < N; ++x) {
+            idx.push_back(vid(x,  y  )); idx.push_back(vid(x+1,y  )); idx.push_back(vid(x+1,y+1));
+            idx.push_back(vid(x,  y  )); idx.push_back(vid(x+1,y+1)); idx.push_back(vid(x,  y+1));
+        }
+    const u32 vcount = static_cast<u32>(pos.size() / 3);
+    auto base = geo::build_meshlets(idx.data(), static_cast<u32>(idx.size()),
+                                    pos.data(), vcount, kStride);
+    // build_meshlets itself reaches axis_cell via simplify_cluster
+    // only inside build_cluster_dag's lower levels — the leaf
+    // meshlet build doesn't simplify. So the meshlet build should
+    // still succeed even with a NaN vertex (the bounds sphere may
+    // have NaN center/radius, but no UB cast on that path).
+    CHECK(!base.meshlets.empty());
+
+    // The actual UB sites — axis_cell + morton3 — are reached here.
+    // Without the fix this is UB (cast of NaN to int). With the fix
+    // it returns a coherent DAG. Don't assert on the exact node count
+    // (NaN data legitimately steers clustering); just that the build
+    // terminates and produces a valid root.
+    auto dag = geo::build_cluster_dag(base, pos.data(), vcount, kStride);
+    CHECK(dag.root != u32(-1));
+    CHECK(!dag.nodes.empty());
+    // Index ranges must remain in-bounds.
+    bool ranges_ok = true;
+    for (const auto& n : dag.nodes) {
+        if (static_cast<usize>(n.index_offset) + n.index_count
+              > dag.indices.size()) ranges_ok = false;
+    }
+    CHECK(ranges_ok);
+}
+
 }  // namespace
 
 int main() {
@@ -408,6 +484,7 @@ int main() {
     test_subdivide();
     test_subdiv_level();
     test_cluster_dag();
+    test_cluster_dag_nan_positions();
 
     if (g_fail == 0) {
         cardinal::log::infof("geotest", "OK  %d checks passed", g_checks);
