@@ -364,6 +364,22 @@ void test_nonfinite_inputs() {
     auto b = tx::noise_value(8u, 8u, 1337u, 4.0f, inf);
     CHECK(b.size() == sz(8 * 8 * 4));   // no crash, no UB
 
+    // noise_value / noise_fractal with NaN SCALE — the `if (scale <=
+    // 0.0f) scale = 1.0f;` early-return is NaN-blind (NaN<=0 false),
+    // so scale stays NaN, then `fx = (x/w) * NaN = NaN` and
+    // `value_noise_2d` reaches `static_cast<i32>(cardinal::floor(NaN))`
+    // — UB per [conv.fpint]p1. Fixed by sanitising x/y inside
+    // value_noise_2d directly (covers every caller in one place).
+    auto a_nan_scale = tx::noise_value(8u, 8u, 1337u, qnan, 1.0f);
+    CHECK(a_nan_scale.size() == sz(8 * 8 * 4));        // no crash, no UB
+    auto f_nan_scale = tx::noise_fractal(8u, 8u, 1337u, qnan, 3u, 0.5f);
+    CHECK(f_nan_scale.size() == sz(8 * 8 * 4));
+    // ±Inf scale → same path (NaN/Inf both filtered by isfinite).
+    auto a_inf_scale = tx::noise_value(8u, 8u, 1337u,  inf, 1.0f);
+    CHECK(a_inf_scale.size() == sz(8 * 8 * 4));
+    auto a_ninf_scale = tx::noise_value(8u, 8u, 1337u, -inf, 1.0f);
+    CHECK(a_ninf_scale.size() == sz(8 * 8 * 4));
+
     // noise_fractal with NaN persistence — `amp *= NaN` makes amp NaN
     // after one octave; sum/norm = NaN/NaN = NaN; fclamp_u8(NaN*255)
     // must NOT invoke UB.

@@ -44,6 +44,20 @@ inline float hash_f(u32 x, u32 y, u32 seed) noexcept {
 float smoothstep(float t) noexcept { return t * t * (3.0f - 2.0f * t); }
 
 float value_noise_2d(float x, float y, u32 seed) noexcept {
+    // Same float→i32 UB cast class as world dd37414 / scene+physics
+    // ad695af's sibling / brush 79e437d / vgeom cook 1c537cf / render
+    // c420695+c72f44f / studio 3b7dd77 / core-geom ad695af / vgeom
+    // select e28416f. Realistic ingress: noise_value (this file:108)
+    // does `if (scale <= 0.0f) scale = 1.0f;` — NaN-blind, so a NaN
+    // scale survives to `fx = (x/w) * NaN = NaN`. Same for
+    // noise_fractal (line 135) `if (base_scale <= 0.0f) ...` — NaN-
+    // blind on base_scale → freq → fx. value_noise_2d is the lowest
+    // common cast site; coercing non-finite to 0 here fixes every
+    // caller (and any future caller) at once. `cardinal::floor(0) =
+    // 0`, so the post-coercion control flow is the standard finite
+    // path with a defined (0,0) sample.
+    if (!cardinal::isfinite(x)) x = 0.0f;
+    if (!cardinal::isfinite(y)) y = 0.0f;
     const i32 xi = static_cast<i32>(cardinal::floor(x));
     const i32 yi = static_cast<i32>(cardinal::floor(y));
     const float xf = x - xi;
