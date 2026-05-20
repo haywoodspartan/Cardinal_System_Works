@@ -97,6 +97,57 @@ void test_grid_config() {
     }
 }
 
+// ---- chunk_of MUST NOT invoke UB on non-finite inputs -------------
+// Same float→i32 UB-cast pattern as mesh_ops 439d2eb / tex_ops 3bc8360.
+// Two ingresses: (a) NaN chunk_size flowing through the constructor's
+// NaN-blind `chunk_size <= 0.0f` guard → inv = 1/NaN = NaN → floor(wx
+// * NaN) = NaN → static_cast<i32>(NaN) UB. (b) NaN wx/wy/wz from a
+// poisoned actor position → same UB even with chunk_size finite.
+void test_grid_nonfinite() {
+    volatile float z = 0.0f;
+    const float qnan = z / z;
+    const float inf  = 1.0f / z;
+
+    {   // (a) Constructor must reject NaN chunk_size and fall back
+        // to the documented 1.0 default.
+        cw::WorldGridDesc d; d.chunk_size = qnan;
+        cw::WorldGrid g(d);
+        CHECK(ap(g.chunk_size(), 1.0f));
+        // chunk_of must produce a defined ChunkCoord (no UB cast).
+        auto c = g.chunk_of(0.0f, 0.0f, 0.0f);
+        CHECK(c.x == 0 && c.y == 0 && c.z == 0);
+    }
+    {   // Same for +Inf / -Inf chunk_size.
+        cw::WorldGridDesc d; d.chunk_size = inf;
+        cw::WorldGrid g(d);
+        CHECK(ap(g.chunk_size(), 1.0f));
+    }
+    {   // Same for -Inf — the original `<= 0.0f` ordered compare WOULD
+        // catch -Inf (-Inf < 0 is true), but the isfinite guard now
+        // routes it through the same fallback for uniform behaviour.
+        cw::WorldGridDesc d; d.chunk_size = -inf;
+        cw::WorldGrid g(d);
+        CHECK(ap(g.chunk_size(), 1.0f));
+    }
+    {   // (b) NaN world coords with finite chunk_size — per-component
+        // sanitize in chunk_of maps NaN → 0 BEFORE the floor/cast.
+        cw::WorldGridDesc d; d.chunk_size = 10.0f;
+        d.extent_x = 100; d.extent_y = 100; d.extent_z = 100;
+        cw::WorldGrid g(d);
+        // NaN x → 0/10=0; finite y/z stay. Result must be defined.
+        auto c = g.chunk_of(qnan, 25.0f, 35.0f);
+        CHECK(c.x == 0 && c.y == 2 && c.z == 3);
+        // All three NaN → origin.
+        auto o = g.chunk_of(qnan, qnan, qnan);
+        CHECK(o.x == 0 && o.y == 0 && o.z == 0);
+        // ±Inf x → 0 (same sanitization). The other components stay.
+        auto p = g.chunk_of( inf, 25.0f, 35.0f);
+        CHECK(p.x == 0 && p.y == 2 && p.z == 3);
+        auto q = g.chunk_of(-inf, 25.0f, 35.0f);
+        CHECK(q.x == 0 && q.y == 2 && q.z == 3);
+    }
+}
+
 // ---- chunk_of (floor, neg-correct) + world min/max/center ---------
 void test_chunk_math() {
     cw::WorldGridDesc d; d.chunk_size = 10.0f;
@@ -268,6 +319,7 @@ void test_streamer_radius_change() {
 
 int main() {
     test_grid_config();
+    test_grid_nonfinite();
     test_chunk_math();
     test_in_bounds();
     test_visible_set();

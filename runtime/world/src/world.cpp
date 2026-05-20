@@ -15,7 +15,18 @@ namespace cardinal::world {
 // WorldGrid
 // =============================================================================
 WorldGrid::WorldGrid(const WorldGridDesc& d) noexcept : desc_(d) {
-    if (desc_.chunk_size         <= 0.0f) desc_.chunk_size         = 1.0f;
+    // `chunk_size <= 0.0f` is NaN-blind (NaN<=0 unordered-false); a NaN
+    // chunk_size would flow into chunk_of's `inv = 1.0f / NaN = NaN`,
+    // then `floor(wx * NaN) = NaN`, then `static_cast<i32>(NaN)` is
+    // UB on the float→int cast — same shape as mesh_ops 439d2eb and
+    // tex_ops 3bc8360. set_chunk_size's `cardinal::max(1e-3f, s)` is
+    // accidentally NaN-safe (operand order: 1e-3<NaN unordered-false
+    // → returns first=1e-3), but the constructor's NaN-blind ordered
+    // compare here let NaN through. Add isfinite alongside the
+    // positive-clamp; matches the documented "chunk_size≤0 → 1.0"
+    // intent and extends it to NaN/±Inf.
+    if (!cardinal::isfinite(desc_.chunk_size) ||
+        desc_.chunk_size         <= 0.0f) desc_.chunk_size         = 1.0f;
     if (desc_.extent_x           <= 0)    desc_.extent_x           = 1;
     if (desc_.extent_y           <= 0)    desc_.extent_y           = 1;
     if (desc_.extent_z           <= 0)    desc_.extent_z           = 1;
@@ -34,11 +45,19 @@ void WorldGrid::set_extent_uniform(i32 h) noexcept {
 }
 
 ChunkCoord WorldGrid::chunk_of(f32 wx, f32 wy, f32 wz) const noexcept {
+    // Defensive: per-component NaN sanitization on the caller-supplied
+    // world coords. A degenerate importer / NaN-poisoned actor
+    // position would otherwise feed `floor(NaN * inv) = NaN` into
+    // `static_cast<i32>(NaN)` — UB. chunk_size is already guarded by
+    // the constructor + set_chunk_size, so `inv` is finite.
+    const f32 sx = cardinal::isfinite(wx) ? wx : 0.0f;
+    const f32 sy = cardinal::isfinite(wy) ? wy : 0.0f;
+    const f32 sz = cardinal::isfinite(wz) ? wz : 0.0f;
     const f32 inv = 1.0f / desc_.chunk_size;
     return {
-        static_cast<i32>(cardinal::floor(wx * inv)),
-        static_cast<i32>(cardinal::floor(wy * inv)),
-        static_cast<i32>(cardinal::floor(wz * inv)),
+        static_cast<i32>(cardinal::floor(sx * inv)),
+        static_cast<i32>(cardinal::floor(sy * inv)),
+        static_cast<i32>(cardinal::floor(sz * inv)),
     };
 }
 
