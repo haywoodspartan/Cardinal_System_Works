@@ -55,10 +55,22 @@ void PlayerControllerComponent::tick(float dt, const PlayerInput& in) noexcept {
 
     using cardinal::scene::Vec3;
 
+    // Direct-field tunables are public on PlayerControllerComponent
+    // with no setters (same desc-direct-field pattern as scene::
+    // FlyCamera tunables d8f7ce1). Sanitize each at use site with the
+    // struct's compile-time default as the safe fallback; preserve the
+    // user's stored value so the editor inspector sees the bad input
+    // rather than silent correction.
+    //
+    // look_sensitivity is the NASTIEST: yaw_/pitch_ are PERSISTENT
+    // state, once poisoned NaN they stay NaN forever even if the
+    // tunable is later corrected (cos/sin of NaN stays NaN).
+    const float ls = cardinal::isfinite(look_sensitivity)
+                         ? look_sensitivity : 0.0035f;
     // ---- Look: mouse delta -> yaw/pitch (FlyCamera convention) ----------
     if (in.accept_input && in.look) {
-        yaw_   += in.mouse_dx * look_sensitivity;
-        pitch_ -= in.mouse_dy * look_sensitivity;
+        yaw_   += in.mouse_dx * ls;
+        pitch_ -= in.mouse_dy * ls;
         pitch_  = cardinal::clamp(pitch_, min_pitch_rad, max_pitch_rad);
     }
 
@@ -72,6 +84,23 @@ void PlayerControllerComponent::tick(float dt, const PlayerInput& in) noexcept {
     const Vec3 fwd_flat { sy,      0.0f, -cy };
     const Vec3 right    { cy,      0.0f,  sy };
 
+    // Movement tunables — sanitize-at-use with each field's compile-
+    // time default as fallback (matches component.hpp:148/149/152/153).
+    // NaN move_speed / sprint_multiplier → `disp = wish * (inv * NaN
+    // * dt)` poisons tr->translation.x/z. NaN gravity → `vy_ += NaN *
+    // dt` poisons vy_ PERSISTENTLY (vy_ stays NaN every later frame
+    // until set_velocity / land), then `translation.y += vy_ * dt`
+    // teleports Y forever. NaN jump_speed → `vy_ = NaN` on the jump
+    // frame; same vy_ persistent poison.
+    const float ms_safe = cardinal::isfinite(move_speed)
+                              ? move_speed : 6.0f;
+    const float sm_safe = cardinal::isfinite(sprint_multiplier)
+                              ? sprint_multiplier : 2.0f;
+    const float gr_safe = cardinal::isfinite(gravity)
+                              ? gravity : -19.62f;
+    const float js_safe = cardinal::isfinite(jump_speed)
+                              ? jump_speed : 7.0f;
+
     // ---- Horizontal move: WASD-relative, normalised, sprint-scaled ------
     Vec3 disp{0, 0, 0};
     if (in.accept_input) {
@@ -79,8 +108,7 @@ void PlayerControllerComponent::tick(float dt, const PlayerInput& in) noexcept {
         const float l2 = wish.x*wish.x + wish.y*wish.y + wish.z*wish.z;
         if (l2 > 1e-6f) {
             const float inv = 1.0f / cardinal::sqrt(l2);
-            const float spd = move_speed *
-                              (in.sprint ? sprint_multiplier : 1.0f);
+            const float spd = ms_safe * (in.sprint ? sm_safe : 1.0f);
             disp = wish * (inv * spd * dt);
         }
     }
@@ -90,15 +118,15 @@ void PlayerControllerComponent::tick(float dt, const PlayerInput& in) noexcept {
     // ---- Vertical: fly-mode is free; otherwise gravity + jump + floor ---
     if (fly_mode) {
         vy_ = 0.0f;
-        if (in.accept_input && in.jump)   tr->translation.y += move_speed * dt;
-        if (in.accept_input && in.sprint) tr->translation.y -= move_speed * dt;
+        if (in.accept_input && in.jump)   tr->translation.y += ms_safe * dt;
+        if (in.accept_input && in.sprint) tr->translation.y -= ms_safe * dt;
         grounded_ = false;
     } else {
         if (in.accept_input && in.jump && grounded_) {
-            vy_ = jump_speed;
+            vy_ = js_safe;
             grounded_ = false;
         }
-        vy_ += gravity * dt;
+        vy_ += gr_safe * dt;
         tr->translation.y += vy_ * dt;
         if (tr->translation.y <= ground_y) {
             tr->translation.y = ground_y;

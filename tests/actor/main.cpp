@@ -252,6 +252,79 @@ void test_player_controller_nonfinite_dt() {
     CHECK(ap(tr->translation.z, pz));
 }
 
+// ---- PlayerController direct-field tunables must not poison state --
+// PlayerControllerComponent exposes move_speed / sprint_multiplier /
+// look_sensitivity / gravity / jump_speed as public direct fields with
+// no setters. Same desc-direct-field NaN sink class as scene::FlyCamera
+// (d8f7ce1) and particles::EmitterDesc (3704b48). Each tunable feeds
+// the integrator's persistent state and poisons it permanently on NaN:
+//   * look_sensitivity NaN → yaw_/pitch_ NaN forever (cos/sin of NaN
+//     stays NaN; rotation never recovers).
+//   * gravity NaN → `vy_ += NaN * dt` poisons vy_ persistently; every
+//     later tick reads NaN vy_ and writes NaN translation.y.
+//   * move_speed / sprint_multiplier NaN → translation.x/z poisoned.
+//   * jump_speed NaN → vy_ = NaN on jump frame; persistent poison.
+void test_player_controller_nonfinite_tunables() {
+    ac::World w;
+
+    {   // look_sensitivity NaN with a mouse look: yaw_ must NOT become
+        // NaN. With the sanitized default (0.0035) yaw advances by
+        // mouse_dx * 0.0035.
+        ac::Actor* a = w.spawn("p1");
+        auto* pc = a->add_component<ac::PlayerControllerComponent>();
+        pc->look_sensitivity = nan_f();
+        ac::PlayerInput in{};
+        in.accept_input = true; in.look = true; in.mouse_dx = 100.0f;
+        pc->tick(0.0f, in);                                // dt=0, look only
+        CHECK(finite_eq(pc->yaw_rad(), pc->yaw_rad()));    // not NaN
+        // User's stored value preserved (still NaN) — editor visibility.
+        CHECK(pc->look_sensitivity != pc->look_sensitivity);
+    }
+    {   // move_speed NaN with W held: translation.z must NOT become NaN.
+        ac::Actor* a = w.spawn("p2");
+        auto* pc = a->add_component<ac::PlayerControllerComponent>();
+        auto* tr = a->get_component<ac::TransformComponent>();
+        pc->move_speed = nan_f();
+        ac::PlayerInput in{};
+        in.accept_input = true; in.move_z = 1.0f;
+        pc->tick(0.5f, in);
+        CHECK(finite_eq(tr->translation.x, tr->translation.x));
+        CHECK(finite_eq(tr->translation.y, tr->translation.y));
+        CHECK(finite_eq(tr->translation.z, tr->translation.z));
+        CHECK(pc->move_speed != pc->move_speed);            // preserved
+    }
+    {   // gravity NaN: vy_ MUST NOT become NaN (it's persistent across
+        // ticks). After many finite ticks under fake-gravity, the
+        // player should still have finite translation.y.
+        ac::Actor* a = w.spawn("p3");
+        auto* pc = a->add_component<ac::PlayerControllerComponent>();
+        auto* tr = a->get_component<ac::TransformComponent>();
+        pc->gravity = nan_f();
+        ac::PlayerInput in{};
+        in.accept_input = true;
+        // 10 ticks of gravity integration with NaN gravity field —
+        // safe default -19.62 used; player falls; translation.y stays
+        // finite throughout (would go NaN on the very first tick
+        // without the fix).
+        for (int i = 0; i < 10; ++i) pc->tick(0.016f, in);
+        CHECK(finite_eq(tr->translation.y, tr->translation.y));
+        CHECK(pc->gravity != pc->gravity);                  // preserved
+    }
+    {   // sprint_multiplier NaN with sprint=true held — same protection.
+        ac::Actor* a = w.spawn("p4");
+        auto* pc = a->add_component<ac::PlayerControllerComponent>();
+        auto* tr = a->get_component<ac::TransformComponent>();
+        pc->move_speed        = 1.0f;
+        pc->sprint_multiplier = nan_f();
+        ac::PlayerInput in{};
+        in.accept_input = true; in.move_z = 1.0f; in.sprint = true;
+        pc->tick(0.5f, in);
+        CHECK(finite_eq(tr->translation.x, tr->translation.x));
+        CHECK(finite_eq(tr->translation.z, tr->translation.z));
+        CHECK(pc->sprint_multiplier != pc->sprint_multiplier);
+    }
+}
+
 // ---- TagComponent: add-dedupe / has / remove ----------------------
 void test_tag_component() {
     ac::TagComponent tc;
@@ -417,6 +490,7 @@ int main() {
     test_actor_components();
     test_spawn_during_tick();
     test_player_controller_nonfinite_dt();
+    test_player_controller_nonfinite_tunables();
     test_tag_component();
     test_lifecycle();
     test_world_lifecycle();
