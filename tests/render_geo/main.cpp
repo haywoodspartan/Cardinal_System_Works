@@ -305,6 +305,18 @@ void test_subdiv_level() {
     CHECK(geo::subdiv_level_for_factor(8.0f)        == 3u);
     CHECK(geo::subdiv_level_for_factor(64.0f, 4u)   == 4u);   // clamp
     CHECK(geo::subdiv_level_for_factor(1000.0f, 6u) == 6u);   // clamp
+
+    // Non-finite tess_factor must NOT invoke UB on the float→u32 cast
+    // (log2(NaN) = NaN, ceil(NaN) = NaN, static_cast<u32>(NaN) is UB
+    // per [conv.fpint]p1). Same UB-cast class fixed across world,
+    // mesh_ops, tex_ops, scene, physics, brush, vgeom. Treat NaN/±Inf
+    // as "no subdivision needed" — the factor==1.0 contract.
+    volatile float z = 0.0f;
+    const float qnan = z / z;
+    const float inf  = 1.0f / z;
+    CHECK(geo::subdiv_level_for_factor(qnan)         == 0u);  // no-UB, no-subdiv
+    CHECK(geo::subdiv_level_for_factor( inf)         == 0u);
+    CHECK(geo::subdiv_level_for_factor(-inf)         == 0u);
 }
 
 // ---- cluster DAG + perfect LOD cut --------------------------------

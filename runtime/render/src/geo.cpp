@@ -414,7 +414,15 @@ u32 morton3(const scene::Vec3& c, const scene::Vec3& mn,
 }  // namespace
 
 u32 subdiv_level_for_factor(float tess_factor, u32 max_levels) noexcept {
-    if (tess_factor <= 1.0f) return 0u;
+    // `tess_factor <= 1.0f` is NaN-blind (NaN<=1 unordered-false). A
+    // NaN tess_factor flowed to `log2(NaN) = NaN`, `ceil(NaN) = NaN`,
+    // `static_cast<u32>(NaN)` is UB per [conv.fpint]p1 — same float→
+    // int cast class fixed across world / mesh_ops / tex_ops / scene /
+    // physics / brush / vgeom (1c537cf et al.). +Inf is also a problem
+    // independently: log2(+Inf) = +Inf, ceil(+Inf) = +Inf, cast to u32
+    // is UB on out-of-range. Treat any non-finite or <= 1 as "no
+    // subdivision needed" — the documented semantic for factor 1.0.
+    if (!cardinal::isfinite(tess_factor) || tess_factor <= 1.0f) return 0u;
     // factor 2→1, 4→2, 8→3 split passes = ceil(log2(factor)).
     u32 lv = static_cast<u32>(cardinal::ceil(cardinal::log2(tess_factor) - 1e-4f));
     if (lv > max_levels) lv = max_levels;
