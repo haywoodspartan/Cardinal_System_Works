@@ -709,6 +709,23 @@ private:
         // If a previous version of this script is loaded under a DIFFERENT
         // dll_path (because we embed the job id in the filename), unload it
         // first so two copies don't run simultaneously.
+        //
+        // Holding records_mu_ ACROSS plugin::Registry::unload was a
+        // re-entrant-deadlock: unload fires p.info.on_detach (plugin.cpp:305),
+        // a user-supplied callback. If on_detach calls back into the
+        // cppscript Manager (query / jobs / set_observer / reload — all
+        // take records_mu_), the same thread tries to re-acquire a non-
+        // recursive std::mutex → instant deadlock. cardinal::mutex is
+        // std::mutex (thread.hpp:25), not recursive_mutex, so this is
+        // not theoretical. Same lock-release-before-user-callback
+        // pattern this file uses elsewhere (service_watches_ at line
+        // 737, finalize_ at 691). Snapshot the to-unload list under
+        // the lock, release, unload outside, then re-acquire for the
+        // bookkeeping mutation. The "mark superseded" status flip on
+        // re-acquire re-finds the entry by id because records_ may
+        // have churned across the released window (rehash possible
+        // on insert / explicit erase elsewhere).
+        cardinal::vector<cardinal::pair<u64, cardinal::string>> to_supersede;
         {
             cardinal::lock_guard lk(records_mu_);
             for (auto& [oid, r] : records_) {
@@ -716,8 +733,20 @@ private:
                 if (r.source_path == source_path &&
                     r.status == JobStatus::Loaded && !r.dll_path.empty())
                 {
-                    cardinal::plugin::Registry::instance().unload(r.dll_path.c_str());
-                    r.status = JobStatus::CompileFailed;   // mark superseded
+                    to_supersede.push_back({oid, r.dll_path});
+                }
+            }
+        }
+        for (const auto& [oid, dll] : to_supersede) {
+            cardinal::plugin::Registry::instance().unload(dll.c_str());
+        }
+        if (!to_supersede.empty()) {
+            cardinal::lock_guard lk(records_mu_);
+            for (const auto& [oid, _] : to_supersede) {
+                auto it = records_.find(oid);
+                if (it != records_.end() &&
+                    it->second.status == JobStatus::Loaded) {
+                    it->second.status = JobStatus::CompileFailed;
                 }
             }
         }
