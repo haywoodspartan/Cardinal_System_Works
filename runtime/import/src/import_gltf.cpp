@@ -223,6 +223,11 @@ cardinal::vector<u8> read_file(const cardinal::string& path) {
     cardinal::ifstream f(path, cardinal::ios::binary | cardinal::ios::ate);
     if (!f) return {};
     const cardinal::streamsize n = f.tellg();
+    // tellg → -1 on non-seekable stream. The prior `if (n > 0) read`
+    // skipped the read but the VECTOR was already constructed at
+    // static_cast<size_t>(-1) = SIZE_MAX → bad_alloc on construction.
+    // Same 6a1640d guard pattern as cook/shader read_all.
+    if (n < 0) return {};
     f.seekg(0);
     cardinal::vector<u8> v(static_cast<cardinal::size_t>(n));
     if (n > 0) f.read(reinterpret_cast<char*>(v.data()), n);

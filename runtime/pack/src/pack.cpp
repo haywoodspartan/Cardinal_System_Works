@@ -115,6 +115,14 @@ bool Builder::add_file(const cardinal::string& key, cook::AssetType type,
     if (!f) return false;
     f.seekg(0, cardinal::ios::end);
     const cardinal::streamsize n = f.tellg();
+    // tellg → -1 on non-seekable stream (named pipe / char device path).
+    // Cast to usize wraps to SIZE_MAX → bad_alloc. The pack builder
+    // takes source_path from callers across the cook/dist pipeline;
+    // a corrupted asset directory with a special-file entry could
+    // crash the builder. The companion slurp() helper below already
+    // has this guard (line 385); fix add_file too. Same 6a1640d
+    // pattern as cook/shader read_all.
+    if (n < 0) return false;
     f.seekg(0, cardinal::ios::beg);
     cardinal::vector<u8> bytes(static_cast<usize>(n));
     f.read(reinterpret_cast<char*>(bytes.data()), n);

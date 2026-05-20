@@ -245,6 +245,12 @@ bool Registry::fetch_raw_(const cardinal::string& key, cardinal::vector<u8>& out
         if (!f) continue;
         f.seekg(0, cardinal::ios::end);
         const auto n = f.tellg();
+        // tellg → -1 on a non-seekable opened stream (pipe, char device,
+        // any path that opens OK but doesn't support seekg(0,end)). Cast
+        // to usize wraps to SIZE_MAX → resize ~16 EiB → bad_alloc kills
+        // the Registry fetch. Skip the mount and try the next. Same
+        // guard 6a1640d applied to cook/shader read_all.
+        if (n < 0) continue;
         f.seekg(0, cardinal::ios::beg);
         cardinal::vector<u8> wrapped(static_cast<usize>(n));
         f.read(reinterpret_cast<char*>(wrapped.data()), n);

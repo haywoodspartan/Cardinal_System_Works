@@ -51,6 +51,10 @@ bool do_pack(cardinal::project::Project& proj,
         if (!f) continue;
         f.seekg(0, cardinal::ios::end);
         const auto n = f.tellg();
+        // tellg → -1 on non-seekable stream → cast wraps to SIZE_MAX →
+        // bad_alloc. Skip the file and continue packing the rest. Same
+        // 6a1640d guard pattern as cook/shader read_all.
+        if (n < 0) continue;
         f.seekg(0, cardinal::ios::beg);
         cardinal::vector<cardinal::u8> bytes(static_cast<cardinal::usize>(n));
         f.read(reinterpret_cast<char*>(bytes.data()), n);
@@ -68,6 +72,7 @@ bool do_pack(cardinal::project::Project& proj,
         if (!f) continue;
         f.seekg(0, cardinal::ios::end);
         const auto n = f.tellg();
+        if (n < 0) continue;        // see first loop above
         f.seekg(0, cardinal::ios::beg);
         cardinal::vector<cardinal::u8> bytes(static_cast<cardinal::usize>(n));
         f.read(reinterpret_cast<char*>(bytes.data()), n);
