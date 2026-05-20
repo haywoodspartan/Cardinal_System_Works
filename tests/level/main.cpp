@@ -240,6 +240,58 @@ void test_build_hlod() {
         CHECK(r && !r->is_leaf && r->children.size() == sz(8));
         CHECK(t.find(1u) && t.find(1u)->parent == 9u && t.find(1u)->is_leaf);
     }
+    {   // NaN position must NOT defeat cluster_greedy's sort. vdist(NaN,
+        // x) = NaN — the original `a.first < b.first` comparator is
+        // NaN-blind both ways, so (NaN, x) is treated as equivalent
+        // while (x, y) with x<y orders strictly. That breaks transitivity
+        // of equivalence → std::sort SWO violation → UB on MSVC's
+        // introsort (infinite loop or OOB scribble). Bad-data path:
+        // corrupt scene file with `position = (nan, 0, 0)` (sscanf
+        // "%f" accepts "nan" verbatim) → HlodInput → build_hlod →
+        // cluster_greedy. The fix promotes NaN to "greater than all
+        // finites" so NaN inputs cluster LAST (semantically "farthest")
+        // and the sort completes cleanly. Build must terminate within
+        // the test timeout and emit a coherent tree (one root, all
+        // leaves present including the NaN one).
+        volatile float z = 0.0f;
+        const float nanv = z / z;   // qNaN without <cmath>
+        std::vector<lv::HlodInput> in;
+        in.reserve(8);
+        // 7 well-spaced finite inputs + 1 NaN position smack in the
+        // middle of the vector — the position most likely to trigger
+        // partition-pathology on a SWO-violating comparator.
+        in.push_back(hin(100u, 0,  0, 0));
+        in.push_back(hin(200u, 2,  0, 0));
+        in.push_back(hin(300u, 4,  0, 0));
+        in.push_back(hin(400u, 6,  0, 0));
+        lv::HlodInput nan_input;
+        nan_input.id       = 999u;
+        nan_input.position = Vec3{ nanv, 0.0f, 0.0f };
+        nan_input.bounds   = geom::AABB::make_empty();
+        in.push_back(nan_input);
+        in.push_back(hin(500u, 8,  0, 0));
+        in.push_back(hin(600u, 10, 0, 0));
+        in.push_back(hin(700u, 12, 0, 0));
+        lv::HlodBuildOptions o; o.cluster_size = 4u; o.max_depth = 8u;
+        // Without the fix this can hang or heap-corrupt. With the fix,
+        // returns in O(n log n) and the tree is well-formed.
+        lv::HlodTree t = lv::build_hlod(in, o);
+        CHECK(!t.nodes.empty());
+        CHECK(t.root != lv::kInvalidHlodId);
+        // All 8 input ids must appear as leaves in the tree (the NaN
+        // one is grouped, not dropped — it's still data the engine
+        // needs to track even if its position is degenerate).
+        u32 leaves_found = 0;
+        for (const auto& n : t.nodes) {
+            if (!n.is_leaf) continue;
+            for (lv::HlodId lid : n.leaf_ids) {
+                if (lid == 100u || lid == 200u || lid == 300u ||
+                    lid == 400u || lid == 500u || lid == 600u ||
+                    lid == 700u || lid == 999u) ++leaves_found;
+            }
+        }
+        CHECK(leaves_found == 8u);
+    }
 }
 
 // ---- select_hlod: proxy / recurse-to-leaf / cull / empty ----------

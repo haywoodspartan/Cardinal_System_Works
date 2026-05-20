@@ -304,8 +304,27 @@ void cluster_greedy(const cardinal::vector<HlodInput>& inputs,
             if (used[j]) continue;
             ranked.push_back({ vdist(inputs[i].position, inputs[j].position), j });
         }
+        // NaN-safe SWO. vdist(NaN, x) = sqrt(NaN^2 + ...) = NaN. With
+        // any NaN distance in ranked, `a.first < b.first` violates
+        // strict-weak-ordering (NaN compares unordered to everything),
+        // and std::sort's introsort can fail to terminate or scribble
+        // OOB — same UB class as sky::sort_keys (4ff85a8). Realistic
+        // path: a corrupt scene file with `position = (nan, 0, 0)`
+        // (sscanf("%f", ...) accepts "nan" verbatim) → HlodInput
+        // with NaN position → vdist → NaN ranked.first. Also: the
+        // bottom-up recursion (build_hlod:355 `hi.position =
+        // cn->centroid`) propagates a NaN leaf upward via NaN-bearing
+        // averages, so every subsequent layer's cluster_greedy hits
+        // the same sort. Promote NaN to "greater than all finites" —
+        // proper SWO; NaN-distance inputs cluster LAST (semantically
+        // "farthest," which is the right bucket).
         cardinal::sort(ranked.begin(), ranked.end(),
-            [](const auto& a, const auto& b){ return a.first < b.first; });
+            [](const auto& a, const auto& b){
+                const bool af = cardinal::isfinite(a.first);
+                const bool bf = cardinal::isfinite(b.first);
+                if (af && bf) return a.first < b.first;
+                return af && !bf;   // finite < NaN; NaN ~ NaN
+            });
         for (const auto& [_, j] : ranked) {
             if (c.size() >= cluster_size) break;
             c.push_back(j);
