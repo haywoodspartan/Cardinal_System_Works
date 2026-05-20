@@ -149,10 +149,21 @@ void Game::apply_lifecycle_() {
             }
         }
     }
-    if (fired > 0) {
-        begin_play_pending_ = (fired >= begin_play_pending_)
-            ? 0u : (begin_play_pending_ - fired);
-    }
+    // The full sweep above visits EVERY alive actor in the world; any
+    // remaining "pending" residue must be GameActors that were
+    // destroyed (marked-dead or swept) before their deferred begin_
+    // play could fire. The old `(fired >= pending) ? 0 : (pending -
+    // fired)` arithmetic left that residue forever — apply_lifecycle_
+    // then ran a no-op O(N) sweep EVERY PreUpdate frame from then on.
+    // Trigger sequence (parked-supervised item #6 in feedback_
+    // integration_coverage_map.md): pause_play (state=Paused) →
+    // spawn_class (++pending) → world.destroy(actor) → resume_play
+    // (does NOT broadcast_begin_play_, unlike start_play) → tick.
+    // apply_lifecycle_ sees !alive() and skips, fired stays 0, the
+    // old arithmetic left pending=1 forever. Reset to 0 unconditionally
+    // after a full sweep — `++pending` re-arms us if new spawn events
+    // arrive next frame.
+    begin_play_pending_ = 0u;
 }
 
 void Game::broadcast_begin_play_() {

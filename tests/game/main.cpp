@@ -326,6 +326,64 @@ void test_game_tick_lifecycle() {
     CHECK(TestActor::s_tick == tick_stopped);
 }
 
+// ---- begin_play_pending_ must not stick when pending actor dies ---
+// Parked-supervised regression: a GameActor spawned while !Playing
+// (Paused/Stopped) increments begin_play_pending_; broadcast_begin_
+// play_ from start_play() unconditionally resets it, but resume_play()
+// does NOT call broadcast and instead relies on apply_lifecycle_ to
+// fire deferred begin_plays under the running tick. If the spawned
+// actor is destroyed between spawn and the next Playing PreUpdate,
+// apply_lifecycle_'s sweep sees !alive() and skips it; the pre-fix
+// `pending = (fired>=pending) ? 0 : (pending-fired)` left
+// pending=(spawn_count - 0) FOREVER, and apply_lifecycle_ then ran
+// a no-op O(N) actors sweep every PreUpdate tick from then on.
+void test_lifecycle_pending_stale_destroy() {
+    TestActor::s_begin = 0;
+    TestActor::s_end   = 0;
+    TestActor::s_tick  = 0;
+
+    cardinal::sim::SimDesc sd{};
+    sd.fixed_dt     = 0.1f;
+    sd.max_substeps = 8u;
+    cardinal::sim::SimWorld sw{sd};
+    cg::Game g(sw);
+
+    g.start_play();                                   // → Playing
+    g.pause_play();                                   // → Paused (Sim halted)
+
+    // Spawn while Paused — deferred begin_play (++pending).
+    cardinal::actor::Actor* a = g.spawn_class("TestActor", "doomed");
+    CHECK(a != nullptr);
+    CHECK(g.begin_play_pending() == 1u);
+    CHECK(TestActor::s_begin == 0);                   // not yet begun
+
+    // Destroy the pending actor BEFORE its begin_play. world.destroy
+    // marks dead; sweep happens inside the next non-paused sim tick.
+    sw.world().destroy(a->id());
+
+    g.resume_play();                                  // → Playing
+    CHECK(g.begin_play_pending() == 1u);              // resume doesn't broadcast
+
+    // First Playing tick: apply_lifecycle_ runs the sweep. The doomed
+    // actor is !alive() so it's skipped (fired=0). Pre-fix: pending
+    // stayed at 1 forever. Post-fix: full sweep resets pending = 0.
+    g.tick(0.25f);                                    // ≥1 PreUpdate
+    CHECK(g.begin_play_pending() == 0u);              // RESET (was 1 pre-fix)
+    CHECK(TestActor::s_begin == 0);                   // doomed never began
+
+    // A subsequent spawn while Playing fires begin_play IMMEDIATELY
+    // (state==Playing branch in spawn_class) and does NOT re-arm
+    // pending — proves the counter is genuinely cleared and works
+    // normally going forward.
+    cardinal::actor::Actor* b = g.spawn_class("TestActor", "live");
+    CHECK(b != nullptr);
+    CHECK(g.begin_play_pending() == 0u);              // immediate, not deferred
+    CHECK(TestActor::s_begin == 1);
+
+    g.stop_play();
+    CHECK(TestActor::s_end == 1);                     // only live actor ended
+}
+
 // ---- end_play fires on stop FROM Paused + spawn_class identity ----
 void test_stop_from_paused_and_identity() {
     TestActor::s_begin = 0;
@@ -411,6 +469,7 @@ int main() {
     test_game_tick_lifecycle();
     test_stop_from_paused_and_identity();
     test_lifecycle_spawn_during_iteration();
+    test_lifecycle_pending_stale_destroy();
 
     if (g_fail == 0) {
         cardinal::log::infof("gametest", "OK  %d checks passed", g_checks);
