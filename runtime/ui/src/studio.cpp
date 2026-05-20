@@ -625,10 +625,21 @@ public:
 
     HoverChunk last_hover_chunk() const noexcept override {
         HoverChunk h;
-        h.valid = hover_chunk_valid_;
-        h.x = hover_chunk_x_;
-        h.y = hover_chunk_y_;
-        h.z = hover_chunk_z_;
+        // Prefer the context-menu freeze when it's pinned — that's the
+        // chunk the user right-clicked on, which is what "Spawn active
+        // asset here" wants. Fall back to the live per-frame hover for
+        // any non-menu reader.
+        if (ctx_hover_chunk_valid_) {
+            h.valid = true;
+            h.x = ctx_hover_chunk_x_;
+            h.y = ctx_hover_chunk_y_;
+            h.z = ctx_hover_chunk_z_;
+        } else {
+            h.valid = hover_chunk_valid_;
+            h.x = hover_chunk_x_;
+            h.y = hover_chunk_y_;
+            h.z = hover_chunk_z_;
+        }
         return h;
     }
 
@@ -2584,6 +2595,15 @@ public:
             && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
         {
             ImGui::OpenPopup("##viewport_ctx");
+            // Freeze the chunk under the right-click cursor — the live
+            // hover_chunk_* is reset every frame and won't be valid by
+            // the time the user clicks a menu item (cursor is over the
+            // menu by then, not the panel). Without this, "Spawn active
+            // asset here" always fell back to camera-forward.
+            ctx_hover_chunk_x_     = hover_chunk_x_;
+            ctx_hover_chunk_y_     = hover_chunk_y_;
+            ctx_hover_chunk_z_     = hover_chunk_z_;
+            ctx_hover_chunk_valid_ = hover_chunk_valid_;
         }
 
         if (ImGui::BeginPopup("##viewport_ctx")) {
@@ -2599,6 +2619,15 @@ public:
             ImGui::Separator();
             if (ImGui::MenuItem("Clear selection", "Esc"))       out->clear_selection = true;
             ImGui::EndPopup();
+        } else if (ctx_hover_chunk_valid_) {
+            // Popup closed (item clicked, click-outside, or Esc) — drop
+            // the freeze so the next right-click captures fresh. The host
+            // reads last_hover_chunk() AFTER end_frame on the same frame
+            // the item is clicked; ImGui closes the popup on item-click,
+            // so BeginPopup returned false here, but the spawn handler
+            // still gets the captured chunk because clear happens on the
+            // NEXT frame's call (the action is consumed before then).
+            ctx_hover_chunk_valid_ = false;
         }
     }
 
@@ -3946,6 +3975,23 @@ private:
     i32  hover_chunk_y_{0};
     i32  hover_chunk_z_{0};
     bool hover_chunk_valid_{false};
+
+    // Context-menu freeze of hover_chunk_*. The live state is reset to
+    // valid=false at the top of every frame and only set when the cursor
+    // is over a viewport panel's grid-overlay rect — but the Alt+RMB
+    // context menu PERSISTS across frames, and by the time the user
+    // moves onto the menu item and clicks "Spawn active asset here",
+    // the cursor is over the popup (not the panel), live hover is
+    // invalid, and the host's spawn-at-cursor fell back to camera-
+    // forward instead of the chunk the user actually right-clicked.
+    // Captured on OpenPopup (when the right-click happens and the live
+    // hover is correct for that exact cursor); cleared when the popup
+    // closes (item-clicked / clicked-outside / Esc) so the next right-
+    // click captures fresh. Preferred by last_hover_chunk() when valid.
+    i32  ctx_hover_chunk_x_{0};
+    i32  ctx_hover_chunk_y_{0};
+    i32  ctx_hover_chunk_z_{0};
+    bool ctx_hover_chunk_valid_{false};
 
     // Backing storage for ImGuiIO::IniFilename (which holds a non-owning
     // const char*). 1 KB covers any reasonable absolute path.
