@@ -26,6 +26,7 @@
 // =============================================================================
 
 #include <cardinal/audio/audio.hpp>
+#include <cardinal/core/atomic.hpp>
 #include <cardinal/core/log.hpp>
 
 #include <limits>
@@ -595,6 +596,58 @@ void test_nonfinite_inputs() {
     }
 }
 
+// ---- render must NOT deadlock when a procedural callback re-enters ---
+// Engine::render previously held mtx_ across `c.procedural(t)` (line
+// 347 pre-92ba1b5-sibling). cardinal::mutex is std::mutex (NOT
+// recursive), so any Engine API call from inside the callback (which
+// also takes mtx_: stats / active_instances / set_channel_volume /
+// register_cue / play_2d / ...) deadlocks the same thread on the
+// non-recursive mutex. Same lock-held-across-user-callback class as
+// cppscript 92ba1b5; sibling of the iterate-callback UAF family.
+// Fix snapshots the per-instance render state under the lock,
+// releases, then invokes the procedural off-lock. This test pins
+// that contract by registering a procedural whose callback queries
+// Engine::stats() and Engine::active_instances() each call —
+// without the fix the test deadlocks (and the test runner kills
+// it on timeout); with the fix render() completes in microseconds.
+void test_procedural_reentrant_safe() {
+    auto e = au::Engine::create();
+    // Procedural callback that calls back into the Engine API. Capture
+    // the engine by raw pointer (not shared_ptr — the test owns the
+    // lifetime) and exercise two distinct mtx_-taking methods so a
+    // recursion-detection short-circuit on one method wouldn't hide
+    // a deadlock on the other.
+    au::Engine* raw_e = e.get();
+    cardinal::atomic<u32> reentry_count{0};
+    au::Cue rc;
+    rc.id = "reentrant";
+    rc.kind = au::CueKind::Procedural;
+    rc.duration_s = 100.0f;
+    rc.procedural = [raw_e, &reentry_count](float /*t*/) {
+        // Two distinct API calls under what USED to be a held mtx_.
+        // Both methods take mtx_; under the buggy code, either would
+        // deadlock the same thread on the non-recursive std::mutex.
+        const auto st = raw_e->stats();
+        const auto inst = raw_e->active_instances();
+        reentry_count.fetch_add(1, cardinal::memory_order_relaxed);
+        (void)st; (void)inst;
+        return 0.1f;
+    };
+    e->register_cue(rc);
+    e->play_2d("reentrant", au::kChannelSfx);
+
+    float buf[16];
+    // Without the fix, this call deadlocks forever — every callback
+    // invocation tries to re-acquire mtx_ on the same thread.
+    e->render(buf, 4, 1);
+
+    // Sanity: the procedural was invoked at least once (4 samples in
+    // mono = 4 callback calls), each emitted 0.1f, soft-clip keeps
+    // output in [-1, 1] (0.1f * gain_1.0 = 0.1f).
+    CHECK(reentry_count.load(cardinal::memory_order_relaxed) >= 4u);
+    for (u32 i = 0; i < 4u; ++i) CHECK(ap(buf[i], 0.1f, 1e-5f));
+}
+
 }  // namespace
 
 int main() {
@@ -607,6 +660,7 @@ int main() {
     test_render();
     test_render_mix();
     test_procedural();
+    test_procedural_reentrant_safe();
     test_fades();
     test_nonfinite_inputs();
 

@@ -320,33 +320,78 @@ void Engine::render(float* out, u32 frame_count, u32 channels) noexcept {
     if (out == nullptr || frame_count == 0 || channels == 0) return;
     cardinal::fill(out, out + static_cast<usize>(frame_count) * channels, 0.0f);
 
-    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
-    const float sr     = (desc_.sample_rate > 0)
-                       ? static_cast<float>(desc_.sample_rate) : 48000.0f;
+    // Snapshot the render state under mtx_, then do the sample
+    // generation OUTSIDE the lock. The Procedural cue branch calls
+    // user code via `c.procedural(t)`; if that callback re-enters
+    // the Engine API (e.g. set_channel_volume, register_cue,
+    // active_instances — all take mtx_), the same thread tries to
+    // re-acquire a non-recursive std::mutex → deadlock. Same
+    // lock-held-across-user-callback class as cppscript 92ba1b5;
+    // sibling of the iterate-callback UAF family. The snapshot is
+    // small (per-instance: 6 scalars + one cardinal::function copy
+    // for procedural cues only). Engine state CAN evolve across
+    // the released window (tick may concurrently update
+    // play_head_s / final_attenuated_volume), but render is a
+    // read-only sampler — using the snapshot at the moment of
+    // capture matches the existing "frame-quantum" contract.
+    struct RenderJob {
+        float                            gain;
+        float                            play_head_s;
+        float                            pitch;
+        float                            duration_s;
+        bool                             loop;
+        CueKind                          kind;
+        float                            sine_frequency_hz;
+        float                            cue_gain;
+        cardinal::function<float(float)> procedural;   // copy by value
+    };
+    cardinal::vector<RenderJob> jobs;
+    float sr;
+    {
+        cardinal::lock_guard<cardinal::mutex> lg(mtx_);
+        sr = (desc_.sample_rate > 0)
+            ? static_cast<float>(desc_.sample_rate) : 48000.0f;
+        jobs.reserve(instances_.size());
+        for (const auto& s : instances_) {
+            if (s.final_attenuated_volume <= 1e-5f) continue;
+            // Unlocked cue lookup — we already hold mtx_ (find_cue would
+            // re-lock → deadlock).
+            auto cit = cues_.find(s.cue_id);
+            if (cit == cues_.end()) continue;
+            const Cue& c = cit->second;
+            if (c.kind == CueKind::Silence || c.kind == CueKind::Streamed) continue;
+            RenderJob j;
+            j.gain              = s.final_attenuated_volume;
+            j.play_head_s       = s.play_head_s;
+            j.pitch             = s.pitch;
+            j.duration_s        = s.duration_s;
+            j.loop              = s.loop;
+            j.kind              = c.kind;
+            j.sine_frequency_hz = c.sine_frequency_hz;
+            j.cue_gain          = c.gain;
+            // Copy only for Procedural — copying a std::function with a
+            // heap-allocated capture isn't free, and the SineWave path
+            // never invokes it.
+            if (c.kind == CueKind::Procedural) j.procedural = c.procedural;
+            jobs.push_back(cardinal::move(j));
+        }
+    }
+    // ---- Lock released — user procedurals can safely call back ----------
+
     const float inv_sr = 1.0f / sr;
     constexpr float kTwoPi = 6.28318530717958647692f;
-
-    for (const auto& s : instances_) {
-        const float gain = s.final_attenuated_volume;
-        if (gain <= 1e-5f) continue;
-        // Unlocked cue lookup — we already hold mtx_ (find_cue would
-        // re-lock → deadlock).
-        auto cit = cues_.find(s.cue_id);
-        if (cit == cues_.end()) continue;
-        const Cue& c = cit->second;
-        if (c.kind == CueKind::Silence || c.kind == CueKind::Streamed) continue;
-
+    for (const auto& j : jobs) {
         for (u32 f = 0; f < frame_count; ++f) {
-            const float t = s.play_head_s
-                          + static_cast<float>(f) * inv_sr * s.pitch;
-            if (!s.loop && s.duration_s > 0.0f && t >= s.duration_s) break;
+            const float t = j.play_head_s
+                          + static_cast<float>(f) * inv_sr * j.pitch;
+            if (!j.loop && j.duration_s > 0.0f && t >= j.duration_s) break;
             float v = 0.0f;
-            if (c.kind == CueKind::SineWave) {
-                v = cardinal::sin(kTwoPi * c.sine_frequency_hz * t) * c.gain;
-            } else if (c.kind == CueKind::Procedural && c.procedural) {
-                v = c.procedural(t);
+            if (j.kind == CueKind::SineWave) {
+                v = cardinal::sin(kTwoPi * j.sine_frequency_hz * t) * j.cue_gain;
+            } else if (j.kind == CueKind::Procedural && j.procedural) {
+                v = j.procedural(t);
             }
-            v *= gain;
+            v *= j.gain;
             float* fr = out + static_cast<usize>(f) * channels;
             for (u32 ch = 0; ch < channels; ++ch) fr[ch] += v;
         }
