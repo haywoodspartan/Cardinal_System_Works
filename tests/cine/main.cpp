@@ -408,6 +408,37 @@ void test_nonfinite_dt() {
         CHECK(r.ev[0] == "a");
         CHECK(ap(seq.play_head_s, 3.0f));
     }
+    {   // Sequence::speed is a direct public field with no setter. NaN
+        // speed → `t = prev + dt * NaN = NaN` → play_head_s = NaN →
+        // sequencer permanently frozen. The speed_safe fallback in
+        // tick() uses 1.0 when speed is non-finite, so the sequencer
+        // advances at unit-speed (a sensible default) and the user's
+        // stored seq.speed remains visibly bad for the editor to flag.
+        cn::Sequence seq;
+        seq.duration_s = 10.0f; seq.looping = false;
+        seq.speed = qnan;                       // POISON
+        seq.tracks.push_back(ev_track({ {2.0f, "e", ""} }));
+        cn::Player p(&seq); Rec r; wire(p, r);
+        p.seek(0.0f); p.play();
+        p.tick(3.0f);                           // safe-speed 1.0 → t=3
+        CHECK(seq.play_head_s == seq.play_head_s);   // finite, not NaN
+        CHECK(ap(seq.play_head_s, 3.0f));            // advanced via safe speed
+        CHECK(r.ev.size() == sz(1));
+        CHECK(r.ev[0] == "e");
+        // User's stored speed is preserved (still NaN) — caller's bug
+        // visible, not silently overwritten.
+        CHECK(seq.speed != seq.speed);
+
+        // +Inf speed → also routed to safe 1.0 → same outcome.
+        cn::Sequence seq2;
+        seq2.duration_s = 10.0f; seq2.looping = false; seq2.speed = inf;
+        seq2.tracks.push_back(ev_track({ {2.0f, "e", ""} }));
+        cn::Player p2(&seq2); Rec r2; wire(p2, r2);
+        p2.seek(0.0f); p2.play();
+        p2.tick(3.0f);
+        CHECK(ap(seq2.play_head_s, 3.0f));
+        CHECK(r2.ev.size() == sz(1));
+    }
 }
 
 }  // namespace

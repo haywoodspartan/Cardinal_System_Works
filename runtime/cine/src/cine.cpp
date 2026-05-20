@@ -49,7 +49,17 @@ void Player::tick(float dt) {
     // sign stays valid — negative speed / speed 0 are supported, unaffected.
     if (!cardinal::isfinite(dt)) return;
     const float prev = seq_->play_head_s;
-    float t = prev + dt * seq_->speed;
+    // Sequence::speed is a public direct field with no setter — same
+    // desc-direct-field NaN sink as particles::EmitterDesc.drag
+    // (3704b48). NaN speed → `prev + dt * NaN = NaN`, every ordered
+    // compare against duration_s is unordered-false → no wrap / no
+    // done branch / no event ever fires, then `seq_->play_head_s = t`
+    // writes NaN at the bottom of the tick → permanent sequencer
+    // freeze (same observable as f6320c3's poisoned seek). Sanitize at
+    // use; preserve the user's stored value so the editor sees the
+    // bad input rather than silent correction.
+    const float speed_safe = cardinal::isfinite(seq_->speed) ? seq_->speed : 1.0f;
+    float t = prev + dt * speed_safe;
     if (t >= seq_->duration_s) {
         if (seq_->looping) {
             // Wrap; on wrap, fire any events between [prev, duration] then
