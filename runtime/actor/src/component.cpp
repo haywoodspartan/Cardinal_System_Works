@@ -43,7 +43,15 @@ void PlayerControllerComponent::tick(float dt, const PlayerInput& in) noexcept {
     if (owner_ == nullptr) return;
     auto* tr = owner_->get_component<TransformComponent>();
     if (tr == nullptr) return;
-    if (dt < 0.0f) dt = 0.0f;
+    // Non-finite dt (NaN / ±Inf): the original `if (dt < 0.0f)` was
+    // NaN-blind (NaN < 0 is false) AND would let +Inf through. Result:
+    // `disp = wish * (inv * spd * NaN)` is a NaN/±Inf vector and
+    // `tr->translation += disp` permanently teleports the player out
+    // of the world; `vy_ += gravity * NaN` and `tr->translation.y +=
+    // vy_ * NaN` poison Y the same way. cardinal::isfinite covers all
+    // three non-finite values; preserve the existing negative-clamp
+    // intent alongside.
+    if (!cardinal::isfinite(dt) || dt < 0.0f) dt = 0.0f;
 
     using cardinal::scene::Vec3;
 

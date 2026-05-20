@@ -45,6 +45,8 @@ bool apv(const Vec3& v, float x, float y, float z, float e = 1e-3f) {
     return ap(v.x, x, e) && ap(v.y, y, e) && ap(v.z, z, e);
 }
 float len2(const Vec3& v) { return v.x * v.x + v.y * v.y + v.z * v.z; }
+// volatile-launder a qNaN without dragging <cmath>/<limits> in.
+float nan_f() { volatile float z = 0.0f; return z / z; }
 
 Vec3 v3(float x, float y, float z) { return Vec3{ x, y, z }; }
 
@@ -131,6 +133,19 @@ void test_gating() {
         CHECK(apv(c.position, 0,0,0));
         CHECK(apv(c.target, 0,0,-1));
         fc.tick(c, in, -5.0f);                // negative clamps to 0 too
+        CHECK(apv(c.position, 0,0,0));
+        // Non-finite dt MUST clamp to 0 same as negatives — without the
+        // isfinite guard, NaN passed the `dt <= 0.0f` ordered compare
+        // (NaN <= 0 is false) and flowed into cam.position += move * v,
+        // teleporting the camera permanently to NaN-land; +Inf did the
+        // same to ±Inf.
+        fc.tick(c, in, nan_f());
+        CHECK(apv(c.position, 0,0,0));        // not poisoned to NaN
+        volatile float big = 1.0f;
+        for (int i = 0; i < 16; ++i) big *= 1e30f;   // +Inf
+        fc.tick(c, in, big);
+        CHECK(apv(c.position, 0,0,0));
+        fc.tick(c, in, -big);
         CHECK(apv(c.position, 0,0,0));
     }
     {   // accept_input=false AFTER init: tick is a complete no-op

@@ -18,7 +18,14 @@ void FlyCamera::sync_from(const Camera& cam) noexcept {
 void FlyCamera::tick(Camera& cam, const FlyInput& in, float dt) noexcept {
     if (!initialised_) sync_from(cam);
     if (!in.accept_input) return;
-    if (dt <= 0.0f) dt = 0.0f;
+    // Non-finite dt (NaN / ±Inf): same intent as the original `dt <= 0`
+    // clamp, but ordered compares don't catch NaN (NaN <= 0 is false)
+    // and +Inf passes the > 0 gate. Unguarded, NaN dt flowed into
+    // `cam.position += move * v` (v = speed * dt) and the camera
+    // teleported permanently to NaN-land; +Inf would do the same to
+    // ±Inf. cardinal::isfinite handles all three; preserve the
+    // existing negative-clamp alongside.
+    if (!cardinal::isfinite(dt) || dt < 0.0f) dt = 0.0f;
 
     // ---- Speed: scroll-wheel adjusts a multiplicative factor; clamp.
     if (cardinal::abs(in.scroll) > 0.001f) {

@@ -58,6 +58,14 @@ bool mat_eq(const Mat4& A, const Mat4& B) {
             if (A.m[i][j] != B.m[i][j]) return false;
     return true;
 }
+// volatile-launder a qNaN without dragging <cmath>/<limits> in.
+float nan_f() { volatile float z = 0.0f; return z / z; }
+// NaN never compares equal to itself — handy for "is finite" without
+// pulling in <cmath>.
+bool finite_eq(float v, float want) {
+    if (v != v) return false;
+    return ap(v, want);
+}
 
 // External-counter component so the lifecycle is observable AFTER the
 // component (and its Actor) are destroyed. Default ctor exists so
@@ -195,6 +203,53 @@ void test_actor_components() {
     CHECK(static_cast<cardinal::u32>(ac::LightKind::Directional) == 0u);
     CHECK(static_cast<cardinal::u32>(ac::LightKind::Point)       == 1u);
     CHECK(static_cast<cardinal::u32>(ac::LightKind::Spot)        == 2u);
+}
+
+// ---- PlayerController must not poison translation on non-finite dt ---
+// `if (dt < 0.0f) dt = 0.0f;` was NaN-blind (NaN < 0 is false). Without
+// the `!(dt > 0.0f)` fix, `disp = wish * (inv * spd * NaN)` is a NaN
+// vector, `tr->translation += disp` teleports the player to NaN-land,
+// `vy_ += gravity * NaN` and `tr->translation.y += vy_ * NaN` make
+// every translation component permanently NaN. The fix clamps NaN dt
+// to 0 same as the existing negative-dt clamp.
+void test_player_controller_nonfinite_dt() {
+    ac::World w;
+    ac::Actor* a = w.spawn("player");
+    auto* pc = a->add_component<ac::PlayerControllerComponent>();
+    auto* tr = a->get_component<ac::TransformComponent>();
+    CHECK(pc != nullptr && tr != nullptr);
+
+    // Finite tick with W held — player moves. Capture the post-tick
+    // translation so we can pin "NaN tick changes nothing" precisely.
+    ac::PlayerInput in{};
+    in.accept_input = true;
+    in.move_z       = 1.0f;     // hold W (forward)
+    pc->tick(0.5f, in);
+    const float px = tr->translation.x;
+    const float py = tr->translation.y;
+    const float pz = tr->translation.z;
+    // Finite tick produced finite translation (sanity).
+    CHECK(finite_eq(px, px));   // NaN-trap: NaN != NaN
+    CHECK(finite_eq(py, py));
+    CHECK(finite_eq(pz, pz));
+
+    // NaN dt — translation MUST be unchanged (dt clamped to 0).
+    pc->tick(nan_f(), in);
+    CHECK(ap(tr->translation.x, px));
+    CHECK(ap(tr->translation.y, py));
+    CHECK(ap(tr->translation.z, pz));
+
+    // ±Inf dt — same: clamped to 0 by the isfinite guard. Construct via
+    // volatile-launder to defeat constant folding.
+    volatile float big = 1.0f; for (int i = 0; i < 16; ++i) big *= 1e30f;  // +Inf
+    pc->tick(big, in);                                // +Inf
+    CHECK(ap(tr->translation.x, px));
+    CHECK(ap(tr->translation.y, py));
+    CHECK(ap(tr->translation.z, pz));
+    pc->tick(-big, in);                               // -Inf
+    CHECK(ap(tr->translation.x, px));
+    CHECK(ap(tr->translation.y, py));
+    CHECK(ap(tr->translation.z, pz));
 }
 
 // ---- TagComponent: add-dedupe / has / remove ----------------------
@@ -361,6 +416,7 @@ void test_transform_matrix() {
 int main() {
     test_actor_components();
     test_spawn_during_tick();
+    test_player_controller_nonfinite_dt();
     test_tag_component();
     test_lifecycle();
     test_world_lifecycle();
