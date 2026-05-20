@@ -470,6 +470,75 @@ void test_event_bus() {
     CHECK(got.size() == sz(5));
 }
 
+// ---- broadcast must not UAF when handler mutates subscribers_ -----
+// Same range-for-over-mutating-vector UAF class as sim 1f10242 /
+// actor::World::tick f3ed9c1 / game 5057580 / partition 309abdf.
+// The dispatch was `for (auto& s : it->second) if (s.fn) s.fn(...)`
+// over the LIVE subscriber list, with `it` held across the call.
+// Snapshot semantics (this commit): handlers added/removed during
+// a broadcast take effect on the NEXT broadcast.
+void test_event_bus_reentrant() {
+    ac::World w;
+    int orig_count   = 0;
+    int added_count  = 0;
+    bool first       = true;
+
+    // First handler spawns 64 new subscribers into the SAME event on
+    // its first invocation. 64 push_backs force at least one realloc
+    // of subscribers_["hit"]'s vector; pre-fix the dispatch's range-
+    // for iterator would dangle into the freed old buffer.
+    w.subscribe("hit", [&](const std::any&) {
+        ++orig_count;
+        if (first) {
+            first = false;
+            for (int i = 0; i < 64; ++i) {
+                w.subscribe("hit", [&](const std::any&) { ++added_count; });
+            }
+        }
+    });
+
+    // Broadcast 1: orig fires, registers 64 new — none fire this
+    // broadcast (snapshot semantics — same contract as actor/game/sim
+    // spawn-during-tick).
+    w.broadcast("hit", std::any(1));
+    CHECK(orig_count  == 1);
+    CHECK(added_count == 0);
+
+    // Broadcast 2: orig fires again (first=false, no more adds), AND
+    // all 64 deferred handlers fire.
+    w.broadcast("hit", std::any(2));
+    CHECK(orig_count  == 2);
+    CHECK(added_count == 64);
+
+    // Cross-event re-entry: a handler on "hit" calls subscribe on a
+    // DIFFERENT event. That could rehash subscribers_ as an
+    // unordered_map → pre-fix the `it` reference into subscribers_
+    // would dangle → UAF on the next loop iteration's `it->second`
+    // deref. With the snapshot, the inner vector is already copied
+    // before any callback runs, decoupling from the outer map.
+    ac::World w2;
+    int hit_count = 0;
+    int new_event_count = 0;
+    bool first2 = true;
+    w2.subscribe("hit", [&](const std::any&) {
+        ++hit_count;
+        if (first2) {
+            first2 = false;
+            // Many new events to force the unordered_map to rehash.
+            for (int i = 0; i < 32; ++i) {
+                std::string name = "evt" + std::to_string(i);
+                w2.subscribe(name, [&](const std::any&) { ++new_event_count; });
+            }
+        }
+    });
+    // Pre-fix this would UAF on the next iter; post-fix completes.
+    // We have only one "hit" handler so the next-iter step is end,
+    // but the SNAPSHOT removes any dependence on `it` anyway.
+    w2.broadcast("hit", std::any(3));
+    CHECK(hit_count == 1);
+    CHECK(new_event_count == 0);   // new evts not broadcast this call
+}
+
 // ---- TransformComponent::matrix() ---------------------------------
 void test_transform_matrix() {
     ac::TransformComponent t;                            // identity defaults
@@ -496,6 +565,7 @@ int main() {
     test_world_lifecycle();
     test_blueprints();
     test_event_bus();
+    test_event_bus_reentrant();
     test_transform_matrix();
 
     if (g_fail == 0) {

@@ -121,7 +121,22 @@ void World::unsubscribe(HandlerId id) {
 void World::broadcast(const cardinal::string& event, const cardinal::any& payload) {
     auto it = subscribers_.find(event);
     if (it == subscribers_.end()) return;
-    for (auto& s : it->second) if (s.fn) s.fn(payload);
+    // Snapshot the subscriber list (and decouple from the outer
+    // unordered_map iterator) before invoking callbacks. A handler
+    // that calls subscribe(...) into the SAME event would push_back
+    // and potentially realloc the inner vector → range-for dangle;
+    // a handler that calls subscribe to a DIFFERENT event could
+    // rehash subscribers_ → `it` itself dangles → UAF on the next
+    // iteration's `it->second` deref. Same range-for-over-mutating-
+    // container UAF class as sim 1f10242, actor::World::tick
+    // f3ed9c1, game 5057580, partition 309abdf. Contract: handlers
+    // added or removed during a broadcast take effect on the NEXT
+    // broadcast — matches the actor/game/sim spawn-during-tick
+    // contract. Cost: one EventFn copy per registered handler for
+    // this event (typically a handful), negligible vs the work each
+    // handler does.
+    auto snapshot = it->second;
+    for (auto& s : snapshot) if (s.fn) s.fn(payload);
 }
 
 }  // namespace cardinal::actor
