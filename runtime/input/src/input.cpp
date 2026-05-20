@@ -257,6 +257,20 @@ float Manager::axis(const cardinal::string& name) const {
         const auto& s = binding_state(*this, b);
         if (s.down) sum += b.scale;
     }
+    // Binding::scale is a public float field with no setter (a caller
+    // can bind_axis(name, Binding{.scale = NaN}) directly). The two
+    // ordered clamps below are NaN-blind — `NaN < -1` and `NaN > 1`
+    // are both unordered-false — so a single NaN-scale contribution
+    // poisons `sum` for the rest of the accumulation (NaN + x = NaN)
+    // and survives both guards. The documented contract here is
+    // "clamped to [-1, +1]" (input.hpp:92-93); returning NaN
+    // violates that contract and propagates NaN into every consumer
+    // (UI ProgressBar, gameplay movement, anything downstream). Same
+    // sanitize-at-the-API-boundary pattern as audio::play_3d's
+    // volume/pitch (`cardinal::isfinite(v) ? v : 0` before clamp)
+    // and hud::bar (49). Sanitize once, then the existing < / >
+    // clamps finish the job on finite sums.
+    if (!cardinal::isfinite(sum)) sum = 0.0f;
     if (sum < -1.0f) sum = -1.0f;
     if (sum >  1.0f) sum =  1.0f;
     return sum;

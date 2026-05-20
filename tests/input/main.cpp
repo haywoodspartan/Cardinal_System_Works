@@ -428,6 +428,50 @@ void test_stats() {
     CHECK(s4.keys_down_now == static_cast<cardinal::u64>(1));
 }
 
+// ---- axis() must NEVER return NaN, even with NaN Binding::scale ----
+// Binding::scale is a public float field with no setter (the user
+// constructs `Binding{.kind, .code, .scale = ...}` directly). A
+// NaN scale poisons the accumulator (NaN + x = NaN), and the two
+// ordered clamps in axis() — `sum < -1` and `sum > 1` — are
+// NaN-blind (NaN comparisons are unordered-false), so NaN survives
+// both guards and the public API returns NaN. Documented contract
+// (input.hpp:92-93): "clamped to [-1, +1]". NaN violates that —
+// downstream consumers (UI ProgressBar, gameplay movement, anything
+// computing position += axis*dt) propagate NaN. Same sanitize-at-
+// boundary pattern as audio::play_3d volume/pitch and hud::bar fill.
+void test_axis_nonfinite_scale() {
+    auto mp = in::Manager::create(); auto& M = *mp;
+    const float qnan = nan_f();
+
+    // Single NaN-scale binding: holding the key should NOT propagate
+    // NaN into the public API.
+    M.bind_axis("Bad", in::Binding{ in::BindKind::Key,
+        static_cast<cardinal::u32>(KeyCode::W), qnan });
+    M.push_key(KeyCode::W, true);
+    M.begin_frame(0.5f);
+    const float v = M.axis("Bad");
+    CHECK(v == v);                                      // finite (NaN != NaN)
+    CHECK(v >= -1.0f && v <= 1.0f);                     // contract [-1, +1]
+
+    // Mixed: one finite +1 + one NaN. Both held. Sum starts at +1,
+    // then +=NaN poisons it. axis() must STILL return finite in range.
+    M.bind_axis("Mix", kb(KeyCode::A, 1.0f));
+    M.bind_axis("Mix", in::Binding{ in::BindKind::Key,
+        static_cast<cardinal::u32>(KeyCode::S), qnan });
+    M.push_key(KeyCode::A, true);
+    M.push_key(KeyCode::S, true);
+    M.begin_frame(0.5f);
+    const float vm = M.axis("Mix");
+    CHECK(vm == vm);                                    // finite
+    CHECK(vm >= -1.0f && vm <= 1.0f);
+
+    // Without the NaN-scale binding held, the finite +1 contribution
+    // alone should still produce +1 cleanly.
+    M.push_key(KeyCode::S, false);
+    M.begin_frame(0.5f);
+    CHECK(ap(M.axis("Mix"), 1.0f));
+}
+
 }  // namespace
 
 int main() {
@@ -437,6 +481,7 @@ int main() {
     test_bounds();
     test_actions();
     test_axis();
+    test_axis_nonfinite_scale();
     test_gameplay_gate();
     test_mouse();
     test_stats();
