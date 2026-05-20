@@ -55,6 +55,14 @@ bool ap(float a, float b, float e = 1e-3f) {
 cardinal::usize sz(int n) { return static_cast<cardinal::usize>(n); }
 bool streq(const char* a, const char* b) { return std::string(a) == b; }
 
+// Launder a NaN out of pure arithmetic without dragging <cmath>/<limits>
+// in (the test file deliberately avoids them — see top-of-file comment).
+// The volatile defeats the constant-folder; 0.0/0.0 produces a quiet NaN.
+float nan_f() {
+    volatile float z = 0.0f;
+    return z / z;
+}
+
 // ---- Blackboard: round-trip, missing-default, type-mismatch-default -
 void test_blackboard() {
     ai::Blackboard bb;
@@ -539,6 +547,50 @@ void test_perception_lifecycle() {
     }
 }
 
+// ---- Non-finite dt must NOT poison the tick accumulators -----------
+// Same accumulator-poison shape that bit physics/sim/cine/particles/
+// audio/anim — `accum += NaN` makes accum NaN, then `accum >= threshold`
+// is false for NaN → the gate never fires and the state is stuck. Here
+// it would hang Wait forever (behavior tree never advances) and make
+// PerceptionWorld stimuli immortal (memory leak + permanent fake
+// sight/hearing events).
+void test_nonfinite_dt() {
+    ai::Blackboard bb;
+
+    // Wait: a NaN frame must skip the accumulator and stay Running;
+    // subsequent finite ticks must still progress and reach Success.
+    ai::Wait w(0.5f);
+    CHECK(w.tick(bb, 0.2f)       == ai::Status::Running);
+    CHECK(w.tick(bb, nan_f())    == ai::Status::Running);   // skip, elapsed_ still 0.2
+    CHECK(w.tick(bb, 0.4f)       == ai::Status::Success);   // 0.2+0.4 = 0.6 >= 0.5
+
+    // PerceptionWorld: NaN dt clears events (no stale leak) and skips
+    // aging; stimulus stays alive at its prior age so the NEXT finite
+    // tick crosses the lifetime threshold on schedule.
+    ai::PerceptionWorld pw;
+    ai::SensorDesc s{};
+    s.position        = Vec3{0, 0, 0};
+    s.forward         = Vec3{0, 0, -1};
+    s.sight_radius    = 50.0f;
+    s.sight_cos_angle = 0.0f;
+    s.hearing_enabled = false;
+    pw.add_sensor(s);
+    ai::StimulusDesc d{};
+    d.kind             = ai::StimulusKind::Sight;
+    d.position         = Vec3{0, 0, -5};
+    d.lifetime_seconds = 0.5f;
+    pw.add_stimulus(d);
+
+    pw.tick(0.2f);                              // age 0.2 < 0.5 → alive, event fires
+    CHECK(pw.last_events().size() == sz(1));
+    pw.tick(nan_f());                            // NaN → events cleared, age unchanged
+    CHECK(pw.last_events().empty());
+    CHECK(pw.stimulus_count()    == sz(1));     // still alive (no NaN poison)
+    pw.tick(0.4f);                              // 0.2+0.4 = 0.6 >= 0.5 → dies, no event
+    CHECK(pw.last_events().empty());
+    CHECK(pw.stimulus_count()    == sz(0));     // compacted out
+}
+
 }  // namespace
 
 int main() {
@@ -549,6 +601,7 @@ int main() {
     test_perception_sight();
     test_perception_hearing();
     test_perception_lifecycle();
+    test_nonfinite_dt();
 
     if (g_fail == 0) {
         cardinal::log::infof("aitest", "OK  %d checks passed", g_checks);

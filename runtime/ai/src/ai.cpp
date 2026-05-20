@@ -85,6 +85,13 @@ Status Inverter::tick(Blackboard& bb, float dt) {
 }
 
 Status Wait::tick(Blackboard& /*bb*/, float dt) {
+    // Reject non-finite dt — `elapsed_ += NaN` makes elapsed_ NaN, then
+    // `elapsed_ >= duration_` is false for NaN → Wait returns Running
+    // FOREVER, hanging the whole behavior tree (same accumulator-poison
+    // shape as physics/sim/cine/particles/audio/anim). A non-finite dt
+    // is upstream's bug — skip the update and stay Running rather than
+    // poison the state.
+    if (!cardinal::isfinite(dt)) return Status::Running;
     elapsed_ += dt;
     if (elapsed_ >= duration_) {
         elapsed_ = 0.0f;
@@ -124,6 +131,13 @@ void PerceptionWorld::remove_stimulus(StimulusId id) {
 
 void PerceptionWorld::tick(float dt) {
     last_events_.clear();
+    // Reject non-finite dt — `s.age += NaN` makes age NaN, then the
+    // `s.age >= s.d.lifetime_seconds` check stays false → IMMORTAL
+    // stimuli that leak memory AND keep firing fake sight/hearing
+    // events forever (same shape as the other tick-accumulator fixes).
+    // Clear events first so consumers don't see stale ones from the
+    // previous frame; then bail without aging or event-collection.
+    if (!cardinal::isfinite(dt)) return;
     // Age stimuli; remove dead.
     for (auto& s : stimuli_) {
         if (!s.alive) continue;
