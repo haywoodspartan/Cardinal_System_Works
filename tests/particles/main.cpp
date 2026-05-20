@@ -364,6 +364,46 @@ void test_nonfinite_dt() {
             CHECK((p.position.x - p.position.x) == 0.0f);   // also not ±Inf
         }
     }
+    {   // NaN spawn-time fields (origin / gravity / velocity_min/max /
+        // size_min/max): the fz sanitizer in spawn_one_ defaults each
+        // non-finite component to 0 BEFORE storing in the particle.
+        // Verify by inspecting freshly-spawned particles and tracking
+        // them through several integrator ticks — every component of
+        // position/velocity/acceleration/size must stay finite.
+        pa::EmitterDesc d = fixed_desc();
+        d.rate_per_second = 100.0f;
+        d.lifetime_min = 5.0f; d.lifetime_max = 5.0f;     // long enough to integrate
+        // POISON every Vec3 / scalar spawn field except start_rgba (u32).
+        d.origin       = cardinal::scene::Vec3{ qnan,  inf, -inf };
+        d.gravity      = cardinal::scene::Vec3{ qnan, qnan, qnan };
+        d.velocity_min = cardinal::scene::Vec3{ qnan, qnan, qnan };
+        d.velocity_max = cardinal::scene::Vec3{ qnan, qnan, qnan };
+        d.size_min = qnan; d.size_max = qnan;
+        pa::Emitter e(d);
+        e.tick(0.05f);                                    // spawn ~5
+        CHECK(e.live_count() >= sz(1));
+        // Every freshly-spawned particle must have FINITE state across
+        // position / velocity / acceleration / size.
+        auto fin = [](float v) { return v == v && (v - v) == 0.0f; };
+        for (const pa::Particle& p : e.particles()) {
+            CHECK(fin(p.position.x));     CHECK(fin(p.position.y));     CHECK(fin(p.position.z));
+            CHECK(fin(p.velocity.x));     CHECK(fin(p.velocity.y));     CHECK(fin(p.velocity.z));
+            CHECK(fin(p.acceleration.x)); CHECK(fin(p.acceleration.y)); CHECK(fin(p.acceleration.z));
+            CHECK(fin(p.size));
+            CHECK(fin(p.lifetime));
+            // Sanitization defaulted each non-finite to 0.
+            CHECK(ap(p.position.x, 0.0f)); CHECK(ap(p.position.y, 0.0f)); CHECK(ap(p.position.z, 0.0f));
+            CHECK(ap(p.velocity.x, 0.0f));
+            CHECK(ap(p.acceleration.x, 0.0f));
+            CHECK(ap(p.size, 0.0f));
+        }
+        // Integrate several ticks — persistent state must stay finite.
+        for (int i = 0; i < 50; ++i) e.tick(0.01f);
+        for (const pa::Particle& p : e.particles()) {
+            CHECK(fin(p.position.x)); CHECK(fin(p.position.y)); CHECK(fin(p.position.z));
+            CHECK(fin(p.velocity.x)); CHECK(fin(p.velocity.y)); CHECK(fin(p.velocity.z));
+        }
+    }
     {   // NaN lifetime_min/max: the spawn rolls a NaN p.lifetime via
         // rand_in(lo, hi) when lo or hi is NaN. Pre-fix `p.age >=
         // p.lifetime` is unordered-false → IMMORTAL particle, live_

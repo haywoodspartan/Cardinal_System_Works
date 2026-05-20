@@ -50,14 +50,39 @@ Emitter::Emitter(EmitterDesc desc)
 
 void Emitter::spawn_one_() noexcept {
     if (live_.size() >= desc_.max_particles) return;
+    // Sanitize every spawn-time desc field. EmitterDesc is public with
+    // no setters — a NaN/+Inf component reaches the particle's
+    // PERSISTENT state and poisons every subsequent integrator tick.
+    // Concretely, before this fix:
+    //   * NaN desc_.origin   → p.position NaN at spawn → position
+    //     stays NaN every later tick.
+    //   * NaN desc_.gravity  → p.acceleration NaN → `p.velocity +=
+    //     accel * dt` makes velocity NaN tick 1 → position NaN tick 2.
+    //   * NaN desc_.velocity_min/max → rand_in yields NaN velocity →
+    //     position NaN tick 1.
+    //   * NaN desc_.size_min/max → NaN p.size → renderer reads NaN
+    //     size (downstream UB / NaN vertex attribute).
+    // The drag/lifetime reaper at 3704b48 only catches non-finite
+    // lifetime; this commit catches the other four fields at the
+    // SOURCE so the particle's persistent state is finite by
+    // construction. Default each non-finite component to 0.0f — a
+    // particle spawned at origin with zero velocity/acceleration/size
+    // is degenerate but defined (no further poison).
+    auto fz = [](float v) noexcept {
+        return cardinal::isfinite(v) ? v : 0.0f;
+    };
     Particle p{};
-    p.position     = desc_.origin;
-    p.velocity.x   = rand_in(rng_state_, desc_.velocity_min.x, desc_.velocity_max.x);
-    p.velocity.y   = rand_in(rng_state_, desc_.velocity_min.y, desc_.velocity_max.y);
-    p.velocity.z   = rand_in(rng_state_, desc_.velocity_min.z, desc_.velocity_max.z);
-    p.acceleration = desc_.gravity;
-    p.size         = rand_in(rng_state_, desc_.size_min, desc_.size_max);
-    p.lifetime     = rand_in(rng_state_, desc_.lifetime_min, desc_.lifetime_max);
+    p.position.x   = fz(desc_.origin.x);
+    p.position.y   = fz(desc_.origin.y);
+    p.position.z   = fz(desc_.origin.z);
+    p.velocity.x   = rand_in(rng_state_, fz(desc_.velocity_min.x), fz(desc_.velocity_max.x));
+    p.velocity.y   = rand_in(rng_state_, fz(desc_.velocity_min.y), fz(desc_.velocity_max.y));
+    p.velocity.z   = rand_in(rng_state_, fz(desc_.velocity_min.z), fz(desc_.velocity_max.z));
+    p.acceleration.x = fz(desc_.gravity.x);
+    p.acceleration.y = fz(desc_.gravity.y);
+    p.acceleration.z = fz(desc_.gravity.z);
+    p.size         = rand_in(rng_state_, fz(desc_.size_min), fz(desc_.size_max));
+    p.lifetime     = rand_in(rng_state_, fz(desc_.lifetime_min), fz(desc_.lifetime_max));
     p.age          = 0.0f;
     p.color_rgba   = desc_.start_rgba;
     live_.push_back(p);
