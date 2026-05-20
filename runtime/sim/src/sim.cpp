@@ -93,7 +93,22 @@ void SimWorld::run_group_(TickGroup g, float dt) {
     }
 
     // Sequential default — preserves per-handler ordering, no overhead.
-    for (const auto& s : list) if (s.fn) s.fn(dt);
+    // SNAPSHOT the handler list before iterating: a handler that calls
+    // add_handler() during its tick would `push_back` into the same
+    // handlers_[g] we're walking via range-for, potentially reallocing
+    // the vector mid-iteration → range-for dangles into the freed old
+    // buffer → null/UAF deref on the next `s.fn`. Same `range-for-over-
+    // mutating-vector` UAF class as f3ed9c1 (actor::World::tick) and
+    // 5057580 (game::apply_lifecycle_ / broadcast_begin_play_ /
+    // update_h_). The parallel path above already snapshots into
+    // `tasks` so it's incidentally safe; this is the sequential
+    // companion. Contract: handlers added or removed DURING a tick
+    // take effect on the NEXT frame's iteration — matches the
+    // actor::World / game spawn-during-tick contract. Cost: one
+    // cardinal::function copy per registered handler (typically <16
+    // per group), negligible vs the work each handler does.
+    auto snapshot = list;
+    for (const auto& s : snapshot) if (s.fn) s.fn(dt);
 }
 
 void SimWorld::integrate_physics_(float dt) {

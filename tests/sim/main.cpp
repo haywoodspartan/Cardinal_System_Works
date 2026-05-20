@@ -317,6 +317,80 @@ void test_handlers() {
     CHECK(seq.size() == sz(1) && seq[0] == "F");
 }
 
+// ---- handler that mutates handlers_ during tick must not UAF ------
+// Same range-for-over-mutating-vector UAF class as f3ed9c1 (actor::
+// World::tick) and 5057580 (game::Game::apply_lifecycle_ /
+// broadcast_begin_play_). A handler that calls add_handler / remove_
+// handler reaches into the SAME handlers_[g] vector the dispatch loop
+// is walking via range-for; a sufficiently-large add_handler causes
+// vector realloc → range-for dangles into freed old buffer → UAF
+// crash on the next s.fn deref. Test: a single handler that batches
+// many add_handler calls into the SAME group forces realloc; the
+// dispatch loop must complete without crashing and the added handlers
+// must defer to the NEXT frame (matching the actor/game spawn-during-
+// tick contract).
+void test_handler_add_during_tick() {
+    sm::SimWorld w;
+    int orig_count = 0;
+    int added_count = 0;
+    bool first_ran = false;
+
+    // The triggering handler spawns 64 new handlers into the SAME
+    // group on its first invocation. 64 push_back's into a small-
+    // initial-capacity vector will realloc at least once, dangling
+    // any range-for over the live list.
+    w.add_handler(TG::Update, [&](float) {
+        ++orig_count;
+        if (!first_ran) {
+            first_ran = true;
+            for (int i = 0; i < 64; ++i) {
+                w.add_handler(TG::Update, [&](float) { ++added_count; });
+            }
+        }
+    });
+
+    // Tick 1: orig runs once, spawns 64 deferred handlers. None of the
+    // added handlers fire this frame (matches the actor/game contract).
+    w.tick(1.0f / 60.0f);
+    CHECK(orig_count == 1);
+    CHECK(added_count == 0);                  // deferred to next frame
+
+    // Tick 2: orig runs again (first_ran=true so no more adds), and
+    // the 64 deferred handlers all fire.
+    w.tick(1.0f / 60.0f);
+    CHECK(orig_count == 2);
+    CHECK(added_count == 64);
+}
+
+void test_handler_remove_during_tick() {
+    sm::SimWorld w;
+    int a_count = 0;
+    int b_count = 0;
+    sm::SimWorld::HandlerId hb = 0;
+
+    // A removes B mid-tick. Pre-fix the iterator might invalidate
+    // after the erase; post-fix the snapshot copy means B still fires
+    // ONCE in this frame (defensible — it was on the snapshot when
+    // the tick started), then never again.
+    w.add_handler(TG::Update, [&](float) {
+        ++a_count;
+        w.remove_handler(hb);   // remove B (which has already been added below)
+    });
+    hb = w.add_handler(TG::Update, [&](float) { ++b_count; });
+
+    w.tick(1.0f / 60.0f);
+    CHECK(a_count == 1);
+    // Snapshot semantics: B was in the snapshot at tick start; A's
+    // remove_handler mutates the live list but the snapshot still
+    // holds B's function copy → B fires once more this frame.
+    CHECK(b_count == 1);
+
+    // Tick 2: B is removed from live list, NOT in next snapshot.
+    w.tick(1.0f / 60.0f);
+    CHECK(a_count == 2);
+    CHECK(b_count == 1);                      // didn't fire again
+}
+
 // ---- stats + desc -------------------------------------------------
 void test_stats_desc() {
     sm::SimWorld w;
@@ -358,6 +432,8 @@ int main() {
     test_pause_step();
     test_time_scale();
     test_handlers();
+    test_handler_add_during_tick();
+    test_handler_remove_during_tick();
     test_stats_desc();
 
     if (g_fail == 0) {
