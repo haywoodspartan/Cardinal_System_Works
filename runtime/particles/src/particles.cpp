@@ -85,7 +85,17 @@ void Emitter::tick(float dt) noexcept {
 
     // 2) Integrate live particles. Iterate index-style so we can swap-pop
     //    on death without invalidating iterators.
-    const float damp = cardinal::clamp(1.0f - desc_.drag * dt, 0.0f, 1.0f);
+    //
+    // desc_.drag is a public field with no setter — the API exposes
+    // EmitterDesc directly via desc(). A NaN drag (user bug or a
+    // poisoned upstream parameter sweep) flowed into the damp clamp as
+    // `cardinal::clamp(1.0f - NaN*dt, 0, 1)` = NaN (clamp is documented
+    // NaN-passthrough), then `p.velocity.x *= NaN` poisons EVERY live
+    // particle simultaneously every tick. Sanitize at the use site —
+    // 0 drag (= no decay, particles keep their velocity) is a sensible
+    // fallback that doesn't change long-term behaviour.
+    const float drag_safe = cardinal::isfinite(desc_.drag) ? desc_.drag : 0.0f;
+    const float damp = cardinal::clamp(1.0f - drag_safe * dt, 0.0f, 1.0f);
     usize i = 0;
     while (i < live_.size()) {
         Particle& p = live_[i];
@@ -103,7 +113,12 @@ void Emitter::tick(float dt) noexcept {
             ? cardinal::clamp(p.age / p.lifetime, 0.0f, 1.0f) : 1.0f;
         p.color_rgba = lerp_rgba(desc_.start_rgba, desc_.end_rgba, t);
 
-        if (p.age >= p.lifetime) {
+        // Reap if expired OR non-finite-lifetime. NaN lifetime (spawned
+        // from a NaN lifetime_min/max in the desc) makes `p.age >=
+        // p.lifetime` unordered-false → IMMORTAL particle that leaks
+        // memory indefinitely (live_ grows unbounded; the swap-pop is
+        // never reached for it). Treat non-finite lifetime as expired.
+        if (p.age >= p.lifetime || !cardinal::isfinite(p.lifetime)) {
             // swap-pop
             p = live_.back();
             live_.pop_back();

@@ -342,6 +342,48 @@ void test_nonfinite_dt() {
         e.tick(0.01f); e.tick(0.01f);                // age≈0.03 ≥ 0.025
         CHECK(e.live_count() == sz(0));               // culled normally
     }
+    {   // NaN drag: previously poisoned EVERY particle simultaneously
+        // every tick via `damp = clamp(1.0f - NaN*dt, 0, 1)` = NaN
+        // (clamp is NaN-passthrough) → velocity *= NaN → position
+        // accumulator NaN. The drag_safe fallback in tick() routes NaN
+        // → 0 effective drag; velocities keep their finite values.
+        pa::EmitterDesc d = fixed_desc();
+        d.rate_per_second = 100.0f;
+        d.velocity_min = cardinal::scene::Vec3{1.0f, 0.0f, 0.0f};
+        d.velocity_max = cardinal::scene::Vec3{1.0f, 0.0f, 0.0f};
+        d.drag = qnan;                                // POISON
+        pa::Emitter e(d);
+        e.tick(0.05f);                               // spawn ~5 with vel=1
+        CHECK(e.live_count() >= sz(1));
+        e.tick(0.05f);                               // integrate one step
+        // Every live particle must still have finite velocity AND
+        // position — proves drag NaN didn't poison the integrator.
+        for (const pa::Particle& p : e.particles()) {
+            CHECK(p.velocity.x == p.velocity.x);
+            CHECK(p.position.x == p.position.x);
+            CHECK((p.position.x - p.position.x) == 0.0f);   // also not ±Inf
+        }
+    }
+    {   // NaN lifetime_min/max: the spawn rolls a NaN p.lifetime via
+        // rand_in(lo, hi) when lo or hi is NaN. Pre-fix `p.age >=
+        // p.lifetime` is unordered-false → IMMORTAL particle, live_
+        // grows unbounded across ticks (memory leak). The
+        // !isfinite(p.lifetime) clause in the kill check reaps them
+        // on first encounter.
+        pa::EmitterDesc d = fixed_desc();
+        d.rate_per_second = 100.0f;
+        d.lifetime_min = qnan; d.lifetime_max = qnan;   // POISON
+        pa::Emitter e(d);
+        e.tick(0.05f);                                  // spawn ~5
+        // First tick spawned them but they're newly created (age==0)
+        // — they should die on the SECOND tick when the kill check
+        // sees !isfinite(lifetime). Actually they die on the first
+        // tick's kill pass since !isfinite fires regardless of age.
+        CHECK(e.live_count() == sz(0));                 // not immortal
+        // Confirm they don't leak across many ticks either.
+        for (int i = 0; i < 100; ++i) e.tick(0.05f);
+        CHECK(e.live_count() == sz(0));
+    }
 }
 
 }  // namespace
