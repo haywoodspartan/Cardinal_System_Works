@@ -495,6 +495,50 @@ void test_nonfinite_inputs() {
             CHECK(ap(a[0].position.z, 3.0f));
         }
     }
+    {   // set_listener: a NaN component in position/forward/up MUST
+        // be rejected (caller bug must not poison every 3D-attenuated
+        // instance simultaneously). The previous good listener is
+        // preserved.
+        auto e = au::Engine::create();
+        e->register_cue(sine_cue("sine", 1.0f));
+        au::Listener L_good; L_good.position = {10, 0, 0};
+        e->set_listener(L_good);
+
+        // Now feed a bad listener — position NaN.
+        au::Listener L_bad = L_good;
+        L_bad.position.x = qnan;
+        e->set_listener(L_bad);                          // rejected
+        // forward NaN
+        L_bad = L_good; L_bad.forward.y = qnan;
+        e->set_listener(L_bad);                          // rejected
+        // up NaN
+        L_bad = L_good; L_bad.up.z = qnan;
+        e->set_listener(L_bad);                          // rejected
+        // +Inf component
+        L_bad = L_good; L_bad.position.z = inf;
+        e->set_listener(L_bad);                          // rejected
+
+        // Listener should still be the good one. Verify by playing at
+        // (10,0,0) — distance 0, attenuation 1.0. If listener had been
+        // poisoned to NaN, the attenuation would be 0 (defensive guard
+        // in compute_3d_attenuation_) or NaN (without the guard).
+        e->play_3d("sine", {10, 0, 0}, au::kChannelSfx);
+        e->tick(0.01f);
+        auto a = e->active_instances();
+        CHECK(a.size() == 1u);
+        if (!a.empty())
+            CHECK(ap(a[0].final_attenuated_volume, 1.0f, 1e-4f));
+
+        // A subsequent fully-finite Listener update goes through.
+        au::Listener L2; L2.position = {100, 0, 0};
+        e->set_listener(L2);
+        // The already-playing instance at (10,0,0) is now far from the
+        // new listener — distance 90 ≥ max (50) ⇒ attenuation 0.
+        e->tick(0.01f);
+        a = e->active_instances();
+        if (!a.empty())
+            CHECK(ap(a[0].final_attenuated_volume, 0.0f, 1e-4f));
+    }
     {   // Non-finite dt is a no-op; the next valid tick is correct.
         auto e = au::Engine::create();
         e->register_cue(sine_cue("sine", 1.0f));

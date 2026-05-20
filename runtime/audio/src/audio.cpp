@@ -119,7 +119,21 @@ cardinal::vector<Channel> Engine::channels() const {
     return r;
 }
 
-void Engine::set_listener(const Listener& l) { listener_ = l; }
+void Engine::set_listener(const Listener& l) {
+    // Reject if ANY component of any field is non-finite. listener_.
+    // position feeds compute_3d_attenuation_ directly (line 116: `dx =
+    // pos.x - listener_.position.x`) and a NaN here poisons EVERY
+    // 3D-attenuated instance simultaneously. The 0e2610e defensive
+    // guard in compute_3d_attenuation_ catches the NaN d downstream
+    // (returns silent), but rejecting at the source preserves the
+    // previous good listener instead of silencing all 3D audio until
+    // the next valid set_listener call.
+    auto ok = [](const cardinal::scene::Vec3& v) {
+        return cardinal::isfinite(v.x) && cardinal::isfinite(v.y) && cardinal::isfinite(v.z);
+    };
+    if (!ok(l.position) || !ok(l.forward) || !ok(l.up)) return;
+    listener_ = l;
+}
 
 float Engine::compute_3d_attenuation_(const cardinal::scene::Vec3& pos) const noexcept {
     const float dx = pos.x - listener_.position.x;
