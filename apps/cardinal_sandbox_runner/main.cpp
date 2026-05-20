@@ -426,6 +426,20 @@ int main(int argc, char** argv) {
         const u32 opcode      = hdr[0];
         const u32 payload_len = hdr[1];
 
+        // Mirror of the host-side cap in sandbox::read_frame_with_timeout_
+        // (555c316). payload_len comes off the pipe from the host process;
+        // the host SHOULD be well-behaved but the runner runs as a separate
+        // process — defensive cap means a corrupt host frame can't OOM us
+        // before send_error gets through. Largest legitimate runner-bound
+        // frame is OP_ATTACH_VM with the bytecode module (single-digit MB
+        // even for generous bytecode), so 64 MiB easily covers the
+        // protocol while rejecting 0xFFFFFFFF-class garbage.
+        constexpr u32 kMaxFrameBytes = 64u * 1024u * 1024u;
+        if (payload_len > kMaxFrameBytes) {
+            send_error("host sent oversized frame — rejecting");
+            return 5;
+        }
+
         std::vector<char> payload(payload_len);
         if (payload_len > 0 && !pipe_read_all(payload.data(), payload_len)) {
             return 5;
