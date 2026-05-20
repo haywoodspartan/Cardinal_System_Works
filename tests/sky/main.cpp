@@ -202,6 +202,63 @@ void test_setter_nonfinite() {
     CHECK(ap(s.day_length_seconds(), 0.001f, 1e-5f));
 }
 
+// ---- SkyKey direct-field NaN must NOT poison state_ -----------------
+// SkyKey fields are public mutable via Sky::keys(). NaN in any field
+// (hour, zenith, horizon, sun_color, sun_intensity, ambient) reaches
+// recompute_state_'s lerp_vec (NaN-passthrough) → state_ poisoned →
+// renderer reads NaN. NaN hour additionally defeats the segment
+// search (`h >= NaN` unordered-false), forcing wrap-around with NaN
+// span and NaN t. The safe_key sanitizer coerces non-finite to 0
+// BEFORE the segment search and lerp.
+void test_key_field_nonfinite() {
+    sk::Sky s;
+    s.set_hour(12.0f);
+    const auto& state = s.state();
+    // Sanity: known-good state.
+    CHECK(state.hour == state.hour);
+    CHECK(state.sun_intensity == state.sun_intensity);
+
+    // Poison the @12 key (which is the active segment for hour 12.0).
+    // Find it; if our linear search finds a key with hour==12.0 use it,
+    // else poison the back key.
+    auto& keys = s.keys();
+    CHECK(!keys.empty());
+    sk::SkyKey* target = nullptr;
+    for (auto& k : keys) if (ap(k.hour, 12.0f)) { target = &k; break; }
+    if (!target) target = &keys.back();
+    target->sun_intensity = nan_f();
+    target->zenith        = cardinal::scene::Vec3{ nan_f(), 0.0f, 0.0f };
+    target->sun_color     = cardinal::scene::Vec3{ 0.0f, nan_f(), 0.0f };
+    target->ambient       = cardinal::scene::Vec3{ 0.0f, 0.0f, nan_f() };
+
+    // Triggering recompute via set_hour or tick: state_ must stay
+    // finite end-to-end. (set_hour to the SAME 12.0 still re-runs
+    // recompute_state_ from sky.cpp:96.)
+    s.set_hour(12.0f);
+    CHECK(state.sun_intensity == state.sun_intensity);    // not NaN
+    CHECK(state.zenith.x == state.zenith.x);
+    CHECK(state.zenith.y == state.zenith.y);
+    CHECK(state.zenith.z == state.zenith.z);
+    CHECK(state.horizon.x == state.horizon.x);
+    CHECK(state.sun_color.x == state.sun_color.x);
+    CHECK(state.sun_color.y == state.sun_color.y);
+    CHECK(state.sun_color.z == state.sun_color.z);
+    CHECK(state.ambient.z == state.ambient.z);
+    // sun_dir must remain unit-length (would be NaN-vector if poisoned).
+    CHECK(ap(vlen(s.state().sun_dir), 1.0f, 1e-3f));
+
+    // Also poison hour itself — same sanitization must apply.
+    target->hour = nan_f();
+    s.set_hour(12.0f);
+    CHECK(state.hour == state.hour);
+    CHECK(state.sun_intensity == state.sun_intensity);
+
+    // User's stored bad values are preserved (sanitize-at-use, not
+    // at storage).
+    CHECK(target->sun_intensity != target->sun_intensity);
+    CHECK(target->hour != target->hour);
+}
+
 // ---- non-finite real_dt must NOT poison state_.hour ----------------
 // Without the guard, `state_.hour += NaN * time_scale_` makes hour NaN.
 // The 24-wrap guards are both false for NaN, and recompute_state_()
@@ -251,6 +308,7 @@ int main() {
     test_tick();
     test_nonfinite_dt();
     test_setter_nonfinite();
+    test_key_field_nonfinite();
     test_defaults();
 
     if (g_fail == 0) {

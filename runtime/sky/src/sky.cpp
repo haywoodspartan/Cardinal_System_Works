@@ -101,20 +101,49 @@ void Sky::tick(float real_dt) {
 void Sky::recompute_state_() {
     if (keys_.empty()) return;
 
-    // Find segment surrounding state_.hour.
+    // SkyKey fields (hour / zenith / horizon / sun_color / sun_intensity
+    // / ambient) are PUBLIC direct fields mutable via Sky::keys() — same
+    // desc-direct-field NaN sink class as particles::EmitterDesc
+    // (35f8da7). Any non-finite component poisons state_ via lerp_vec
+    // (NaN-passthrough), then renderer reads NaN colors / NaN
+    // sun_intensity / NaN sun_dir. NaN hour additionally defeats the
+    // segment search (`h >= NaN` / `h <= NaN` both unordered-false),
+    // forcing the wrap-around branch and a NaN `span` / NaN `t`. The
+    // safe_key helper coerces every non-finite component to 0 BEFORE
+    // the segment search and lerp, keeping state_ finite-by-
+    // construction. User's stored keys_ are preserved.
+    auto fz = [](float v) noexcept {
+        return cardinal::isfinite(v) ? v : 0.0f;
+    };
+    auto safe_key = [&](const SkyKey& k) noexcept -> SkyKey {
+        SkyKey s = k;
+        s.hour          = fz(k.hour);
+        s.zenith        = { fz(k.zenith.x),    fz(k.zenith.y),    fz(k.zenith.z) };
+        s.horizon       = { fz(k.horizon.x),   fz(k.horizon.y),   fz(k.horizon.z) };
+        s.sun_color     = { fz(k.sun_color.x), fz(k.sun_color.y), fz(k.sun_color.z) };
+        s.sun_intensity = fz(k.sun_intensity);
+        s.ambient       = { fz(k.ambient.x),   fz(k.ambient.y),   fz(k.ambient.z) };
+        return s;
+    };
+
+    // Find segment surrounding state_.hour. Compare against SANITIZED
+    // hours so a NaN-hour key doesn't defeat the search.
     float h = state_.hour;
-    SkyKey k0 = keys_.back();   // wrap left
-    SkyKey k1 = keys_.front();  // wrap right
+    SkyKey k0 = safe_key(keys_.back());   // wrap left
+    SkyKey k1 = safe_key(keys_.front());  // wrap right
     bool found = false;
     for (usize i = 0; i + 1 < keys_.size(); ++i) {
-        if (h >= keys_[i].hour && h <= keys_[i + 1].hour) {
-            k0 = keys_[i]; k1 = keys_[i + 1]; found = true; break;
+        const float h_i  = fz(keys_[i].hour);
+        const float h_i1 = fz(keys_[i + 1].hour);
+        if (h >= h_i && h <= h_i1) {
+            k0 = safe_key(keys_[i]); k1 = safe_key(keys_[i + 1]);
+            found = true; break;
         }
     }
     if (!found) {
         // h is in the wrap-around segment from last key to (first key + 24h).
-        k0 = keys_.back();
-        k1 = keys_.front();
+        k0 = safe_key(keys_.back());
+        k1 = safe_key(keys_.front());
     }
     const float span = (k1.hour > k0.hour)
         ? (k1.hour - k0.hour)
