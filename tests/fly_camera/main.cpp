@@ -297,6 +297,63 @@ void test_scroll() {
 }
 
 // ---- FlyCamera owns orientation after init (no re-sync) -----------
+// ---- direct-field NaN tunables MUST NOT poison persistent state ----
+// FlyCamera exposes look_sensitivity / speed / sprint_multiplier as
+// PUBLIC FIELDS with no setter (same desc-direct-field pattern as
+// cine::Sequence::speed and particles::EmitterDesc.drag). A NaN value
+// in any of these reaches the integrator and poisons persistent
+// state PERMANENTLY:
+//   * look_sensitivity NaN → `yaw_ += in.mouse_dx * NaN` → yaw_ NaN
+//     → cos/sin produce NaN forward vectors → cam.position += NaN
+//   * speed NaN → `v = NaN * dt` → cam.position += NaN
+//   * sprint_multiplier NaN (sprint=true) → same
+// Sanitize-at-use; user's stored values are preserved (editor visible).
+void test_nonfinite_tunables() {
+    sc::FlyCamera fc;
+    auto c = cam_at(v3(0,0,0), v3(0,0,-1));
+    fc.sync_from(c);
+
+    // NaN look_sensitivity with a mouse look — yaw_/pitch_ must NOT
+    // become NaN. With the sanitized default (0.0035), yaw_ advances
+    // by mouse_dx * 0.0035.
+    fc.look_sensitivity = nan_f();
+    sc::FlyInput in{}; in.accept_input = true;
+    in.look = true; in.mouse_dx = 100.0f;
+    fc.tick(c, in, 0.0f);   // dt=0 so no movement; just look
+    CHECK(fc.yaw_rad() == fc.yaw_rad());        // finite, not NaN
+    CHECK(ap(fc.yaw_rad(), 100.0f * 0.0035f, 1e-4f));
+    // User's stored value still NaN (preserved for visibility).
+    CHECK(fc.look_sensitivity != fc.look_sensitivity);
+
+    // NaN speed with WASD move — cam.position must NOT become NaN.
+    sc::FlyCamera fc2;
+    auto c2 = cam_at(v3(0,0,0), v3(0,0,-1));
+    fc2.sync_from(c2);
+    fc2.speed = nan_f();
+    sc::FlyInput in2{}; in2.accept_input = true; in2.forward = true;
+    fc2.tick(c2, in2, 1.0f);
+    // With sanitized default speed (4.0): forward = (0,0,-1) → z -= 4
+    CHECK(ap(c2.position.z, -4.0f, 1e-4f));
+    CHECK(c2.position.x == c2.position.x);      // not NaN
+    CHECK(c2.position.y == c2.position.y);
+    CHECK(c2.position.z == c2.position.z);
+    CHECK(fc2.speed != fc2.speed);              // user's value preserved
+
+    // NaN sprint_multiplier with sprint=true — same protection.
+    sc::FlyCamera fc3;
+    auto c3 = cam_at(v3(0,0,0), v3(0,0,-1));
+    fc3.sync_from(c3);
+    fc3.speed = 1.0f;                            // tame, focus on mult
+    fc3.sprint_multiplier = nan_f();
+    sc::FlyInput in3{}; in3.accept_input = true;
+    in3.forward = true; in3.sprint = true;
+    fc3.tick(c3, in3, 1.0f);
+    // With sanitized default sprint_multiplier (4.0): z -= 1 * 4 = -4
+    CHECK(ap(c3.position.z, -4.0f, 1e-4f));
+    CHECK(c3.position.x == c3.position.x);
+    CHECK(c3.position.z == c3.position.z);
+}
+
 void test_no_resync() {
     sc::FlyCamera fc;
     auto c = cam_at(v3(0,0,0), v3(0,0,-1));
@@ -322,6 +379,7 @@ int main() {
     test_move();
     test_look();
     test_scroll();
+    test_nonfinite_tunables();
     test_no_resync();
 
     if (g_fail == 0) {

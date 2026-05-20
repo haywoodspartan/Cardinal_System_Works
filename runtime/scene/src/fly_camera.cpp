@@ -45,8 +45,18 @@ void FlyCamera::tick(Camera& cam, const FlyInput& in, float dt) noexcept {
     // it inverted the X axis so dragging right made the camera turn left,
     // which the user perceives as the world rotating with the cursor.
     if (in.look) {
-        yaw_   += in.mouse_dx * look_sensitivity;
-        pitch_ -= in.mouse_dy * look_sensitivity;
+        // look_sensitivity is a direct public field (FlyCamera tunable
+        // with no setter — same desc-direct-field NaN sink as
+        // cine::Sequence::speed 1ec131e). NaN look_sensitivity → `yaw_
+        // += in.mouse_dx * NaN` poisons yaw_ permanently → every
+        // subsequent cos/sin produces NaN forward/right vectors →
+        // `cam.position += move * v` teleports the camera every tick.
+        // Same for pitch_. Sanitize at use; preserve the user's stored
+        // value so the editor inspector sees the bad input.
+        const float ls = cardinal::isfinite(look_sensitivity)
+                             ? look_sensitivity : 0.0035f;
+        yaw_   += in.mouse_dx * ls;
+        pitch_ -= in.mouse_dy * ls;
         pitch_  = cardinal::clamp(pitch_, min_pitch_rad, max_pitch_rad);
     }
 
@@ -68,7 +78,17 @@ void FlyCamera::tick(Camera& cam, const FlyInput& in, float dt) noexcept {
     const float lensq = dot(move, move);
     if (lensq > 1e-6f) {
         move = move * (1.0f / cardinal::sqrt(lensq));
-        const float v = speed * (in.sprint ? sprint_multiplier : 1.0f) * dt;
+        // speed / sprint_multiplier are direct public fields (same
+        // desc-direct-field NaN sink class as look_sensitivity above).
+        // NaN in either → `v = NaN * dt` → `cam.position += move * NaN`
+        // teleports the camera to NaN-land permanently. Sanitize at use.
+        // Defaults match the struct's compile-time initializers
+        // (4.0 / 4.0 — see fly_camera.hpp:49,52).
+        const float spd = cardinal::isfinite(speed)
+                              ? speed : 4.0f;
+        const float sm  = cardinal::isfinite(sprint_multiplier)
+                              ? sprint_multiplier : 4.0f;
+        const float v = spd * (in.sprint ? sm : 1.0f) * dt;
         cam.position += move * v;
     }
 
