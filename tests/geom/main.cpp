@@ -301,6 +301,82 @@ void test_bvh() {
     CHECK(bvh.node_count() == 0u);
 }
 
+// ---- AabbBvh::build must NOT UB on AABBs with NaN components -------
+// build_recursive_'s std::nth_element compared centroids via the
+// NaN-blind `va < vb`: NaN unordered to everything → (NaN, x) is
+// "equivalent" under the predicate while (x, y) with x<y orders
+// strictly → transitivity-of-equivalence broken. std::nth_element
+// with a SWO-violating comparator is UB — same shape as the
+// std::sort family (sky 4ff85a8 / level 4b08e0c / anim+ui
+// 23937c5). Realistic ingress: AabbBvh is publicly exposed in
+// cardinal::core::geom; a caller cooking a BVH over imported
+// geometry whose source file's bit pattern happens to be a NaN
+// float reaches this partition with NaN centers. Without the fix
+// build can hang or scribble OOB; with the NaN-safe SWO it
+// terminates with NaN-center boxes clustered at the tail.
+void test_bvh_nan_boxes() {
+    std::vector<g::AABB> boxes;
+    // 16 finite boxes spread along the X axis. Pass empty `ids` to
+    // AabbBvh::build so prim_ids_[i] = i (default identity mapping) —
+    // keeps the brute-force-vs-BVH oracle's index space identical to
+    // the BVH's reported leaf ids.
+    for (int i = 0; i < 16; ++i) {
+        const Vec3 c{ static_cast<float>(i),
+                      static_cast<float>(i & 1),
+                      0.0f };
+        boxes.push_back(g::AABB::from_center_extent(c, Vec3{0.5f, 0.5f, 0.5f}));
+    }
+    // Sprinkle a NaN box in the middle of the vector — worst position
+    // for partition pathology under a SWO-violating comparator.
+    volatile float z = 0.0f;
+    const float qnan = z / z;
+    g::AABB nan_box;
+    nan_box.min = Vec3{ qnan, 0.0f, 0.0f };
+    nan_box.max = Vec3{ qnan + 1.0f, 1.0f, 1.0f };
+    boxes.insert(boxes.begin() + 8, nan_box);
+    const u32 N = static_cast<u32>(boxes.size());    // 17
+
+    // The UB call. Without the fix, std::nth_element either hangs
+    // (introsort partition fails to make progress) or scribbles OOB.
+    g::AabbBvh bvh;
+    bvh.build(boxes, {});                            // identity ids
+    CHECK(bvh.primitive_count() == N);
+    CHECK(bvh.node_count() >= 1u);
+
+    // A finite query box overlapping the first few finite boxes must
+    // still be reachable from a coherent tree — verify the BVH does
+    // not falsely cull legitimate FINITE hits. The NaN box's
+    // intersects() check is a spurious false-positive (AABB::
+    // intersects uses `min.x > o.max.x` etc. which are NaN-blind so
+    // every comparison is FALSE → the whole !(...) chain returns
+    // TRUE) — that's an oracle artifact, not a real BVH miss, so
+    // exclude the NaN slot from the no-false-negative invariant.
+    const g::AABB q =
+        g::AABB::from_center_extent(Vec3{1.0f, 0.5f, 0.0f}, Vec3{0.6f, 0.6f, 0.6f});
+    std::vector<unsigned char> bv(N, 0), br(N, 0);
+    bvh.traverse_aabb(q, [&](u32 id, const g::AABB&) {
+        bv[id] = 1; return true; });
+    // `x == x` is true for finite and ±Inf, false only for NaN — the
+    // canonical NaN check without dragging <cmath> into this test
+    // (per top-of-file: <cmath> deliberately avoided). We only inject
+    // NaN (not Inf), so this is sufficient.
+    auto box_is_finite = [](const g::AABB& b) {
+        return b.min.x == b.min.x && b.min.y == b.min.y && b.min.z == b.min.z &&
+               b.max.x == b.max.x && b.max.y == b.max.y && b.max.z == b.max.z;
+    };
+    for (u32 i = 0; i < N; ++i)
+        if (box_is_finite(boxes[i]) && q.intersects(boxes[i])) br[i] = 1;
+    // BVH must enumerate every brute-force FINITE hit (no false
+    // negative on the boxes that genuinely intersect q).
+    for (u32 i = 0; i < N; ++i)
+        if (br[i]) CHECK(bv[i]);
+    // Sanity: brute force found at least one finite hit (boxes 0, 1, 2
+    // straddle q's X=[0.4, 1.6] range).
+    u32 finite_hits = 0;
+    for (u32 i = 0; i < N; ++i) finite_hits += br[i];
+    CHECK(finite_hits >= 1u);
+}
+
 // ---- DynamicMesh ----------------------------------------------------
 void test_dynamic_mesh() {
     g::DynamicMesh m;
@@ -335,6 +411,7 @@ int main() {
     test_frustum();
     test_raycasts();
     test_bvh();
+    test_bvh_nan_boxes();
     test_dynamic_mesh();
 
     if (g_fail == 0) {

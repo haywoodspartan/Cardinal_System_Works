@@ -402,6 +402,22 @@ i32 AabbBvh::build_recursive_(u32 begin, u32 end) {
         return (axis == 0) ? c.x : (axis == 1 ? c.y : c.z);
     };
     const u32 mid = begin + count / 2;
+    // NaN-safe strict-weak-ordering. AABB::center() = (min+max)*0.5,
+    // so a single NaN component in any input box poisons that axis
+    // of the centroid; `va < vb` is then NaN-blind both ways → (NaN,
+    // x) is "equivalent" while (x, y) with x<y orders strictly →
+    // transitivity-of-equivalence broken → std::nth_element with a
+    // SWO-violating comparator is UB (same class as the std::sort
+    // family closed across sky 4ff85a8 / level 4b08e0c / anim+ui
+    // 23937c5). Realistic ingress: AabbBvh is publicly exposed in
+    // cardinal::core::geom and accepts user-supplied AABB arrays —
+    // a caller cooking BVH over imported geometry whose source
+    // file's bit pattern happens to be a NaN float reaches this
+    // partition with NaN centers. Promote NaN to "greater than all
+    // finites": NaN centers cluster at the tail of the partition
+    // as a single equivalence class, finite centers partition
+    // normally, the recursive build still terminates with all
+    // children indexed in-bounds.
     std::nth_element(prim_indices_.begin() + begin,
                      prim_indices_.begin() + mid,
                      prim_indices_.begin() + end,
@@ -410,7 +426,10 @@ i32 AabbBvh::build_recursive_(u32 begin, u32 end) {
                          const Vec3 cb = prim_boxes_[b].center();
                          const f32 va = (axis == 0) ? ca.x : (axis == 1 ? ca.y : ca.z);
                          const f32 vb = (axis == 0) ? cb.x : (axis == 1 ? cb.y : cb.z);
-                         return va < vb;
+                         const bool fa = std::isfinite(va);
+                         const bool fb = std::isfinite(vb);
+                         if (fa && fb) return va < vb;
+                         return fa && !fb;     // finite < NaN; NaN ~ NaN
                      });
     (void)first_axis;
     nodes_.push_back(n);
