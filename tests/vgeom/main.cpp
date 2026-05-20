@@ -88,6 +88,52 @@ void test_cook_guards() {
     CHECK(vg::cook(d) == nullptr);                       // null ptr
 }
 
+// ---- vg::cook MUST NOT invoke UB on non-finite vertex coords ------
+// Same float→i32 UB-cast class as world/mesh_ops/tex_ops/scene/
+// physics/brush. VertHash's `static_cast<i32>(round(v.x * 1e5f))`
+// would UB on NaN/±Inf coords (caller bug from a degenerate importer
+// or hostile asset). Fixed by per-component fz() sanitize → 0 before
+// the round/cast chain.
+void test_cook_nonfinite_verts() {
+    volatile float z = 0.0f;
+    const float qnan = z / z;
+    const float inf  = 1.0f / z;
+
+    // Build a 3-tri (9-vert) mesh with one NaN x-coord, one +Inf z,
+    // one -Inf y. cook() must not crash; the sanitize routes all the
+    // bad-input coords to (0,0,0) so they cluster, but no UB.
+    cardinal::vector<vg::Vertex> verts;
+    auto MK = [](float x, float y, float z) {
+        vg::Vertex v{};
+        v.position = { x, y, z };
+        v.normal   = { 0.0f, 0.0f, 1.0f };
+        v.color    = { 0.5f, 0.5f, 0.5f };
+        return v;
+    };
+    // Tri 0: one NaN coord
+    verts.push_back(MK(qnan, 0.0f, 0.0f));
+    verts.push_back(MK(1.0f, 0.0f, 0.0f));
+    verts.push_back(MK(0.0f, 1.0f, 0.0f));
+    // Tri 1: one +Inf coord
+    verts.push_back(MK(2.0f, 0.0f, 0.0f));
+    verts.push_back(MK(3.0f, 0.0f,  inf));
+    verts.push_back(MK(2.0f, 1.0f, 0.0f));
+    // Tri 2: one -Inf coord
+    verts.push_back(MK(4.0f, 0.0f, 0.0f));
+    verts.push_back(MK(5.0f, 0.0f, 0.0f));
+    verts.push_back(MK(4.0f, -inf, 0.0f));
+
+    vg::CookDesc d{};
+    d.vertices     = verts.data();
+    d.vertex_count = static_cast<u32>(verts.size());
+    // cook() must complete without UB; the result may be a degenerate
+    // hierarchy (some verts cluster at origin), but it must not be a
+    // crash or trap. The pre-fix path would invoke UB inside VertHash
+    // during the hashmap insert.
+    auto h = vg::cook(d);
+    CHECK(h != nullptr);
+}
+
 // ---- cook: hierarchy well-formedness ------------------------------
 void test_cook_hierarchy() {
     auto grid = make_grid(16);                           // 512 tris, 1536 verts
@@ -281,6 +327,7 @@ void test_select() {
 
 int main() {
     test_cook_guards();
+    test_cook_nonfinite_verts();
     test_cook_hierarchy();
     test_select();
 

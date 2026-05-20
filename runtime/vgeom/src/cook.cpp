@@ -66,9 +66,20 @@ struct VertHash {
         // shared verts but the renderer's expanded triangle-list form
         // means we see THREE copies of each shared vert per quad — we
         // dedupe them here.
-        const i32 ix = static_cast<i32>(cardinal::round(v.x * 1e5f));
-        const i32 iy = static_cast<i32>(cardinal::round(v.y * 1e5f));
-        const i32 iz = static_cast<i32>(cardinal::round(v.z * 1e5f));
+        //
+        // Sanitize per-component: a non-finite vertex coord (caller
+        // bug from a degenerate importer / hostile asset) would hit
+        // `round(NaN * 1e5f) = NaN` then `static_cast<i32>(NaN)` —
+        // UB on the float→int cast. Map NaN/±Inf → 0 so all bad-
+        // input verts collide into one bucket (degenerate, but
+        // defined). Same UB-cast class as world/mesh_ops/tex_ops/
+        // scene/physics/brush (79e437d et al.).
+        auto fz = [](float c) noexcept {
+            return cardinal::isfinite(c) ? c : 0.0f;
+        };
+        const i32 ix = static_cast<i32>(cardinal::round(fz(v.x) * 1e5f));
+        const i32 iy = static_cast<i32>(cardinal::round(fz(v.y) * 1e5f));
+        const i32 iz = static_cast<i32>(cardinal::round(fz(v.z) * 1e5f));
         usize h = 0xcbf29ce484222325ull;
         h = (h ^ static_cast<u32>(ix)) * 0x100000001b3ull;
         h = (h ^ static_cast<u32>(iy)) * 0x100000001b3ull;
