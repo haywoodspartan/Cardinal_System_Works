@@ -71,16 +71,37 @@ float dec_u16(u16 q, float range) {
     return (static_cast<float>(q) / 65535.0f) * range;
 }
 
+// Pure-arithmetic isfinite without <cmath> (foundation discipline above).
+// finite ↔ (v - v) == 0.0f:
+//   finite  → 0 - 0 = 0     → true
+//   NaN     → NaN - NaN = NaN → NaN == 0 is false
+//   ±Inf    → Inf - Inf = NaN → false
+inline float finite_or_zero(float v) noexcept {
+    return ((v - v) == 0.0f) ? v : 0.0f;
+}
+
 // Wire record: u32 id + 3×f32 pos + 3×i16 rot + 3×u16 scale = 28 B.
+// Every float is sanitized here so the wire NEVER carries NaN/±Inf:
+//   * raw f32 position would survive transit unmodified and poison the
+//     client's lerp3 (`a + (b - a) * alpha` with ±Inf → NaN-vector,
+//     teleporting every networked proxy to NaN-land);
+//   * enc_s16 / enc_u16 had NaN-blind clamps (NaN > 1.0f and NaN < -1.0f
+//     both false), so a NaN rotation/scale reached `static_cast<intN>
+//     (NaN * 32767/65535)` — UNDEFINED BEHAVIOR for the float→int cast,
+//     producing implementation-defined garbage on the wire.
+// Sanitize at the encoder so every downstream consumer (this client and
+// any future replicator) sees finite values.
 void put_state(cardinal::vector<u8>& b, const RepState& s) {
     put(b, s.id);
-    put(b, s.position.x); put(b, s.position.y); put(b, s.position.z);
-    put(b, enc_s16(s.rotation_euler.x, kRotRange));
-    put(b, enc_s16(s.rotation_euler.y, kRotRange));
-    put(b, enc_s16(s.rotation_euler.z, kRotRange));
-    put(b, enc_u16(s.scale.x, kScaleRange));
-    put(b, enc_u16(s.scale.y, kScaleRange));
-    put(b, enc_u16(s.scale.z, kScaleRange));
+    put(b, finite_or_zero(s.position.x));
+    put(b, finite_or_zero(s.position.y));
+    put(b, finite_or_zero(s.position.z));
+    put(b, enc_s16(finite_or_zero(s.rotation_euler.x), kRotRange));
+    put(b, enc_s16(finite_or_zero(s.rotation_euler.y), kRotRange));
+    put(b, enc_s16(finite_or_zero(s.rotation_euler.z), kRotRange));
+    put(b, enc_u16(finite_or_zero(s.scale.x), kScaleRange));
+    put(b, enc_u16(finite_or_zero(s.scale.y), kScaleRange));
+    put(b, enc_u16(finite_or_zero(s.scale.z), kScaleRange));
 }
 bool get_state(const u8*& p, const u8* end, RepState& s) {
     i16 rx = 0, ry = 0, rz = 0;

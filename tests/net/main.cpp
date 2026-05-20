@@ -250,6 +250,72 @@ void test_interpolation_nonfinite() {
     }
 }
 
+// ---- 3c. server NEVER puts NaN/±Inf on the wire --------------------
+// put_state used to pass raw f32 position straight through and
+// enc_s16/enc_u16 had NaN-blind clamps (NaN > 1.0f is unordered-false)
+// → `static_cast<intN>(NaN * 32767)` was UNDEFINED BEHAVIOR for the
+// cast. Receiver lerp3 then computed `a + (b - a) * alpha` with ±Inf
+// → NaN-vector, teleporting every networked proxy to NaN-land.
+// The finite_or_zero sanitizer in put_state replaces any non-finite
+// component with 0.0f BEFORE encoding.
+//
+// Construct a NaN/+Inf-poisoned RepState via volatile-launder
+// (no <cmath> in this TU's test style — matches the test_interpolation_
+// nonfinite block).
+float nan_f() { volatile float z = 0.0f; return z / z; }
+float inf_f() { volatile float z = 0.0f; return 1.0f / z; }
+
+void test_server_nonfinite_input() {
+    auto t = fresh();
+    Replicator repl(*t);
+
+    // Build a RepState with non-finite values across all three sub-paths
+    // (raw f32 position, i16-quantized rotation, u16-quantized scale).
+    RepState bad;
+    bad.id             = 9u;
+    bad.position       = { nan_f(), inf_f(), -inf_f() };
+    bad.rotation_euler = { nan_f(), inf_f(),   1.0f   };
+    bad.scale          = {   1.0f,  nan_f(), inf_f() };
+
+    std::vector<RepState> in{bad};
+    repl.server_broadcast(in);
+
+    // Round-trip via client_ingest — fresh decode produces a defined
+    // RepState. EVERY component must be finite (no NaN/Inf leaked).
+    std::vector<NetEvent> ev;
+    t->poll(ev);
+    std::vector<RepState> out;
+    repl.client_ingest(ev, out);
+    CHECK(out.size() == sz(1));
+    if (out.empty()) return;
+
+    auto fin = [](float v) { return v == v && (v - v) == 0.0f; };
+    CHECK(fin(out[0].position.x));
+    CHECK(fin(out[0].position.y));
+    CHECK(fin(out[0].position.z));
+    CHECK(fin(out[0].rotation_euler.x));
+    CHECK(fin(out[0].rotation_euler.y));
+    CHECK(fin(out[0].rotation_euler.z));
+    CHECK(fin(out[0].scale.x));
+    CHECK(fin(out[0].scale.y));
+    CHECK(fin(out[0].scale.z));
+
+    // The sanitizer maps non-finite → 0 before encode. Position is raw
+    // f32 round-trip, so it should be EXACTLY 0. Rotation quantizes
+    // through enc_s16 (zero round-trip is exact), scale through enc_u16
+    // (also exact at 0). Finite inputs (1.0, 1.0) round-trip with the
+    // usual quantization tolerance.
+    CHECK(approx(out[0].position.x,       0.0f, 1.0e-6f));
+    CHECK(approx(out[0].position.y,       0.0f, 1.0e-6f));
+    CHECK(approx(out[0].position.z,       0.0f, 1.0e-6f));
+    CHECK(approx(out[0].rotation_euler.x, 0.0f, 1.0e-3f));
+    CHECK(approx(out[0].rotation_euler.y, 0.0f, 1.0e-3f));
+    CHECK(approx(out[0].rotation_euler.z, 1.0f, 1.0e-3f));   // finite input preserved
+    CHECK(approx(out[0].scale.x,          1.0f, 1.0e-3f));   // finite input preserved
+    CHECK(approx(out[0].scale.y,          0.0f, 1.0e-3f));
+    CHECK(approx(out[0].scale.z,          0.0f, 1.0e-3f));
+}
+
 // ---- 4. loss-sim determinism + invariants ---------------------------
 // One run: `iters` ticks, each sending one Unreliable snapshot and one
 // ReliableOrdered lifecycle event; returns how many of each the client
@@ -373,6 +439,7 @@ int main() {
     test_seq_gating_reorder();
     test_interpolation();
     test_interpolation_nonfinite();
+    test_server_nonfinite_input();
     test_loss_sim();
     test_lifecycle();
 
