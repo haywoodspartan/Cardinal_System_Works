@@ -448,6 +448,53 @@ void test_nonfinite_inputs() {
             if (!(buf[i] == buf[i])) finite_bus = false;             // no NaN
         CHECK(finite_bus);
     }
+    {   // set_channel_volume(NaN/+Inf/-Inf): cardinal::clamp passes
+        // NaN through, so the existing clamp at audio.cpp was NaN-blind.
+        // Without the isfinite guard, channel volume → NaN → render
+        // bus → NaN. Verify the new guard sets channel to silent (0).
+        auto e = au::Engine::create();
+        e->register_cue(sine_cue("sine", 1.0f));
+        e->set_channel_volume(au::kChannelSfx, qnan);
+        const au::Channel* c = e->channel(au::kChannelSfx);
+        CHECK(c != nullptr);
+        if (c) CHECK(ap(c->volume, 0.0f));
+        e->set_channel_volume(au::kChannelSfx,  inf);
+        if ((c = e->channel(au::kChannelSfx))) CHECK(ap(c->volume, 0.0f));
+        e->set_channel_volume(au::kChannelSfx, -inf);
+        if ((c = e->channel(au::kChannelSfx))) CHECK(ap(c->volume, 0.0f));
+        // A subsequent finite call restores to a defined value.
+        e->set_channel_volume(au::kChannelSfx, 0.7f);
+        if ((c = e->channel(au::kChannelSfx))) CHECK(ap(c->volume, 0.7f));
+    }
+    {   // set_emitter_position: a NaN component MUST be rejected
+        // (caller bug must not poison the stored instance state). The
+        // previous position is preserved.
+        auto e = au::Engine::create();
+        e->register_cue(sine_cue("sine", 1.0f));
+        const au::InstanceId id = e->play_3d("sine", Vec3{5, 0, 0},
+                                              au::kChannelSfx, 1.0f, 1.0f, false);
+        CHECK(id != 0u);
+        e->set_emitter_position(id, Vec3{qnan, 0, 0});       // rejected
+        auto a = e->active_instances();
+        CHECK(a.size() == 1u);
+        if (!a.empty()) {
+            CHECK(ap(a[0].position.x, 5.0f));                 // unchanged
+            CHECK(ap(a[0].position.y, 0.0f));
+            CHECK(ap(a[0].position.z, 0.0f));
+        }
+        e->set_emitter_position(id, Vec3{0, inf, 0});        // rejected
+        e->set_emitter_position(id, Vec3{0, 0, qnan});       // rejected
+        a = e->active_instances();
+        if (!a.empty()) CHECK(ap(a[0].position.x, 5.0f));    // still unchanged
+        // A finite triple goes through.
+        e->set_emitter_position(id, Vec3{1, 2, 3});
+        a = e->active_instances();
+        if (!a.empty()) {
+            CHECK(ap(a[0].position.x, 1.0f));
+            CHECK(ap(a[0].position.y, 2.0f));
+            CHECK(ap(a[0].position.z, 3.0f));
+        }
+    }
     {   // Non-finite dt is a no-op; the next valid tick is correct.
         auto e = au::Engine::create();
         e->register_cue(sine_cue("sine", 1.0f));

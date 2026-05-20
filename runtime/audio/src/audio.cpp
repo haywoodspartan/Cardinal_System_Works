@@ -67,7 +67,16 @@ const Channel* Engine::channel(ChannelId id) const {
 void Engine::set_channel_volume(ChannelId id, float v) {
     if (auto* c = channel(id)) {
         cardinal::lock_guard<cardinal::mutex> lg(mtx_);
-        c->volume = cardinal::clamp(v, 0.0f, 1.0f);
+        // cardinal::clamp passes NaN through (documented NaN-blind);
+        // NaN v → c->volume = NaN → effective_volume's `v *= ch.volume`
+        // pipeline poisons the per-instance volume → render() emits a
+        // NaN sample bus across every active instance routed to this
+        // channel. play_3d's 2805246 NaN guard handled the per-call
+        // ingress but NOT this channel-level setter. Sanitize first,
+        // then clamp.
+        c->volume = cardinal::isfinite(v)
+                        ? cardinal::clamp(v, 0.0f, 1.0f)
+                        : 0.0f;
     }
 }
 void Engine::set_channel_muted(ChannelId id, bool m) {
@@ -117,6 +126,15 @@ float Engine::compute_3d_attenuation_(const cardinal::scene::Vec3& pos) const no
     const float dy = pos.y - listener_.position.y;
     const float dz = pos.z - listener_.position.z;
     const float d  = cardinal::sqrt(dx*dx + dy*dy + dz*dz);
+    // Belt-and-suspenders: any non-finite component (listener position
+    // poisoned via set_listener — its NaN-rejection is a separate fix —
+    // or emitter pos somehow non-finite) → both ordered compares below
+    // are false for NaN, so d ≤ distance_min / d ≥ distance_max both
+    // fall through and t = (NaN - min) / (max - min) = NaN propagates
+    // to a NaN attenuation, which the caller multiplies into the
+    // per-instance volume → NaN render bus. Silent (0.0f) is safer
+    // than NaN.
+    if (!cardinal::isfinite(d)) return 0.0f;
     if (d <= desc_.distance_min) return 1.0f;
     if (d >= desc_.distance_max) return 0.0f;
     const float t = (d - desc_.distance_min) / (desc_.distance_max - desc_.distance_min);
@@ -204,6 +222,14 @@ void Engine::stop(InstanceId id) {
         [id](const InstanceState& s){ return s.id == id; }), instances_.end());
 }
 void Engine::set_emitter_position(InstanceId id, const cardinal::scene::Vec3& pos) {
+    // Reject non-finite components — `s.position = {NaN, ...}` would
+    // poison compute_3d_attenuation_'s dx/dy/dz/d arithmetic and
+    // permanently park this instance at NaN-attenuation (silent with
+    // the belt-and-suspenders guard below; previously a NaN sample
+    // bus). Caller's bad value must NOT corrupt the existing position.
+    if (!cardinal::isfinite(pos.x) ||
+        !cardinal::isfinite(pos.y) ||
+        !cardinal::isfinite(pos.z)) return;
     cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     for (auto& s : instances_) if (s.id == id) { s.position = pos; s.is_3d = true; }
 }
