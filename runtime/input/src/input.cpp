@@ -1,6 +1,7 @@
 #include <cardinal/input/input.hpp>
 
 #include <cardinal/core/algorithm.hpp>   // cardinal::sort
+#include <cardinal/core/cmath.hpp>       // cardinal::isfinite
 #include <cardinal/core/cstring.hpp>     // cardinal::strcmp
 #include <cardinal/core/thread.hpp>      // cardinal::mutex/lock_guard
 
@@ -103,18 +104,28 @@ void Manager::detach_from_window() noexcept {
 void Manager::begin_frame(float dt) noexcept {
     cardinal::lock_guard<cardinal::mutex> lg(impl_->mtx);
 
+    // Non-finite dt poisons held_time for every currently-held key/
+    // button — `held_time += NaN` makes it NaN, and the typical
+    // `held_time >= auto_repeat_threshold` / hold-to-action gates stay
+    // FALSE forever for that key (NaN compares unordered). The poison
+    // persists until the user releases AND re-presses the input (only
+    // a fresh down-edge resets held_time to 0.0f at lines 125/139).
+    // Skip the dt-dependent update on a bad frame; STILL drain pending
+    // events below so the input queue can't back up.
+    const bool dt_ok = cardinal::isfinite(dt);
+
     // Pre-pass: copy current "down" → "was_down" via the held_time logic.
     for (auto& k : impl_->keys) {
         const bool was_down = k.down;
         k.pressed  = false;
         k.released = false;
-        if (was_down) k.held_time += dt;
+        if (was_down && dt_ok) k.held_time += dt;
     }
     for (auto& b : impl_->mouse.buttons) {
         const bool was_down = b.down;
         b.pressed  = false;
         b.released = false;
-        if (was_down) b.held_time += dt;
+        if (was_down && dt_ok) b.held_time += dt;
     }
 
     // Drain pending key events.

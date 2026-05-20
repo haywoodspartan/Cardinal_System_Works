@@ -291,8 +291,11 @@ void test_nonfinite_time() {
     CHECK(ap(pp.sample(qnan), 0.0f));
     CHECK(ap(pp.sample(inf),  0.0f));
 
-    // Player fed a NaN dt: time_ → NaN; tick must not crash and the
-    // sampled write must be the defined clamp-to-front value.
+    // Player fed a NaN dt: the Player::tick GUARD (root-cause fix —
+    // companion to d8153cc's downstream Curve::sample defense) skips
+    // the bad frame entirely. time_ is NOT poisoned, clip_->apply is
+    // NOT called, the track's setter is NOT invoked — `dst` keeps its
+    // pre-tick value. Subsequent finite ticks resume normally.
     float dst = -1.0f;
     auto tr = std::make_unique<an::Track<float>>(
         "n", [&](const float& v) { dst = v; });
@@ -302,8 +305,10 @@ void test_nonfinite_time() {
     clip->add_track(std::move(tr));
     an::Player p(clip);
     p.play();
-    p.tick(qnan);                                  // time_ → NaN
-    CHECK(ap(dst, 0.0f));                           // sample(NaN) → front
+    p.tick(qnan);                                  // skipped — no apply call
+    CHECK(ap(dst, -1.0f));                          // sentinel untouched
+    p.tick(0.5f);                                   // resume: time_ = 0.5
+    CHECK(ap(dst, 5.0f));                           // sample(0.5) on a 0..10 → 0..100 ramp
 }
 
 }  // namespace

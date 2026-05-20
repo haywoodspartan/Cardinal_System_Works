@@ -46,6 +46,9 @@ bool apv(const cardinal::scene::Vec3& v, float x, float y, float z,
 float vlen(const cardinal::scene::Vec3& v) {
     return (v.x*v.x + v.y*v.y + v.z*v.z);   // squared — compare to 1
 }
+// volatile-launder a qNaN without dragging <cmath>/<limits> into the
+// test (per top-of-file: <cmath> deliberately avoided).
+float nan_f() { volatile float z = 0.0f; return z / z; }
 
 // ---- set_hour normalisation ----------------------------------------
 void test_set_hour_norm() {
@@ -154,6 +157,33 @@ void test_tick() {
     CHECK(apv(s.state().sun_dir, -kU, 0.0f, -kZ));       // cardinal hour 6
 }
 
+// ---- non-finite real_dt must NOT poison state_.hour ----------------
+// Without the guard, `state_.hour += NaN * time_scale_` makes hour NaN.
+// The 24-wrap guards are both false for NaN, and recompute_state_()
+// then drives EVERY derived field (zenith / horizon / sun_color /
+// sun_intensity / sun_dir) to NaN via cardinal::clamp NaN-passthrough
+// + lerp. Sky goes black/undefined forever (hour is poisoned). With
+// the guard, the bad frame is dropped — state survives intact.
+void test_nonfinite_dt() {
+    sk::Sky s;
+    s.set_hour(10.0f);
+    s.set_day_length_seconds(24.0f);                     // 1 hour / real-sec
+    s.tick(2.0f);                                        // 10 → 12
+    CHECK(ap(s.state().hour, 12.0f));
+    const float intensity_pre = s.state().sun_intensity;
+
+    // NaN frame: drop. Hour and all derived state must be unchanged.
+    s.tick(nan_f());
+    CHECK(ap(s.state().hour, 12.0f));
+    CHECK(ap(s.state().sun_intensity, intensity_pre));
+    // sun_dir must remain unit-length (would be NaN-vector if poisoned).
+    CHECK(ap(vlen(s.state().sun_dir), 1.0f, 1e-3f));
+
+    // Subsequent finite tick resumes advancing the clock normally.
+    s.tick(1.0f);                                        // 12 → 13
+    CHECK(ap(s.state().hour, 13.0f));
+}
+
 // ---- fresh Sky defaults --------------------------------------------
 void test_defaults() {
     sk::Sky s;                                           // ctor: hour 12
@@ -174,6 +204,7 @@ int main() {
     test_sun_dir();
     test_day_length();
     test_tick();
+    test_nonfinite_dt();
     test_defaults();
 
     if (g_fail == 0) {

@@ -57,6 +57,9 @@ bool streq(const char* a, const char* b) { return std::string(a) == b; }
 bool bs(const in::ButtonState& s, bool d, bool p, bool r) {
     return s.down == d && s.pressed == p && s.released == r;
 }
+// Launder a NaN without dragging <cmath>/<limits> in. volatile defeats
+// the constant-folder so 0.0/0.0 actually executes and yields qNaN.
+float nan_f() { volatile float z = 0.0f; return z / z; }
 in::Binding kb(KeyCode k, float scale = 1.0f) {
     return in::Binding{ in::BindKind::Key,
                         static_cast<cardinal::u32>(k), scale };
@@ -358,6 +361,39 @@ void test_mouse() {
     CHECK(!M.mouse_down(MouseButton::Left));
 }
 
+// ---- non-finite dt must NOT poison held_time, must STILL drain events
+// `held_time += NaN` makes it NaN, and the typical `held_time >= thresh`
+// auto-repeat / hold-to-action gate stays false forever (NaN compares
+// unordered) — the poison persists until the user releases AND re-
+// presses the key, since fresh-down is the only reset. Event drain
+// must continue regardless or the input queue backs up.
+void test_nonfinite_dt() {
+    auto mp = in::Manager::create(); auto& M = *mp;
+    const auto& W = M.key(KeyCode::W);
+
+    // Build up some held_time, then feed a NaN frame.
+    M.push_key(KeyCode::W, true); M.begin_frame(0.10f);
+    CHECK(bs(W, true, true, false));  CHECK(ap(W.held_time, 0.0f));
+    M.begin_frame(0.10f);             CHECK(ap(W.held_time, 0.10f));
+    M.begin_frame(0.10f);             CHECK(ap(W.held_time, 0.20f));
+
+    // NaN frame — held_time MUST NOT change (skip the bad accumulator).
+    M.begin_frame(nan_f());
+    CHECK(W.down);                    // input still down
+    CHECK(ap(W.held_time, 0.20f));    // not poisoned to NaN
+
+    // Subsequent finite frames resume accruing as normal.
+    M.begin_frame(0.10f);             CHECK(ap(W.held_time, 0.30f));
+
+    // Event drain MUST still have happened during the NaN frame — pump
+    // a press through to verify queue isn't backed up.
+    M.push_key(KeyCode::A, true);
+    M.begin_frame(nan_f());           // NaN frame ingests A
+    const auto& A = M.key(KeyCode::A);
+    CHECK(bs(A, true, true, false));  // pressed pulse fires on the NaN frame
+    CHECK(ap(A.held_time, 0.0f));     // fresh press → 0
+}
+
 // ---- stats: events_processed counts key/button drains only --------
 void test_stats() {
     auto mp = in::Manager::create(); auto& M = *mp;
@@ -404,6 +440,7 @@ int main() {
     test_gameplay_gate();
     test_mouse();
     test_stats();
+    test_nonfinite_dt();
 
     if (g_fail == 0) {
         cardinal::log::infof("inputtest", "OK  %d checks passed", g_checks);

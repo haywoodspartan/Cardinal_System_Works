@@ -67,6 +67,15 @@ float Sky::day_length_seconds() const noexcept {
 
 void Sky::tick(float real_dt) {
     if (frozen_) return;
+    // Reject non-finite real_dt — `state_.hour += NaN * time_scale_`
+    // poisons state_.hour. The 24-wrap guards (`>= 24.0f`, `< 0.0f`) are
+    // both false for NaN, and recompute_state_() then drives EVERY
+    // derived field (zenith / horizon / sun_color / sun_intensity /
+    // sun_dir) to NaN via cardinal::clamp (NaN-passthrough) + lerp_vec.
+    // The sky goes black/undefined and stays that way forever (hour is
+    // poisoned). Same accumulator-poison family as physics/sim/cine/
+    // particles/audio/anim/ai. Drop the bad frame and continue normally.
+    if (!cardinal::isfinite(real_dt)) return;
     state_.hour += real_dt * time_scale_;
     if (state_.hour >= 24.0f) state_.hour = cardinal::fmod(state_.hour, 24.0f);
     if (state_.hour <  0.0f)  state_.hour += 24.0f;

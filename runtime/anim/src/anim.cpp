@@ -154,6 +154,14 @@ void Clip::apply(float t) {
 
 void Player::tick(float dt) {
     if (!playing_ || clip_ == nullptr) return;
+    // Reject non-finite dt at the SOURCE — `time_ += NaN` (or *speed_==NaN)
+    // poisons time_ permanently. d8153cc fixed the symptom (Curve::sample
+    // clamp-to-front on NaN — kept the OOB read from happening) but time_
+    // stays NaN every subsequent tick, freezing the animation at the front
+    // value forever even after the upstream NaN clears. Same accumulator-
+    // poison family as physics/sim/cine/particles/audio/ai. Skip the
+    // bad frame and continue normally next tick.
+    if (!cardinal::isfinite(dt)) return;
     time_ += dt * speed_;
     const float dur = clip_->duration();
     if (dur > 0.0f) {
