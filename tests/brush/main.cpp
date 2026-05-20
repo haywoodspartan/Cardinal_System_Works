@@ -136,6 +136,60 @@ void test_stamp_guards() {
     for (int i = 0; i < 16; ++i) CHECK(g2[i] == 0.0f);
 }
 
+// ---- stamp_height_grid + weight_at MUST NOT invoke UB on NaN ----
+// Same float→int UB-cast pattern as world / mesh_ops / tex_ops / scene /
+// physics (ad55e96 sweep). The `cell <= 0.0f` and `radius <= 0.0f`
+// ordered guards were NaN-blind. NaN cell or radius (or stamp_x/y
+// from a degenerate ray-cast in the editor brush input) flowed into:
+//   static_cast<int>(floor((NaN ...) / NaN_cell))   — UB
+// weight_at's `distance_world < 0.0f` was likewise NaN-blind, allowing
+// NaN to reach `exp(-3 * NaN * NaN) = NaN` weight → NaN heightmap.
+void test_stamp_nonfinite() {
+    volatile float z = 0.0f;
+    const float qnan = z / z;
+    const float inf  = 1.0f / z;
+
+    Brush b = mk(Falloff::None, Mode::Add, 1.0, 1.0);
+    float h[4] = {0,0,0,0};
+
+    // NaN cell → empty AABB (same contract as cell<=0).
+    auto n_cell = br::stamp_height_grid(h, 2u, 2u, qnan, 0,0, 0,0, 1.0f, b);
+    CHECK(!n_cell.any);
+    // +Inf / -Inf cell → same.
+    auto i_cell = br::stamp_height_grid(h, 2u, 2u,  inf, 0,0, 0,0, 1.0f, b);
+    CHECK(!i_cell.any);
+    auto ni_cell = br::stamp_height_grid(h, 2u, 2u, -inf, 0,0, 0,0, 1.0f, b);
+    CHECK(!ni_cell.any);
+
+    // NaN radius → empty.
+    Brush nr = mk(Falloff::None, Mode::Add, qnan, 1.0);
+    auto n_rad = br::stamp_height_grid(h, 2u, 2u, 1.0f, 0,0, 0,0, 1.0f, nr);
+    CHECK(!n_rad.any);
+
+    // NaN stamp position → empty.
+    auto n_stx = br::stamp_height_grid(h, 2u, 2u, 1.0f, 0,0, qnan,0, 1.0f, b);
+    CHECK(!n_stx.any);
+    auto n_sty = br::stamp_height_grid(h, 2u, 2u, 1.0f, 0,0, 0,qnan, 1.0f, b);
+    CHECK(!n_sty.any);
+
+    // NaN origin → empty.
+    auto n_orx = br::stamp_height_grid(h, 2u, 2u, 1.0f, qnan,0, 0,0, 1.0f, b);
+    CHECK(!n_orx.any);
+
+    // No write happened on any of the above.
+    for (int i = 0; i < 4; ++i) CHECK(h[i] == 0.0f);
+
+    // weight_at(NaN distance) → 0 (out-of-radius semantic) — must not
+    // poison the heightmap via NaN weight.
+    Brush w = mk(Falloff::Gaussian, Mode::Add, 1.0, 1.0);
+    CHECK(br::weight_at(qnan, w) == 0.0f);
+    CHECK(br::weight_at( inf, w) == 0.0f);
+    CHECK(br::weight_at(-inf, w) == 0.0f);
+    // Finite-valid still works (sanity).
+    const float wfin = br::weight_at(0.0f, w);
+    CHECK(wfin > 0.0f && wfin <= 1.0f);
+}
+
 // ---- stamp_height_grid: Add + the candidate-box AABB contract -----
 void test_stamp_add_aabb() {
     // 5x5, cell 1, origin (0,0). None falloff, radius 1.5, strength 2,
@@ -283,6 +337,7 @@ void test_stamp_generic() {
 int main() {
     test_weight_at();
     test_stamp_guards();
+    test_stamp_nonfinite();
     test_stamp_add_aabb();
     test_stamp_modes();
     test_stamp_smooth();
