@@ -260,7 +260,16 @@ bool Scene::set_parent(u32 entity_id, u32 new_parent_id) {
 // 3D grid. Mirrors world::WorldGrid::chunk_of without dragging the world
 // module's header in here. Returns count whose membership changed.
 usize Scene::assign_chunks(float chunk_size_units) noexcept {
-    if (chunk_size_units <= 1e-3f) return 0;
+    // `chunk_size_units <= 1e-3f` is NaN-blind (NaN<=x unordered-false).
+    // NaN chunk_size_units would set `inv = 1/NaN = NaN`, then even
+    // with the wx/wy/wz isfinite guard below at L280/L300 (which
+    // catches NaN positions), `wx * NaN = NaN` → floor → static_cast
+    // <i32>(NaN) is UB. Same float→i32 UB-cast class fixed in world
+    // (dd37414), mesh_ops (439d2eb), tex_ops (3bc8360). Treat non-
+    // finite chunk_size_units as the documented "too small" case →
+    // do nothing.
+    if (!cardinal::isfinite(chunk_size_units) ||
+        chunk_size_units <= 1e-3f) return 0;
     const float inv = 1.0f / chunk_size_units;
 
     // Above the threshold, fan out to the worker pool — assign_chunks runs

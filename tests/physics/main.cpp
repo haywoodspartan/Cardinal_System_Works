@@ -186,6 +186,40 @@ void test_nonfinite_step() {
         w->step(inff());                                    // clamp → steps
         CHECK(w->position(h).y < 100.0f);
     }
+    // (d) NaN broad_cell_ (set via set_broadphase_cell_size) must NOT
+    //     invoke UB in broad_phase_pairs. The pre-fix `broad_cell_
+    //     <= 0.0f` ordered compare was NaN-blind, so NaN passed the
+    //     N² fallback and reached `inv = 1.0f / NaN = NaN` → floor(
+    //     a.min.x * NaN) = NaN → static_cast<i32>(NaN) is UB. Fix
+    //     treats non-finite as the "broadphase disabled" case → N²
+    //     pairing still detects collisions, just slower.
+    {
+        auto w = ph::World::create();
+        if (!w) { CHECK(false); return; }
+        w->set_gravity(Vec3{0.0f, 0.0f, 0.0f});
+        w->set_fixed_timestep(0.01f);
+        w->set_broadphase_cell_size(nanf());               // POISON
+        // Two overlapping unit spheres — broad_phase must still find
+        // them and the narrow-phase must report contact (verified
+        // indirectly by stepping and confirming no crash + the world
+        // doesn't explode).
+        const ph::BodyHandle a = w->create_body(
+            dyn_sphere(Vec3{0.0f, 0.0f, 0.0f}, 0.5f, 0.0f));
+        const ph::BodyHandle b = w->create_body(
+            dyn_sphere(Vec3{0.5f, 0.0f, 0.0f}, 0.5f, 0.0f));
+        for (int i = 0; i < 30; ++i) w->step(0.01f);       // no crash, no UB
+        // Both bodies still finite (sanity: NaN broad_cell didn't
+        // corrupt their positions via UB shenanigans).
+        CHECK(w->position(a).x == w->position(a).x);
+        CHECK(w->position(b).x == w->position(b).x);
+        // +Inf and -Inf cell sizes also routed to N².
+        w->set_broadphase_cell_size( inff());
+        for (int i = 0; i < 5; ++i) w->step(0.01f);
+        CHECK(w->position(a).x == w->position(a).x);
+        w->set_broadphase_cell_size(-inff());
+        for (int i = 0; i < 5; ++i) w->step(0.01f);
+        CHECK(w->position(a).x == w->position(a).x);
+    }
 }
 
 // ---- mutators + integration gating ----------------------------------

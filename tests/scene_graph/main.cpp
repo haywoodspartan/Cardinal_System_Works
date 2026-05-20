@@ -247,6 +247,37 @@ void test_fuzz() {
     CHECK(!a.empty());
 }
 
+// ---- assign_chunks MUST NOT invoke UB on non-finite inputs --------
+// Same float→i32 UB-cast class as world::chunk_of (dd37414). The
+// inner cast `static_cast<i32>(floor(wx * inv))` is UB on NaN; the
+// existing wx/wy/wz isfinite guards cover poisoned entity positions
+// but NaN chunk_size_units would make `inv = 1/NaN = NaN` AND
+// poison the cast even with finite positions. Fix routes non-finite
+// chunk_size_units to the "too small" no-op early return.
+void test_assign_chunks_nonfinite() {
+    volatile float z = 0.0f;
+    const float qnan = z / z;
+    const float inf  = 1.0f / z;
+
+    cardinal::scene::Scene s;
+    auto& e0 = s.add_entity("e0");
+    e0.transform.translation = { 25.0f, 25.0f, 25.0f };
+    auto& e1 = s.add_entity("e1");
+    e1.transform.translation = { -50.0f, 0.0f, 0.0f };
+
+    // NaN chunk_size → returns 0 (no chunks assigned, no UB).
+    CHECK(s.assign_chunks(qnan) == sz(0));
+    // Same for +Inf / -Inf and the existing "too small" cases.
+    CHECK(s.assign_chunks( inf) == sz(0));
+    CHECK(s.assign_chunks(-inf) == sz(0));
+    CHECK(s.assign_chunks(1e-4f) == sz(0));    // existing <= 1e-3 short-circuit
+
+    // Finite chunk_size still works (proves the new guard is
+    // additive — sane callers unaffected).
+    const cardinal::usize n = s.assign_chunks(10.0f);
+    CHECK(n >= sz(2));                          // both entities moved
+}
+
 }  // namespace
 
 int main() {
@@ -256,6 +287,7 @@ int main() {
     test_set_parent_rules();
     test_cycle_prevention();
     test_fuzz();
+    test_assign_chunks_nonfinite();
 
     if (g_fail == 0) {
         cardinal::log::infof("scenetest", "OK  %d checks passed", g_checks);

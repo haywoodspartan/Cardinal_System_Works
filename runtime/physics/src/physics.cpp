@@ -937,7 +937,14 @@ private:
     // pair test (correct, just slower for large N).
     void broad_phase_pairs(cardinal::vector<cardinal::pair<u32, u32>>& out) {
         out.clear();
-        if (broad_cell_ <= 0.0f) {
+        // `broad_cell_ <= 0.0f` is NaN-blind; a NaN broad_cell_ (caller
+        // bug via WorldImpl tunable setter) would skip the N² fallback
+        // and reach `inv = 1.0f / NaN = NaN` at L968, then
+        // `static_cast<i32>(floor(a.min.x * NaN))` is UB. Treat non-
+        // finite as the documented "broadphase disabled" case → N²
+        // (correct, just slower) — same defensive pattern as
+        // world::WorldGrid (dd37414) for the float→i32 cast class.
+        if (!cardinal::isfinite(broad_cell_) || broad_cell_ <= 0.0f) {
             for (u32 i = 0; i < bodies_.size(); ++i) {
                 if (!bodies_[i].live) continue;
                 const AABB ai = body_aabb(bodies_[i]);
