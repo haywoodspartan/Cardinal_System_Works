@@ -370,8 +370,20 @@ public:
         // multiple compile_string calls with the same name overwrite each
         // other (intended for live-edit workflows).
         cardinal::string fname = cardinal::string(logical_name) + ".cpp";
-        // Sanitise: strip path separators so the user can't escape the cache.
-        for (char& c : fname) if (c == '/' || c == '\\') c = '_';
+        // Sanitise: strip path separators AND the Windows drive-letter
+        // colon so the caller can't escape the cache. The colon is the
+        // sneaky one: on Windows, `fs::path::operator/` with a right-
+        // hand-side that has its own root_name (e.g. "D:bar") REPLACES
+        // the left side's root_name per [fs.path.append]/4. So
+        //   fs::path("C:\\cppscript_cache") / "D:bar.cpp"  →  "D:bar.cpp"
+        // — the right side wins, the cache_dir is silently discarded,
+        // and the staged file ends up wherever the caller's drive letter
+        // points (no error, no warning). With ':' coerced to '_' the
+        // appended path is no longer drive-letter'd and `/` correctly
+        // joins under cache_dir. (POSIX systems are unaffected — ':' has
+        // no special meaning in std::filesystem on Linux.)
+        for (char& c : fname)
+            if (c == '/' || c == '\\' || c == ':') c = '_';
         fs::path src = fs::path(desc_.cache_dir) / fname;
         cardinal::ofstream f(src, cardinal::ios::binary | cardinal::ios::trunc);
         if (!f) return {};
