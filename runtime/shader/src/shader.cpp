@@ -51,6 +51,14 @@ bool read_all(const cardinal::string& path, cardinal::vector<u8>& out) {
     if (!f) return false;
     f.seekg(0, cardinal::ios::end);
     const auto n = f.tellg();
+    // Reject tellg failure (returns -1, e.g. on a non-seekable named
+    // pipe or char device path). Without this, `static_cast<usize>(-1)`
+    // wraps to SIZE_MAX → resize requests ~16 EiB → bad_alloc kills
+    // the compiler thread. Compiler::watch (line 229) takes a path
+    // from any caller — a script that registers a pipe path as a
+    // shader watch would hit this. Same defensive guard cook::
+    // read_all uses (matching tests/dist/main.cpp:75's read_bytes).
+    if (n < 0) return false;
     f.seekg(0, cardinal::ios::beg);
     out.resize(static_cast<usize>(n));
     f.read(reinterpret_cast<char*>(out.data()), n);

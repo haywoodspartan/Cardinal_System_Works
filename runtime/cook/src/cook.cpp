@@ -481,6 +481,15 @@ bool read_all(const cardinal::string& path, cardinal::vector<u8>& out) {
     if (!f) return false;
     f.seekg(0, cardinal::ios::end);
     const cardinal::streamsize n = f.tellg();
+    // tellg returns -1 on stream error — e.g. a non-seekable path (named
+    // pipe, char device) that opened OK but doesn't support seek. The
+    // raw `static_cast<usize>(n)` below would wrap -1 to SIZE_MAX → the
+    // resize requests ~16 EiB and bad_alloc kills the cooker. The
+    // shipped Cardinal pipeline only feeds regular files through cook,
+    // but the contract should still reject the hostile path cleanly.
+    // Same guard tests/dist/main.cpp:75 already uses on its read_bytes
+    // helper; bring the runtime up to match.
+    if (n < 0) return false;
     f.seekg(0, cardinal::ios::beg);
     out.resize(static_cast<usize>(n));
     f.read(reinterpret_cast<char*>(out.data()), n);
