@@ -215,27 +215,48 @@ void Dispatcher::tick() {
     }
 
     // 2) Drain completions and fire callbacks (outside the lock).
-    std::vector<Impl::Done> drained;
+    // The cancellation lookup MUST happen under impl_->mtx — Dispatcher::
+    // cancel and cancel_tag insert into impl_->cancelled_handles under the
+    // lock from arbitrary caller threads. Reading the unordered_set's
+    // bucket structure via count() concurrently with insert() is a data
+    // race (std::unordered_set is not thread-safe), which is UB on the
+    // container. Pre-resolve `cancelled` for each drained item while
+    // we hold the lock; the user on_done callback then fires off-lock
+    // (same lock-release-before-user-callback discipline as cppscript
+    // 92ba1b5 and audio ff1acdf — handler may call back into
+    // Dispatcher::cancel / submit / stats, all of which take mtx).
+    struct DrainedItem {
+        Impl::Done d;
+        bool       cancelled;
+    };
+    std::vector<DrainedItem> drained;
     {
         std::lock_guard<std::mutex> lg(impl_->mtx);
-        drained.swap(impl_->done_queue);
+        drained.reserve(impl_->done_queue.size());
+        for (auto& d : impl_->done_queue) {
+            DrainedItem item;
+            item.cancelled = impl_->cancelled_handles.count(d.handle) > 0;
+            item.d         = std::move(d);
+            drained.push_back(std::move(item));
+        }
+        impl_->done_queue.clear();
+        // Compact the cancelled set under the SAME lock — reading its
+        // size() outside was the other half of the race. Doing it here
+        // also avoids re-locking later.
+        if (impl_->cancelled_handles.size() > 512) {
+            impl_->cancelled_handles.clear();
+        }
     }
-    for (auto& d : drained) {
-        const bool was_cancelled = impl_->cancelled_handles.count(d.handle) > 0;
-        if (!was_cancelled) {
-            if (d.ok) {
+    for (auto& it : drained) {
+        if (!it.cancelled) {
+            if (it.d.ok) {
                 impl_->requests_completed.fetch_add(1, std::memory_order_relaxed);
-                impl_->bytes_completed.fetch_add(d.bytes.size(), std::memory_order_relaxed);
+                impl_->bytes_completed.fetch_add(it.d.bytes.size(), std::memory_order_relaxed);
             } else {
                 impl_->requests_failed.fetch_add(1, std::memory_order_relaxed);
             }
-            if (d.req.on_done) d.req.on_done(d.bytes);
+            if (it.d.req.on_done) it.d.req.on_done(it.d.bytes);
         }
-    }
-    // Compact the cancelled set so it doesn't grow unbounded.
-    if (impl_->cancelled_handles.size() > 512) {
-        std::lock_guard<std::mutex> lg(impl_->mtx);
-        impl_->cancelled_handles.clear();
     }
 
     const auto t1 = clock::now();
