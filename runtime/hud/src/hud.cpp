@@ -3,6 +3,7 @@
 #include <imgui.h>
 
 #include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/cmath.hpp>       // cardinal::isfinite
 #include <cardinal/core/utility.hpp>
 
 namespace cardinal::hud {
@@ -38,6 +39,14 @@ void Hud::bar(float x, float y, float w, float h,
               float fill_fraction,
               Color fg, Color bg) noexcept
 {
+    // NaN-blind clamps: NaN fill_fraction passes both `< 0.0f` and
+    // `> 1.0f` (unordered-false), then `if (fill_fraction > 0.0f)`
+    // below also unordered-false → foreground rect is SILENTLY
+    // SKIPPED. The bar renders only its background + border with no
+    // fill, giving the user "the bar disappeared" mystery. Sanitize
+    // up-front so a NaN reads as empty (0.0) — the visible-but-empty
+    // state matches the negative case.
+    if (!cardinal::isfinite(fill_fraction)) fill_fraction = 0.0f;
     if (fill_fraction < 0.0f) fill_fraction = 0.0f;
     if (fill_fraction > 1.0f) fill_fraction = 1.0f;
     // Background.
@@ -108,7 +117,16 @@ void Hud::hit_marker(float cx, float cy, float size, Color c) noexcept
 }
 
 void Hud::damage_flash(float intensity, Color c) noexcept {
-    if (intensity <= 0.0f) return;
+    // `intensity <= 0.0f` is NaN-blind (NaN <= 0 is unordered-false),
+    // so NaN intensity flowed through to:
+    //   p.col.a = static_cast<u8>(static_cast<float>(c.a) * NaN);
+    // The float→int cast on a NaN source is UNDEFINED BEHAVIOR in
+    // C++ (MSVC produces implementation-defined garbage — typically
+    // 0 or 0x80000000-truncated). Reject non-finite alongside the
+    // existing <=0 short-circuit. Then also clamp the FINITE intensity
+    // to [0, 1] so a runaway value can't overflow the u8 cast either.
+    if (!cardinal::isfinite(intensity) || intensity <= 0.0f) return;
+    if (intensity > 1.0f) intensity = 1.0f;
     Prim p{};
     p.kind = PrimKind::Vignette;
     p.col  = c;
@@ -150,15 +168,27 @@ void Hud::minimap(float x, float y, float side_px,
 }
 
 void Hud::push_toast(const cardinal::string& message, ToastOpts opts) {
+    // NaN/Inf opts.duration_s stored verbatim would make t.remaining
+    // = NaN. Then in tick_toasts: `NaN - dt = NaN` → `NaN <= 0.0f`
+    // unordered-false → IMMORTAL toast (toasts_ grows without bound).
+    // Sanitize at the ingress — fallback to the struct default (2.5
+    // — matches ToastOpts::duration_s in hud.hpp:88).
+    float dur = opts.duration_s;
+    if (!cardinal::isfinite(dur)) dur = 2.5f;
     Toast t{};
     t.message  = message;
-    t.duration = opts.duration_s;
-    t.remaining = opts.duration_s;
+    t.duration = dur;
+    t.remaining = dur;
     t.color    = opts.color;
     toasts_.push_back(cardinal::move(t));
 }
 
 void Hud::tick_toasts(float dt) noexcept {
+    // NaN dt poisons every toast's `remaining` field:
+    //   t.remaining -= NaN → NaN; `NaN <= 0.0f` false → never removed.
+    // Same accumulator-poison shape as anim/cine/sky/ai. Skip the
+    // bad frame; subsequent finite-dt ticks decrement normally.
+    if (!cardinal::isfinite(dt)) return;
     for (auto& t : toasts_) t.remaining -= dt;
     toasts_.erase(cardinal::remove_if(toasts_.begin(), toasts_.end(),
         [](const Toast& t){ return t.remaining <= 0.0f; }),

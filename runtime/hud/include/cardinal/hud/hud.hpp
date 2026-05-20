@@ -98,6 +98,10 @@ public:
     // top of every window).
     void render(void* imgui_draw_list) noexcept;
 
+    // ---- Inspection (status panel + regression tests) -------------
+    cardinal::usize prim_count()  const noexcept { return prims_.size(); }
+    cardinal::usize toast_count() const noexcept { return toasts_.size(); }
+
 private:
     struct Toast {
         cardinal::string message;
