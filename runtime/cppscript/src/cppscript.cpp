@@ -176,6 +176,19 @@ bool compiler_is_msvc_style(const cardinal::string& path) {
     return base == "cl.exe" || base == "clang-cl.exe";
 }
 
+// Cap on captured compiler output. A pathological compiler — broken
+// preprocessor loop, runaway template-instantiation diagnostic — can
+// emit gigabytes of text to stdout/stderr; without a cap the runner
+// thread grows out_log unboundedly until bad_alloc. 16 MiB easily
+// covers the worst legitimate cl.exe diagnostic burst (typical fails
+// stay under a few MB even with 1000s of errors). Past the cap we
+// keep DRAINING the pipe (discard further bytes) so the child can
+// finish writing and exit cleanly — otherwise the writer blocks once
+// the OS pipe buffer fills, the parent's WaitForSingleObject below
+// hangs forever, and the compile worker thread is stuck.
+inline constexpr cardinal::usize kMaxSubprocessLogBytes =
+    16ull * 1024ull * 1024ull;
+
 // Run a child process; capture stdout+stderr together; block until exit.
 // Returns the process exit code (-1 on spawn failure).
 i64 run_subprocess_capturing(const cardinal::string& exe,
@@ -240,9 +253,22 @@ i64 run_subprocess_capturing(const cardinal::string& exe,
 
     // Drain stdout+stderr in this thread. The child writes to `wr` (now
     // closed in the parent); reading `rd` returns EOF when the child exits.
+    // Cap out_log at kMaxSubprocessLogBytes but keep draining past the
+    // cap — see the constant's doc comment for why we can't just stop.
     char buf[4096]; DWORD n = 0;
+    bool truncated = false;
     while (ReadFile(rd, buf, sizeof(buf), &n, nullptr) && n > 0) {
-        out_log.append(buf, n);
+        if (out_log.size() < kMaxSubprocessLogBytes) {
+            const cardinal::usize room = kMaxSubprocessLogBytes - out_log.size();
+            const cardinal::usize take = (n < room) ? n : room;
+            out_log.append(buf, take);
+            if (!truncated && out_log.size() >= kMaxSubprocessLogBytes) {
+                out_log.append("\n[cppscript] compile log truncated at 16 MiB — continuing to drain pipe\n");
+                truncated = true;
+            }
+        }
+        // After the cap: drop the bytes on the floor, keep reading so
+        // the child can flush and exit.
     }
     CloseHandle(rd);
 
@@ -279,8 +305,21 @@ i64 run_subprocess_capturing(const cardinal::string& exe,
         return -1;
     }
 
+    // Same cap as the Windows branch — see kMaxSubprocessLogBytes.
     char buf[4096]; ssize_t n;
-    while ((n = read(pipe_fd[0], buf, sizeof(buf))) > 0) out_log.append(buf, static_cast<size_t>(n));
+    bool truncated = false;
+    while ((n = read(pipe_fd[0], buf, sizeof(buf))) > 0) {
+        const cardinal::usize got = static_cast<cardinal::usize>(n);
+        if (out_log.size() < kMaxSubprocessLogBytes) {
+            const cardinal::usize room = kMaxSubprocessLogBytes - out_log.size();
+            const cardinal::usize take = (got < room) ? got : room;
+            out_log.append(buf, take);
+            if (!truncated && out_log.size() >= kMaxSubprocessLogBytes) {
+                out_log.append("\n[cppscript] compile log truncated at 16 MiB — continuing to drain pipe\n");
+                truncated = true;
+            }
+        }
+    }
     close(pipe_fd[0]);
     int wstatus = 0;
     waitpid(pid, &wstatus, 0);
@@ -612,8 +651,23 @@ private:
                 log = "[cppscript] _popen failed for compile pipeline\n";
                 rc = -1;
             } else {
+                // Same 16 MiB cap as run_subprocess_capturing — past the
+                // cap, fgets keeps reading to drain the pipe so _pclose
+                // doesn't block on a child waiting for buffer space.
                 char buf[4096];
-                while (cardinal::fgets(buf, sizeof(buf), f) != nullptr) log += buf;
+                bool truncated = false;
+                while (cardinal::fgets(buf, sizeof(buf), f) != nullptr) {
+                    if (log.size() < kMaxSubprocessLogBytes) {
+                        const cardinal::usize ll = cardinal::strlen(buf);
+                        const cardinal::usize room = kMaxSubprocessLogBytes - log.size();
+                        const cardinal::usize take = (ll < room) ? ll : room;
+                        log.append(buf, take);
+                        if (!truncated && log.size() >= kMaxSubprocessLogBytes) {
+                            log.append("\n[cppscript] compile log truncated at 16 MiB — continuing to drain pipe\n");
+                            truncated = true;
+                        }
+                    }
+                }
                 int term = _pclose(f);
                 rc = static_cast<i64>(term);
             }
