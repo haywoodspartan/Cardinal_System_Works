@@ -24,6 +24,7 @@
 
 #include <cardinal/core/types.hpp>        // function/string/unique_ptr/shared_ptr
 #include <cardinal/core/algorithm.hpp>    // cardinal::lower_bound
+#include <cardinal/core/cmath.hpp>        // cardinal::isfinite
 #include <cardinal/core/containers.hpp>   // cardinal::vector
 #include <cardinal/core/utility.hpp>      // cardinal::move
 #include <cardinal/scene/math.hpp>
@@ -49,9 +50,27 @@ struct Curve {
 
     void add_key(float t, const T& v, InterpMode m = InterpMode::Linear) {
         Key<T> k{}; k.time = t; k.value = v; k.mode = m;
-        // Insert sorted by time.
+        // Insert sorted by time. NaN-safe strict-weak-ordering:
+        // `a.time < b.time` is NaN-blind both ways → (NaN, x) is
+        // treated as equivalent while (x, y) with x<y orders
+        // strictly → transitivity-of-equivalence broken → std::sort
+        // / std::lower_bound on the resulting non-partitioned range
+        // is UB (same SWO class as sky 4ff85a8 / level 4b08e0c).
+        // Realistic ingress: curve_editor double-click adds a key
+        // at t = t_of_x(MousePos.x) with no max(0, ...) clamp; a
+        // deserializer with sscanf("%f", ...) accepts "nan"/"inf"
+        // verbatim. Promote NaN to "greater than all finites":
+        // every NaN-time key sinks to the tail as a single
+        // equivalence class, the vector stays partitioned, and
+        // sample()'s downstream lower_bound (anim.cpp:121) keeps
+        // the correct segment behaviour with finite t.
         auto it = cardinal::lower_bound(keys.begin(), keys.end(), k,
-            [](const Key<T>& a, const Key<T>& b){ return a.time < b.time; });
+            [](const Key<T>& a, const Key<T>& b){
+                const bool af = cardinal::isfinite(a.time);
+                const bool bf = cardinal::isfinite(b.time);
+                if (af && bf) return a.time < b.time;
+                return af && !bf;     // finite < NaN; NaN ~ NaN
+            });
         keys.insert(it, k);
     }
 

@@ -291,6 +291,48 @@ void test_nonfinite_time() {
     CHECK(ap(pp.sample(qnan), 0.0f));
     CHECK(ap(pp.sample(inf),  0.0f));
 
+    // add_key with a NaN time exercises the lower_bound comparator
+    // (anim.hpp). The old `a.time < b.time` predicate violates
+    // strict-weak-ordering when either side is NaN — NaN unordered
+    // to everything → (NaN, x) is "equivalent" while (x, y) with
+    // x<y orders strictly → transitivity-of-equivalence broken →
+    // std::sort / std::lower_bound on the resulting non-partitioned
+    // range is UB. Realistic ingress: curve_editor double-click
+    // adds at `t_of_x(MousePos.x)` with no max(0,...) clamp. The
+    // NaN-safe SWO (finite < NaN; NaN ~ NaN) sinks every NaN key
+    // to the TAIL as a single equivalence class. Insert order
+    // matters: alternate finite / NaN inserts to maximise the
+    // chance of the buggy comparator landing a NaN in the
+    // interior, which would defeat sample()'s downstream
+    // segment-lookup partition assumption.
+    an::Curve<float> nanc;
+    nanc.add_key(3.0f,  3.0f);
+    nanc.add_key(qnan,  -1.0f);                    // NaN → tail
+    nanc.add_key(1.0f,  1.0f);                     // finite → before NaN
+    nanc.add_key(qnan, -2.0f);                     // NaN → tail (after first NaN)
+    nanc.add_key(2.0f,  2.0f);                     // finite → between 1 and 3
+    nanc.add_key(0.0f,  0.0f);                     // finite → front
+    CHECK(nanc.keys.size() == sz(6));
+    // Finite prefix must be ascending and contain exactly the four
+    // finite inputs in canonical order.
+    CHECK(ap(nanc.keys[0].time, 0.0f));
+    CHECK(ap(nanc.keys[1].time, 1.0f));
+    CHECK(ap(nanc.keys[2].time, 2.0f));
+    CHECK(ap(nanc.keys[3].time, 3.0f));
+    // NaN tail.
+    CHECK(!(nanc.keys[4].time == nanc.keys[4].time));   // NaN
+    CHECK(!(nanc.keys[5].time == nanc.keys[5].time));   // NaN
+    // sample() at finite t must hit the finite-prefix segments,
+    // unaffected by the NaN tail (duration() returns back().time
+    // which is now NaN, but sample's pre-validation at anim.cpp:117
+    // — `if (t != t) return keys.front().value;` — handles t=NaN,
+    // and finite t reaches lower_bound which terminates at the
+    // first NaN key).
+    CHECK(ap(nanc.sample(0.0f),  0.0f));
+    CHECK(ap(nanc.sample(1.5f),  1.5f));            // linear-lerp 1 → 2
+    CHECK(ap(nanc.sample(2.5f),  2.5f));            // linear-lerp 2 → 3
+    CHECK(ap(nanc.sample(qnan),  0.0f));            // clamp-to-front
+
     // Player fed a NaN dt: the Player::tick GUARD (root-cause fix —
     // companion to d8153cc's downstream Curve::sample defense) skips
     // the bad frame entirely. time_ is NOT poisoned, clip_->apply is

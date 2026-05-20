@@ -123,10 +123,25 @@ void draw(cardinal::anim::Curve<float>* curve, const char* title, bool* p_open) 
             k.value = v_of_y(io.MousePos.y);
         }
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-            // Re-sort by time after a drag.
+            // Re-sort by time after a drag. NaN-safe SWO (same as
+            // anim::Curve::add_key) — drag clamps via max(0.0f, ...)
+            // so the drag-write path is NaN-safe, but the per-key
+            // inspector below uses ImGui::DragFloat which lets the
+            // user type "nan" into the value field (DragFloat clamps
+            // the slider drag motion but not free-form text input);
+            // a previously-NaN key authored elsewhere (deserializer,
+            // scripting, direct vector access) survives until this
+            // sort runs. SWO-violating comparator → std::sort UB on
+            // MSVC's introsort (editor hang / heap corruption). Same
+            // shape as sky 4ff85a8 / level 4b08e0c.
             if (drag_active) {
                 cardinal::sort(curve->keys.begin(), curve->keys.end(),
-                    [](const auto& a, const auto& b){ return a.time < b.time; });
+                    [](const auto& a, const auto& b){
+                        const bool af = cardinal::isfinite(a.time);
+                        const bool bf = cardinal::isfinite(b.time);
+                        if (af && bf) return a.time < b.time;
+                        return af && !bf;   // finite < NaN; NaN ~ NaN
+                    });
             }
             drag_key = -1; drag_active = false;
         }
