@@ -364,6 +364,27 @@ private:
         if (!read_with_timeout_(&opcode, sizeof(opcode), timeout_ms)) return false;
         u32 plen = 0;
         if (!read_with_timeout_(&plen, sizeof(plen), timeout_ms)) return false;
+        // Sanity-cap untrusted payload size. plen comes off the pipe from
+        // the runner process; the runner is OUR binary but the WHOLE
+        // POINT of the subprocess sandbox is to contain a compromised /
+        // crashed runner (a malicious plugin loaded by the runner could
+        // corrupt its proto state and send arbitrary frames). Without
+        // a cap, plen = 0xFFFFFFFF → payload.resize(4 GiB) → either
+        // bad_alloc (uncaught, terminates the HOST) or a successful
+        // 4 GiB allocation that pins the engine's working set for one
+        // crashed sandbox. 64 MiB easily covers every legitimate
+        // protocol payload — largest by far is OP_ATTACH_VM with the
+        // module bytes, and even a generous bytecode module fits in
+        // single-digit MB. Same hostile-data sanity-cap shape as
+        // pack::Archive::open's entry_count cap (pack.cpp:237) and the
+        // PNG IHDR dimension cap in cook (7f02c8b).
+        constexpr u32 kMaxFrameBytes = 64u * 1024u * 1024u;
+        if (plen > kMaxFrameBytes) {
+            cardinal::log::errorf("sandbox",
+                "runner sent oversized frame (op=0x%X, plen=%u) — rejecting",
+                opcode, plen);
+            return false;
+        }
         payload.resize(plen);
         if (plen > 0 && !read_with_timeout_(payload.data(), plen, timeout_ms))
             return false;
