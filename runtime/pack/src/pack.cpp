@@ -141,7 +141,7 @@ bool Builder::finalize(cardinal::string* error_out) {
     const u64 total_size = data_cursor_ + idx.size();
 
     // Header — seek back to file start and write.
-    cardinal::fseek(static_cast<FILE*>(file_handle_), 0, SEEK_SET);
+    cardinal::fseek64(static_cast<FILE*>(file_handle_), 0, SEEK_SET);
     cardinal::vector<u8> hdr;
     hdr.reserve(kPackHeaderBytes);
     hdr.insert(hdr.end(), kPackMagic, kPackMagic + 4);
@@ -184,9 +184,19 @@ cardinal::shared_ptr<Archive> Archive::open(const cardinal::string& path,
         if (error_out) *error_out = "could not open " + path;
         return nullptr;
     }
-    cardinal::fseek(f, 0, SEEK_END);
-    const u64 sz = static_cast<u64>(cardinal::ftell(f));
-    cardinal::fseek(f, 0, SEEK_SET);
+    // 64-bit offsets throughout: pack archives commonly exceed 2 GiB
+    // in shipping builds, and std::fseek/ftell's `long` would silently
+    // truncate to 31 bits on Windows LLP64 (parked-supervised item #1).
+    // cardinal::fseek64 / ftell64 dispatch to _fseeki64 / fseeko.
+    cardinal::fseek64(f, 0, SEEK_END);
+    const i64 sz_signed = cardinal::ftell64(f);
+    if (sz_signed < 0) {
+        if (error_out) *error_out = "ftell64 failed";
+        cardinal::fclose(f);
+        return nullptr;
+    }
+    const u64 sz = static_cast<u64>(sz_signed);
+    cardinal::fseek64(f, 0, SEEK_SET);
     if (sz < kPackHeaderBytes) {
         if (error_out) *error_out = "file too small for header";
         cardinal::fclose(f);
@@ -214,8 +224,9 @@ cardinal::shared_ptr<Archive> Archive::open(const cardinal::string& path,
         return nullptr;
     }
 
-    // Read index.
-    cardinal::fseek(f, static_cast<long>(index_offset), SEEK_SET);
+    // Read index. index_offset is u64; pass directly via fseek64 so
+    // the high bits aren't lost above 2 GiB.
+    cardinal::fseek64(f, static_cast<i64>(index_offset), SEEK_SET);
     // entry_count is untrusted: a corrupt header could request a
     // multi-GB reserve and OOM the process. Each on-disk entry is at
     // least 30 bytes (2 key-length + 28 fixed tail; the key may be
@@ -280,8 +291,8 @@ bool Archive::load_blocking(const cardinal::string& key,
     // a huge size would otherwise bad_alloc, and a bogus offset would
     // seek/read out of range. (offset <= fsz checked first so the
     // fsz - offset subtraction can't underflow.)
-    cardinal::fseek(f, 0, SEEK_END);
-    const long endp = cardinal::ftell(f);
+    cardinal::fseek64(f, 0, SEEK_END);
+    const i64 endp = cardinal::ftell64(f);
     if (endp < 0) {
         cardinal::fclose(f);
         if (error_out) *error_out = "could not size " + path_;
@@ -293,7 +304,7 @@ bool Archive::load_blocking(const cardinal::string& key,
         if (error_out) *error_out = "entry out of range: " + key;
         return false;
     }
-    cardinal::fseek(f, static_cast<long>(e->offset), SEEK_SET);
+    cardinal::fseek64(f, static_cast<i64>(e->offset), SEEK_SET);
     out_bytes.resize(static_cast<usize>(e->size));
     const usize got = cardinal::fread(out_bytes.data(), 1, out_bytes.size(), f);
     cardinal::fclose(f);
@@ -325,8 +336,8 @@ Archive::load_async(const cardinal::string& key) const
         // Same untrusted-index guard as load_blocking: bound offset+size
         // by the real file size before resize() (returns empty on a
         // corrupt entry rather than bad_alloc / OOB read).
-        cardinal::fseek(fp, 0, SEEK_END);
-        const long endp = cardinal::ftell(fp);
+        cardinal::fseek64(fp, 0, SEEK_END);
+        const i64 endp = cardinal::ftell64(fp);
         if (endp < 0 ||
             desc_copy.offset > static_cast<u64>(endp) ||
             desc_copy.size   > static_cast<u64>(endp) - desc_copy.offset) {
@@ -334,7 +345,7 @@ Archive::load_async(const cardinal::string& key) const
             g_streams_inflight.fetch_sub(1, cardinal::memory_order_relaxed);
             return bytes;
         }
-        cardinal::fseek(fp, static_cast<long>(desc_copy.offset), SEEK_SET);
+        cardinal::fseek64(fp, static_cast<i64>(desc_copy.offset), SEEK_SET);
         bytes.resize(static_cast<usize>(desc_copy.size));
         cardinal::fread(bytes.data(), 1, bytes.size(), fp);
         cardinal::fclose(fp);

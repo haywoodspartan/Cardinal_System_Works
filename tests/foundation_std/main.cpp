@@ -167,6 +167,65 @@ void test_concurrency() {
     CHECK(from_thread == 99);
 }
 
+// ---- cardinal::fseek64 / cardinal::ftell64 (64-bit file offsets) ---
+// std::fseek / std::ftell use `long`, which is 32-bit on Windows LLP64
+// and on 32-bit Linux without _FILE_OFFSET_BITS=64. Offsets above 2 GiB
+// silently truncate (parked-supervised item #1 in feedback_integration_
+// coverage_map.md — pack archives, the actual >2GiB consumer, now use
+// the 64-bit wrappers). This test pins the API contract on a small
+// file: the return type is i64, SEEK_END/SET/CUR all work, and round-
+// tripping a position gives back exact bytes.
+void test_cstdio_offsets_64bit() {
+    namespace fs = cardinal::fs;
+    auto tmp = fs::temp_directory_path() / "cardinal_fseek64_test.bin";
+    {
+        cardinal::FILE* fw = cardinal::fopen(tmp.string().c_str(), "wb");
+        CHECK(fw != nullptr);
+        if (!fw) return;
+        // Write a tiny 16-byte signature so we can probe positions.
+        const cardinal::u8 buf[16] = { 'C','A','R','D', 0,1,2,3,4,5,6,7,8,9,10,11 };
+        cardinal::fwrite(buf, 1, 16, fw);
+        cardinal::fclose(fw);
+    }
+    cardinal::FILE* f = cardinal::fopen(tmp.string().c_str(), "rb");
+    CHECK(f != nullptr);
+    if (!f) return;
+
+    // SEEK_END then ftell64 = file size. Type is i64, NOT long.
+    CHECK(cardinal::fseek64(f, 0, SEEK_END) == 0);
+    cardinal::i64 sz = cardinal::ftell64(f);
+    CHECK(sz == 16);
+    // Trait: ftell64 must return i64 — if someone changes the return to
+    // long, this static_assert breaks the build.
+    static_assert(cardinal::is_same_v<decltype(cardinal::ftell64(f)),
+                                      cardinal::i64>,
+                  "cardinal::ftell64 must return i64");
+
+    // SEEK_SET to a precise position, read 4 bytes, verify.
+    CHECK(cardinal::fseek64(f, 4, SEEK_SET) == 0);
+    CHECK(cardinal::ftell64(f) == 4);
+    cardinal::u8 read[4] = {};
+    cardinal::fread(read, 1, 4, f);
+    CHECK(read[0] == 0 && read[1] == 1 && read[2] == 2 && read[3] == 3);
+
+    // SEEK_CUR relative from position 8 (post-read = 8).
+    CHECK(cardinal::ftell64(f) == 8);
+    CHECK(cardinal::fseek64(f, 4, SEEK_CUR) == 0);
+    CHECK(cardinal::ftell64(f) == 12);
+
+    // Negative SEEK_CUR — only meaningful on the 64-bit signed offset
+    // type. (std::fseek's `long` accepts negatives too, but the cast
+    // chain in pack.cpp's offset arithmetic was unsigned u64 → long
+    // which would have lost sign on >2 GiB values too. fseek64
+    // accepts i64 directly so the contract is clean.)
+    CHECK(cardinal::fseek64(f, -8, SEEK_CUR) == 0);
+    CHECK(cardinal::ftell64(f) == 4);
+
+    cardinal::fclose(f);
+    std::error_code ec;
+    fs::remove(tmp, ec);
+}
+
 // ---- chrono / filesystem ------------------------------------------
 void test_chrono_fs() {
     const auto t0 = cardinal::chrono::steady_clock::now();
@@ -192,6 +251,7 @@ int main() {
     test_numeric();
     test_cstr_charconv();
     test_concurrency();
+    test_cstdio_offsets_64bit();
     test_chrono_fs();
 
     if (g_fail == 0) {
