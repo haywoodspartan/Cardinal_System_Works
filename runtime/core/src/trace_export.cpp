@@ -41,7 +41,17 @@ std::mutex            g_mtx;
 std::vector<Event>    g_events;
 std::atomic<bool>     g_capturing{false};
 u32                   g_frames_remaining{0};
-u32                   g_frames_total{0};
+// g_frames_total is read OUTSIDE g_mtx by note_frame_boundary's early-
+// out at line 151 (per-frame hot path — locking each frame would dwarf
+// the work in the not-capturing case). begin_capture writes it under
+// the lock at line 54. Non-atomic concurrent access of those two
+// (read unlocked / write locked) is a data race per the C++ memory
+// model regardless of x86's atomic-aligned-u32 behaviour, so promote
+// to std::atomic with relaxed ordering — the locked writers stay
+// inside the lock, the unlocked reader gets a defined load. Same
+// shape as the data-race-on-shared-state vein (io 82604f9, budget
+// 033c642+c7c856d, audio a317126).
+std::atomic<u32>      g_frames_total{0};
 bool                  g_warned_full{false};
 
 }  // namespace
@@ -51,7 +61,7 @@ void begin_capture(u32 frame_budget) {
     g_events.clear();
     g_events.reserve(kMaxEvents);
     g_frames_remaining = frame_budget;
-    g_frames_total     = frame_budget;
+    g_frames_total.store(frame_budget, std::memory_order_relaxed);
     g_warned_full      = false;
     g_capturing.store(true, std::memory_order_release);
     cardinal::log::infof("trace",
@@ -103,7 +113,8 @@ bool end_capture(const std::string& output_path) {
 
     cardinal::log::infof("trace",
         "wrote %zu events to %s (%u frames, %s)",
-        g_events.size(), output_path.c_str(), g_frames_total,
+        g_events.size(), output_path.c_str(),
+        g_frames_total.load(std::memory_order_relaxed),
         g_warned_full ? "BUFFER WAS FULL — output truncated" : "complete");
     g_events.clear();
     return true;
@@ -148,7 +159,14 @@ void record_scope(const char* name, i64 start_ns, i64 end_ns, u32 tid) noexcept 
 
 void note_frame_boundary() noexcept {
     if (!g_capturing.load(std::memory_order_acquire)) return;
-    if (g_frames_total == 0) return;     // unbounded — wait for end_capture
+    // Unlocked relaxed load — paired with the locked store in
+    // begin_capture (line 54). Sufficient: the only sequence we need
+    // to preserve is "if g_capturing is true and g_frames_total has
+    // been observed > 0, then the locked block sees a coherent
+    // g_frames_remaining" — which is guaranteed because g_capturing
+    // is acquire/release-ordered and the lock then serialises every
+    // remaining access.
+    if (g_frames_total.load(std::memory_order_relaxed) == 0) return;
     std::lock_guard<std::mutex> lg(g_mtx);
     if (g_frames_remaining == 0) return;
     if (--g_frames_remaining == 0) {
@@ -156,7 +174,7 @@ void note_frame_boundary() noexcept {
         // We don't write here because we don't know where to put it.
         cardinal::log::infof("trace",
             "frame budget reached (%u frames, %zu events) — call end_capture(\"path.json\")",
-            g_frames_total, g_events.size());
+            g_frames_total.load(std::memory_order_relaxed), g_events.size());
     }
 }
 
