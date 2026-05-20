@@ -1178,32 +1178,48 @@ public:
                 gizmo_handle_active_ < 0)
             {
                 if (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4.0f)) {
+                    if (!marquee_dragging_) {
+                        // First frame of the drag — pin to this panel so
+                        // the release-commit converts NDC using the same
+                        // image_pos/avail the drag started in.
+                        marquee_viewport_id_ = viewport_id;
+                        marquee_dragging_    = true;
+                    }
+                    // Live-draw in any hovered panel (visual continuity);
+                    // ImGui clips to the window when the rect spans panels.
                     const ImVec2 dd = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
                     const ImVec2 cur = io.MousePos;
                     const ImVec2 a0{ cur.x - dd.x, cur.y - dd.y };
                     ImDrawList* dl = ImGui::GetWindowDrawList();
                     dl->AddRectFilled(a0, cur, IM_COL32(120,170,255,40));
                     dl->AddRect      (a0, cur, IM_COL32(150,190,255,200));
-                    marquee_dragging_ = true;
                 } else if (marquee_dragging_ &&
                            ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-                    const ImVec2 dd = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
-                    const ImVec2 cur = io.MousePos;
-                    const ImVec2 a0{ cur.x - dd.x, cur.y - dd.y };
-                    auto ndc = [&](float px, float py, float& nx, float& ny) {
-                        nx =        ((px - image_pos.x) / avail.x) * 2.0f - 1.0f;
-                        ny = 1.0f - ((py - image_pos.y) / avail.y) * 2.0f;
-                    };
-                    float ax, ay, bx, by;
-                    ndc(a0.x, a0.y, ax, ay);
-                    ndc(cur.x, cur.y, bx, by);
-                    vp_pick_.marquee          = true;
-                    vp_pick_.marquee_min_x    = cardinal::min(ax, bx);
-                    vp_pick_.marquee_max_x    = cardinal::max(ax, bx);
-                    vp_pick_.marquee_min_y    = cardinal::min(ay, by);
-                    vp_pick_.marquee_max_y    = cardinal::max(ay, by);
-                    vp_pick_.marquee_additive = ctrl_or_shift;
-                    marquee_dragging_         = false;
+                    if (viewport_id == marquee_viewport_id_) {
+                        // Originator commits the rect using its own
+                        // image_pos/avail — the only frame in which `a0`
+                        // (drag-start in OS desktop coords) → panel-local
+                        // NDC is meaningful.
+                        const ImVec2 dd = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
+                        const ImVec2 cur = io.MousePos;
+                        const ImVec2 a0{ cur.x - dd.x, cur.y - dd.y };
+                        auto ndc = [&](float px, float py, float& nx, float& ny) {
+                            nx =        ((px - image_pos.x) / avail.x) * 2.0f - 1.0f;
+                            ny = 1.0f - ((py - image_pos.y) / avail.y) * 2.0f;
+                        };
+                        float ax, ay, bx, by;
+                        ndc(a0.x, a0.y, ax, ay);
+                        ndc(cur.x, cur.y, bx, by);
+                        vp_pick_.marquee          = true;
+                        vp_pick_.marquee_min_x    = cardinal::min(ax, bx);
+                        vp_pick_.marquee_max_x    = cardinal::max(ax, bx);
+                        vp_pick_.marquee_min_y    = cardinal::min(ay, by);
+                        vp_pick_.marquee_max_y    = cardinal::max(ay, by);
+                        vp_pick_.marquee_additive = ctrl_or_shift;
+                    }
+                    // Always clear — cross-panel release just cancels.
+                    marquee_dragging_    = false;
+                    marquee_viewport_id_ = 0xFFFFFFFFu;
                 }
             }
 
@@ -4097,6 +4113,16 @@ private:
     // ----- Multi-selection set (Studio-owned; host reads back) ----------
     cardinal::vector<u32>                         selection_{};
     bool                                     marquee_dragging_{false};
+    // Pin marquee box-select to the panel where it started. The marquee
+    // block is gated by IsItemHovered, so on cross-panel drags the panel
+    // currently under the cursor processes the live rect AND the
+    // release commit — but `a0 = cur - dd` is the drag-start point in
+    // OS desktop coords (originally in the originator panel) and would
+    // be converted to NDC using the WRONG panel's image_pos, producing
+    // nonsense selection. Capture viewport_id on drag-start; only the
+    // originator commits on release. (Live-draw still happens in any
+    // hovered panel for visual continuity — ImGui clips to the window.)
+    u32                                      marquee_viewport_id_{0xFFFFFFFFu};
 
     // Asset-palette UI state — preserves filter text + collapsed groups
     // across frames.
