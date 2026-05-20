@@ -92,17 +92,35 @@ void Broker::tick(u32 sample_interval_ms) {
     snap.system  = impl_->monitor.last_system();
     snap.process = impl_->monitor.last_process();
 
-    // System tier — react to OS-wide pressure since other apps can squeeze us.
-    snap.system_pressure = memory::classify(
-        snap.system.load_percent,
-        impl_->thresholds[static_cast<u32>(Domain::System)]);
-
-    // GPU tier (if a query is bound).
+    // Snapshot all mutex-protected config under ONE lock acquire — the
+    // previous code read impl_->thresholds (lines 98 / 115) and impl_->
+    // forced (120-124) OUTSIDE impl_->mtx while set_thresholds /
+    // debug_force_pressure / debug_clear_force wrote them UNDER it.
+    // PressureThresholds is plain double pairs and forced is array<int,2>:
+    // a torn read could surface as a wrong pressure tier for one frame
+    // (forced[d] read mid-write between -1 and >=0 → classify ignored
+    // OR applied wrong; thresholds read between low_pct and high_pct
+    // updates → pressure crossing the wrong band). Same data-race-on-
+    // shared-state class as budget::last_snapshot 033c642 / audio::
+    // set_listener a317126 / io::cancelled_handles 82604f9. Folding
+    // gpu_query into the same snapshot also avoids the prior second
+    // lock acquire.
+    memory::PressureThresholds sys_thresh, gpu_thresh;
+    int forced_sys, forced_gpu;
     GpuQueryFn query;
     {
         std::lock_guard<std::mutex> lg(impl_->mtx);
-        query = impl_->gpu_query;
+        sys_thresh = impl_->thresholds[static_cast<u32>(Domain::System)];
+        gpu_thresh = impl_->thresholds[static_cast<u32>(Domain::Gpu)];
+        forced_sys = impl_->forced[0];
+        forced_gpu = impl_->forced[1];
+        query      = impl_->gpu_query;
     }
+
+    // System tier — react to OS-wide pressure since other apps can squeeze us.
+    snap.system_pressure = memory::classify(snap.system.load_percent, sys_thresh);
+
+    // GPU tier (if a query is bound).
     if (query) {
         const auto vs = query();
         snap.gpu_budget_bytes        = vs.budget_bytes;
@@ -111,17 +129,16 @@ void Broker::tick(u32 sample_interval_ms) {
             const double pct = 100.0 *
                 (static_cast<double>(vs.current_usage_bytes) /
                  static_cast<double>(vs.budget_bytes));
-            snap.gpu_pressure = memory::classify(
-                pct, impl_->thresholds[static_cast<u32>(Domain::Gpu)]);
+            snap.gpu_pressure = memory::classify(pct, gpu_thresh);
         }
     }
 
     // Apply forced overrides (tests / Studio panel).
-    if (impl_->forced[0] >= 0) {
-        snap.system_pressure = static_cast<memory::Pressure>(impl_->forced[0]);
+    if (forced_sys >= 0) {
+        snap.system_pressure = static_cast<memory::Pressure>(forced_sys);
     }
-    if (impl_->forced[1] >= 0) {
-        snap.gpu_pressure = static_cast<memory::Pressure>(impl_->forced[1]);
+    if (forced_gpu >= 0) {
+        snap.gpu_pressure = static_cast<memory::Pressure>(forced_gpu);
     }
 
     // Detect tier transitions & queue callbacks.
