@@ -238,7 +238,13 @@ cardinal::vector<Vertex> mirror(const cardinal::vector<Vertex>& in, u32 axis) {
 }
 
 cardinal::vector<Vertex> decimate_cluster(const cardinal::vector<Vertex>& in, float cell_size) {
-    if (cell_size <= 0.0f) return in;
+    // `cell_size <= 0.0f` is NaN-blind (NaN <= 0 is unordered-false).
+    // A NaN cell_size flowed to `p.x / NaN = NaN`, then `static_cast
+    // <i32>(NaN)` is UNDEFINED BEHAVIOR per [conv.fpint]p1. Same
+    // float→int UB class as tex_ops::fclamp_u8 (3bc8360). Reject non-
+    // finite alongside the existing positive-clamp; preserves the
+    // documented "cell<=0 → passthrough" semantic for sane inputs.
+    if (!cardinal::isfinite(cell_size) || cell_size <= 0.0f) return in;
     struct Key { i32 x, y, z; bool operator==(const Key& o) const { return x==o.x && y==o.y && z==o.z; } };
     struct KeyHash { usize operator()(const Key& k) const noexcept {
         return cardinal::hash<i64>{}( static_cast<i64>(k.x) * 73856093ll
@@ -246,9 +252,17 @@ cardinal::vector<Vertex> decimate_cluster(const cardinal::vector<Vertex>& in, fl
                                ^ static_cast<i64>(k.z) * 83492791ll); }};
     cardinal::unordered_map<Key, Vertex, KeyHash> bucket;
     auto key_of = [cell_size](const Vec3& p) {
-        return Key{ static_cast<i32>(cardinal::floor(p.x / cell_size)),
-                    static_cast<i32>(cardinal::floor(p.y / cell_size)),
-                    static_cast<i32>(cardinal::floor(p.z / cell_size)) };
+        // Sanitize per-component: a NaN vertex coord (caller bug —
+        // mesh importers sometimes hand back NaN positions on
+        // degenerate input) would re-introduce the UB cast even with
+        // cell_size finite. Map NaN → 0 (cell origin); a degenerate
+        // bucket is preferable to UB.
+        const float fx = cardinal::isfinite(p.x) ? p.x : 0.0f;
+        const float fy = cardinal::isfinite(p.y) ? p.y : 0.0f;
+        const float fz = cardinal::isfinite(p.z) ? p.z : 0.0f;
+        return Key{ static_cast<i32>(cardinal::floor(fx / cell_size)),
+                    static_cast<i32>(cardinal::floor(fy / cell_size)),
+                    static_cast<i32>(cardinal::floor(fz / cell_size)) };
     };
     cardinal::vector<Vertex> remap_v;
     remap_v.reserve(in.size());

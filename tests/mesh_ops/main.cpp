@@ -433,6 +433,42 @@ void test_no_mutation() {
     CHECK(buf_same(src, guard));                        // src untouched
 }
 
+// ---- decimate_cluster MUST NOT invoke UB on non-finite inputs ----
+// `cell_size <= 0.0f` was NaN-blind (NaN<=0 unordered-false), so a
+// NaN cell_size flowed into `p.x / NaN = NaN`, then `static_cast
+// <i32>(NaN)` is UB on the float→int cast. Same UB class fixed in
+// tex_ops::fclamp_u8 (3bc8360). Vertex positions could ALSO be NaN
+// (caller bug from a degenerate importer); the per-component
+// sanitize in key_of catches that.
+void test_decimate_nonfinite() {
+    volatile float z = 0.0f;
+    const float qnan = z / z;
+    const float inf  = 1.0f / z;
+
+    std::vector<Vertex> tri;
+    tri.push_back(vtx(0.5,0.5,0.5, 0,1,0, 1,1,1));
+    tri.push_back(vtx(5.5,0.5,0.5, 0,1,0, 1,1,1));
+    tri.push_back(vtx(0.5,5.5,0.5, 0,1,0, 1,1,1));
+
+    // Non-finite cell_size → same contract as cell<=0: passthrough.
+    CHECK(buf_same(mo::decimate_cluster(tri, qnan), tri));
+    CHECK(buf_same(mo::decimate_cluster(tri,  inf), tri));
+    CHECK(buf_same(mo::decimate_cluster(tri, -inf), tri));
+
+    // Finite cell_size BUT with NaN vertex positions — the per-
+    // component isfinite guard in key_of maps NaN coords to 0 so the
+    // floor → i32 cast stays defined. Result: the NaN-position vertex
+    // gets bucketed at cell origin; with the other 2 distinct verts,
+    // the triangle SURVIVES if all 3 fall in distinct cells, OR
+    // collapses if any 2 share. We just verify no crash / no UB.
+    std::vector<Vertex> bad;
+    bad.push_back(vtx(qnan, 0.5, 0.5, 0,1,0, 1,1,1));   // NaN x
+    bad.push_back(vtx( 5.5, 0.5, 0.5, 0,1,0, 1,1,1));
+    bad.push_back(vtx( 0.5, 5.5, 0.5, 0,1,0, 1,1,1));
+    auto r = mo::decimate_cluster(bad, 1.0f);            // must not UB-crash
+    CHECK(r.size() <= sz(3));                            // 0 or 3 (no UB)
+}
+
 }  // namespace
 
 int main() {
@@ -440,6 +476,7 @@ int main() {
     test_subdivide();
     test_mirror();
     test_decimate();
+    test_decimate_nonfinite();
     test_smooth();
     test_normals();
     test_bake();
