@@ -30,14 +30,24 @@ std::unordered_map<std::string, PhaseAccum> g_phase_running;     // current fram
 std::unordered_map<std::string, PhaseAccum> g_phase_published;   // last frame's snapshot
 
 // Worker stats — atomic-only access (no lock needed for the hot path).
+// logical_core / numa_node / tier are written ONCE by register_worker_
+// topology at JobSystem startup, then read by worker_stats() forever
+// after. In practice both happen on the main thread, so the race is
+// benign in current usage — but the comment above claims "atomic-only
+// access" and these three plain fields silently violate it. Promote
+// to atomics so the contract holds even if a future caller reads
+// stats mid-registration (e.g. UI panel polling worker_stats while
+// the engine is still booting). Same contract-enforcement shape as
+// input::axis (c6b053a) — fix the API to match the documented
+// invariant rather than the current accidental practice.
 struct WorkerAccum {
     std::atomic<u64> jobs{0};
     std::atomic<u64> steals{0};
     std::atomic<i64> busy_ns{0};
     std::atomic<i64> last_run_begin{0};
-    u32              logical_core{0};
-    u32              numa_node{0};
-    WorkerTier       tier{WorkerTier::Performance};
+    std::atomic<u32> logical_core{0};
+    std::atomic<u32> numa_node{0};
+    std::atomic<u8>  tier{static_cast<u8>(WorkerTier::Performance)};
 };
 constexpr u32         kMaxWorkers = 64;
 WorkerAccum           g_workers[kMaxWorkers]{};
@@ -267,9 +277,13 @@ namespace detail {
 
 void register_worker_topology(u32 wid, u32 lcore, WorkerTier tier, u32 numa_node) noexcept {
     if (wid >= kMaxWorkers) return;
-    g_workers[wid].logical_core = lcore;
-    g_workers[wid].tier         = tier;
-    g_workers[wid].numa_node    = numa_node;
+    // Relaxed stores — these fields are init-once during JobSystem
+    // startup, then read by worker_stats(). The acquire/release dance
+    // on g_worker_max_id (below) provides the happens-before edge a
+    // reader needs once it observes max_id >= wid.
+    g_workers[wid].logical_core.store(lcore, std::memory_order_relaxed);
+    g_workers[wid].tier.store(static_cast<u8>(tier), std::memory_order_relaxed);
+    g_workers[wid].numa_node.store(numa_node, std::memory_order_relaxed);
     u32 prev = g_worker_max_id.load(std::memory_order_relaxed);
     while (wid > prev &&
            !g_worker_max_id.compare_exchange_weak(prev, wid)) { /* spin */ }
@@ -315,10 +329,12 @@ std::vector<WorkerStats> worker_stats() {
     for (u32 i = 0; i <= max_id && i < kMaxWorkers; ++i) {
         WorkerStats s{};
         s.worker_id      = i;
-        s.logical_core   = g_workers[i].logical_core;
-        s.numa_node      = g_workers[i].numa_node;
-        s.tier           = g_workers[i].tier;
-        s.is_perf_core   = (g_workers[i].tier == WorkerTier::Performance);
+        s.logical_core   = g_workers[i].logical_core.load(std::memory_order_relaxed);
+        s.numa_node      = g_workers[i].numa_node.load(std::memory_order_relaxed);
+        const auto tier  = static_cast<WorkerTier>(
+            g_workers[i].tier.load(std::memory_order_relaxed));
+        s.tier           = tier;
+        s.is_perf_core   = (tier == WorkerTier::Performance);
         s.jobs_executed  = g_workers[i].jobs.load(std::memory_order_relaxed);
         s.bytes_stolen   = g_workers[i].steals.load(std::memory_order_relaxed);
         const double busy_s =
