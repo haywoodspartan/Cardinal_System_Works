@@ -116,7 +116,13 @@ public:
     // Force an immediate refresh + tier recompute (e.g. after a major load).
     void refresh();
 
-    const Snapshot& last_snapshot() const noexcept;
+    // Returns a SNAPSHOT-by-value (NOT a reference) — impl_->last_snapshot
+    // is written by tick() under impl_->mtx from any caller thread, so
+    // returning a reference races every concurrent reader against a
+    // partial write (Snapshot is ~64 B of POD across u64 / enum / nested
+    // structs; the tear is per-field). Snapshot is plain POD so the
+    // copy is noexcept.
+    Snapshot last_snapshot() const noexcept;
     std::vector<SubsystemReport> subsystem_reports() const;
 
     // For tests / Studio panel to apply synthetic pressure without OS state.

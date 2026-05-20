@@ -176,7 +176,17 @@ void Broker::refresh() {
     tick(0);
 }
 
-const Snapshot& Broker::last_snapshot() const noexcept {
+Snapshot Broker::last_snapshot() const noexcept {
+    // impl_->last_snapshot is written under impl_->mtx by tick() (line
+    // 138); returning a const reference let every concurrent reader
+    // observe a half-updated Snapshot (~64 B across u64 / enum /
+    // nested SystemSnapshot+ProcessSnapshot — field-level tearing on
+    // load_percent / pressure mid-update). Take the mutex and return
+    // a copy. Same shape as the io.cpp cancelled_handles race fix
+    // (82604f9): a read of mutex-protected state was happening
+    // outside the lock. The copy is trivial POD (no allocation, no
+    // throw) — noexcept stays.
+    std::lock_guard<std::mutex> lg(impl_->mtx);
     return impl_->last_snapshot;
 }
 
