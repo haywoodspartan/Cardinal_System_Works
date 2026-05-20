@@ -2,6 +2,7 @@
 
 #include <cardinal/actor/component.hpp>
 #include <cardinal/core/async.hpp>
+#include <cardinal/core/cmath.hpp>       // cardinal::isfinite
 #include <cardinal/core/log.hpp>
 
 #include <cardinal/core/algorithm.hpp>   // cardinal::remove_if/max
@@ -35,7 +36,18 @@ void SimWorld::pause()  { paused_ = true; }
 void SimWorld::resume() { paused_ = false; }
 void SimWorld::step_one_frame() { single_step_ = true; paused_ = true; }
 void SimWorld::set_time_scale(float s) {
-    if (s < 0.0f) s = 0.0f;
+    // The 3f3b05a fix guarded real_dt at the tick INGRESS, but missed
+    // this SECOND ingress: scaled_dt = real_dt * time_scale_ at line
+    // 134. A NaN time_scale_ poisons scaled_dt independently of how
+    // clean real_dt is, then `physics_accum_ += NaN` makes the
+    // accumulator NaN and `accum >= fixed_dt` stays false forever —
+    // physics never substeps, every body frozen — exactly the bug
+    // 3f3b05a was supposed to close. +Inf time_scale_ would make
+    // scaled_dt +Inf and pin physics at max_substeps every frame.
+    // The original `s < 0.0f` ordered compare let both through (NaN<0
+    // false, +Inf<0 false). cardinal::isfinite covers all three
+    // non-finite values; the negative-clamp intent is preserved.
+    if (!cardinal::isfinite(s) || s < 0.0f) s = 0.0f;
     time_scale_ = s;
 }
 bool  SimWorld::paused()     const noexcept { return paused_; }

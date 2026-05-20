@@ -53,6 +53,8 @@ bool apd(double a, double b, double e = 1e-5) {
 }
 cardinal::usize sz(int n) { return static_cast<cardinal::usize>(n); }
 bool streq(const char* a, const char* b) { return std::string(a) == b; }
+// File-level volatile-launder of qNaN — avoids <cmath>/<limits>.
+float nan_f() { volatile float z = 0.0f; return z / z; }
 
 sm::SimDesc accum_desc() {
     sm::SimDesc d;
@@ -248,6 +250,23 @@ void test_time_scale() {
     CHECK(ap(last_dt, 0.0f));
     CHECK(w.stats().total_ticks == t0 + static_cast<cardinal::u64>(1));
     CHECK(ap(w.stats().time_scale, 0.0f));
+
+    // NaN / ±Inf scale ALSO clamps to 0 — the previous `s < 0.0f`
+    // ordered compare was NaN-blind AND +Inf-blind. Without this fix,
+    // scaled_dt = real_dt * time_scale_ poisons physics_accum_ to NaN
+    // (physics never substeps again) or +Inf (max_substeps every
+    // frame). nan_f() is the volatile-launder helper at top-of-file.
+    w.set_time_scale(nan_f());
+    CHECK(ap(w.time_scale(), 0.0f));
+    CHECK(ap(w.tick(0.05f), 0.0f));
+    // Reset to normal then test +Inf and -Inf.
+    w.set_time_scale(1.0f);
+    CHECK(ap(w.time_scale(), 1.0f));
+    volatile float big = 1.0f; for (int i = 0; i < 16; ++i) big *= 1e30f;  // +Inf
+    w.set_time_scale(big);
+    CHECK(ap(w.time_scale(), 0.0f));
+    w.set_time_scale(-big);
+    CHECK(ap(w.time_scale(), 0.0f));
 }
 
 // ---- handlers: ids, group order, Physics-never, remove ------------
