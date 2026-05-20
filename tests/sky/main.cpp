@@ -286,6 +286,62 @@ void test_nonfinite_dt() {
     CHECK(ap(s.state().hour, 13.0f));
 }
 
+// ---- sort_keys must be SWO-safe under NaN hours --------------------
+// `[](a,b){ return a.hour < b.hour; }` violates strict-weak-ordering
+// when any hour is NaN: NaN compares unordered, so (NaN, x) is treated
+// as "equivalent" while (x, y) with x<y is properly ordered — breaks
+// transitivity of equivalence. std::sort with a SWO-violating
+// comparator is UB; on MSVC's introsort the partition can infinite-
+// loop (editor hang) or index OOB (heap corruption). The bad-data
+// path is corrupt .sky save (sscanf("%f", ...) accepts "nan"/"inf"
+// verbatim → SkyKey.hour = NaN) reaching sort_keys via load_sky:457
+// BEFORE any recompute. The UI "Sort by hour" button hits the same
+// path after live-edit. Sort completes (no hang/crash), all finite
+// hours appear in ascending order, and the NaN hour is sunk to the
+// end of the vector as a single equivalence class.
+void test_sort_keys_nonfinite() {
+    sk::Sky s;
+    auto& keys = s.keys();
+
+    // Inject a NaN-hour key in the MIDDLE of the defaults (which are
+    // pre-sorted 0..23.99). The middle position maximizes the chance
+    // of partition-pathology on a SWO-violating comparator — a leading
+    // or trailing NaN can sometimes survive partitioning by luck.
+    sk::SkyKey bad{};
+    bad.hour = nan_f();
+    keys.insert(keys.begin() + (keys.size() / 2), bad);
+
+    // The UB call: with the buggy comparator, this may infinite-loop
+    // or scribble OOB. With the SWO-safe comparator, completes in O(n
+    // log n) and produces a well-defined permutation.
+    s.sort_keys();
+
+    // Finite hours must still be ascending. Walk the prefix until we
+    // hit the NaN tail. `x == x` is true for finite (and ±Inf, which
+    // we don't inject) but false for NaN — the canonical NaN check
+    // without dragging <cmath> into this test (per top-of-file).
+    float prev = -1e9f;
+    cardinal::usize finite_count = 0;
+    for (const auto& k : keys) {
+        if (!(k.hour == k.hour)) break;       // NaN ends the run
+        CHECK(k.hour >= prev);
+        prev = k.hour;
+        ++finite_count;
+    }
+    // Tail is all NaN (just our one injected here).
+    for (cardinal::usize i = finite_count; i < keys.size(); ++i) {
+        CHECK(!(keys[i].hour == keys[i].hour));
+    }
+    CHECK(finite_count == keys.size() - 1);
+
+    // recompute_state_ (via set_hour) must still produce a finite,
+    // unit-length sun_dir — the safe_key sanitizer handles the NaN
+    // tail at read time, defended by sort_keys's NaN-to-end placement.
+    s.set_hour(12.0f);
+    CHECK(s.state().hour == s.state().hour);
+    CHECK(ap(vlen(s.state().sun_dir), 1.0f, 1e-3f));
+}
+
 // ---- fresh Sky defaults --------------------------------------------
 void test_defaults() {
     sk::Sky s;                                           // ctor: hour 12
@@ -309,6 +365,7 @@ int main() {
     test_nonfinite_dt();
     test_setter_nonfinite();
     test_key_field_nonfinite();
+    test_sort_keys_nonfinite();
     test_defaults();
 
     if (g_fail == 0) {

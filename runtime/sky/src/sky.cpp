@@ -42,8 +42,31 @@ void Sky::reset_to_defaults() {
 }
 
 void Sky::sort_keys() {
+    // NaN hour defeats `a.hour < b.hour` strict-weak-ordering: NaN
+    // compares unordered against EVERYTHING — both `NaN < x` and
+    // `x < NaN` are false for any x (including NaN). The comparator
+    // therefore treats (NaN, x) and (x, NaN) as equivalent — but
+    // (x, y) with x<y is properly ordered, so equivalence is NOT
+    // transitive (NaN ~ 5, NaN ~ 3, but 5 !~ 3). std::sort with a
+    // SWO-violating comparator is UB; on MSVC's introsort the median-
+    // of-three partition can fail to terminate (editor hang) or index
+    // out of bounds (heap corruption). recompute_state_'s safe_key
+    // sanitizes at READ time (a93fd8f), but a corrupt .sky save
+    // (sscanf("%f", ...) accepts "nan"/"inf" verbatim → SkyKey.hour
+    // = NaN, serial.cpp:441) reaches sort_keys via load_sky:457
+    // BEFORE any recompute. The "Sort by hour" UI button (sky_panel
+    // 94) also hits this path after live-edit. Promote NaN-vs-finite
+    // to `finite < NaN`, making NaN sort to the end as a single
+    // equivalence class — proper strict weak ordering, defined
+    // behaviour, and recompute_state_'s safe_key still handles the
+    // NaN tail at use.
     cardinal::sort(keys_.begin(), keys_.end(),
-              [](const SkyKey& a, const SkyKey& b){ return a.hour < b.hour; });
+              [](const SkyKey& a, const SkyKey& b){
+                  const bool af = cardinal::isfinite(a.hour);
+                  const bool bf = cardinal::isfinite(b.hour);
+                  if (af && bf) return a.hour < b.hour;
+                  return af && !bf;   // finite < NaN; NaN ~ NaN
+              });
 }
 
 void Sky::set_hour(float h) {
