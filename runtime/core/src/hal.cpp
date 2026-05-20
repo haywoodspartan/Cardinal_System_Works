@@ -1,4 +1,5 @@
 #include <cardinal/core/hal.hpp>
+#include <cardinal/core/cstdio.hpp>      // cardinal::fseek64 / ftell64
 #include <cardinal/core/platform.hpp>
 
 #include <chrono>
@@ -43,15 +44,28 @@ public:
     ~StdFile() override { if (f_) std::fclose(f_); }
 
     u64  size() const override {
+        // Use cardinal::ftell64 / fseek64 so files >2 GiB aren't
+        // silently truncated to 31 bits on Windows LLP64 (companion
+        // to pack.cpp's 3aef6ae migration). The HAL is consumed by
+        // io::Dispatcher (asset streaming) so large textures /
+        // archives / cinematics flow through this path; the prior
+        // std::ftell long-cast misreported size, the seek truncated
+        // the saved cursor on restore.
         if (!f_) return 0;
-        const auto cur = std::ftell(f_);
-        std::fseek(f_, 0, SEEK_END);
-        const u64 n = static_cast<u64>(std::ftell(f_));
-        std::fseek(f_, cur, SEEK_SET);
-        return n;
+        const cardinal::i64 cur = cardinal::ftell64(f_);
+        cardinal::fseek64(f_, 0, SEEK_END);
+        const cardinal::i64 n_signed = cardinal::ftell64(f_);
+        cardinal::fseek64(f_, cur, SEEK_SET);
+        return n_signed < 0 ? 0u : static_cast<u64>(n_signed);
     }
-    u64  position() const override { return f_ ? static_cast<u64>(std::ftell(f_)) : 0; }
-    void seek(u64 offset) override { if (f_) std::fseek(f_, static_cast<long>(offset), SEEK_SET); }
+    u64  position() const override {
+        if (!f_) return 0;
+        const cardinal::i64 p = cardinal::ftell64(f_);
+        return p < 0 ? 0u : static_cast<u64>(p);
+    }
+    void seek(u64 offset) override {
+        if (f_) cardinal::fseek64(f_, static_cast<cardinal::i64>(offset), SEEK_SET);
+    }
     usize read (void* buffer, usize bytes) override {
         return f_ ? std::fread(buffer, 1, bytes, f_) : 0;
     }
