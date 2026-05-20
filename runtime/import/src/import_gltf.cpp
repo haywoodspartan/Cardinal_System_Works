@@ -186,14 +186,30 @@ cardinal::vector<u8> b64_decode(const cardinal::string& in) {
         return -1;
     };
     cardinal::vector<u8> out;
-    int bits = 0, acc = 0;
+    // `acc` was `int` (signed) — the inner `acc = (acc << 6) | v` shifts
+    // accumulated input bits left by 6 per character. After 6 input
+    // chars the shifted value is 6*6 = 36 bits wide, exceeding int's
+    // 31-bit value range → signed-integer overflow is UNDEFINED
+    // BEHAVIOR per [expr.shift]. MSVC happens to wrap (matching the
+    // intent — every consumer only reads the low byte via `& 0xFF`),
+    // so the bug is benign on the supported toolchain, but UBSan
+    // flags it and other compilers may reorder around the UB. Using
+    // unsigned makes the shift well-defined mod 2^32; the low-byte
+    // extraction is bit-identical to the prior MSVC output, so this
+    // is a pure UB elimination with zero behavioural change.
+    // Parked-supervised item #2 in feedback_integration_coverage_map.md;
+    // closeable inline (no UBSan harness needed) — matches the net
+    // wire-encoder pattern in 2fbc346 where enc_s16/enc_u16 had a
+    // related UB cast also fixed without UBSan instrumentation.
+    int bits = 0;
+    unsigned acc = 0;
     for (char c : in) {
         if (c == '=') break;
         int v = val(c);
         if (v < 0) continue;
-        acc = (acc << 6) | v;
+        acc = (acc << 6) | static_cast<unsigned>(v);
         bits += 6;
-        if (bits >= 8) { bits -= 8; out.push_back(static_cast<u8>((acc>>bits)&0xFF)); }
+        if (bits >= 8) { bits -= 8; out.push_back(static_cast<u8>((acc>>bits)&0xFFu)); }
     }
     return out;
 }
