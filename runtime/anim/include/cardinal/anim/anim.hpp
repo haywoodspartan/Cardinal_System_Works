@@ -130,9 +130,15 @@ public:
     void  play()  { playing_ = true; }
     void  pause() { playing_ = false; }
     void  stop()  { playing_ = false; time_ = 0.0f; }
-    void  seek(float t) { time_ = t; }
+    // seek / set_speed are NaN-guarded — defined out-of-line in anim.cpp
+    // to keep this header free of the cmath dependency. A non-finite
+    // time_ or speed_ would poison the time_ accumulator (`time_ += dt
+    // * speed_` in tick) — Curve::sample's d8153cc downstream defense
+    // handles the bad time_ at sample time, but the accumulator stays
+    // poisoned, so reject at the SETTER.
+    void  seek(float t);
     void  set_loop(bool l)  { loop_ = l; }
-    void  set_speed(float s){ speed_ = s; }
+    void  set_speed(float s);
 
     bool  playing() const noexcept { return playing_; }
     bool  looping() const noexcept { return loop_; }

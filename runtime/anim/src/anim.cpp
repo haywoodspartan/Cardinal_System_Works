@@ -152,6 +152,23 @@ void Clip::apply(float t) {
     for (auto& tr : tracks_) tr->apply(t);
 }
 
+// Out-of-line setters with NaN/Inf guards (declared inline-style in the
+// header but kept here so the header doesn't depend on cmath).
+// time_ feeds into the `time_ += dt * speed_` accumulator in tick;
+// either a non-finite time_ (seek) or a non-finite speed_ (set_speed)
+// permanently poisons the accumulator. Curve::sample's downstream
+// NaN/Inf defenses (d8153cc) keep the sampled values defined, but the
+// accumulator itself stays poisoned → animation frozen at the front
+// value forever. Reject at the source.
+void Player::seek(float t) {
+    if (!cardinal::isfinite(t)) t = 0.0f;
+    time_ = t;
+}
+void Player::set_speed(float s) {
+    if (!cardinal::isfinite(s)) s = 0.0f;
+    speed_ = s;
+}
+
 void Player::tick(float dt) {
     if (!playing_ || clip_ == nullptr) return;
     // Reject non-finite dt at the SOURCE — `time_ += NaN` (or *speed_==NaN)

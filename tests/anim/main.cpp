@@ -311,6 +311,61 @@ void test_nonfinite_time() {
     CHECK(ap(dst, 5.0f));                           // sample(0.5) on a 0..10 → 0..100 ramp
 }
 
+// ---- Player::seek and Player::set_speed must reject non-finite -----
+// Both feed the `time_ += dt * speed_` accumulator in tick(). A NaN
+// time_ (from seek) or speed_ (from set_speed) permanently poisons the
+// accumulator. Curve::sample's downstream defenses (d8153cc) keep the
+// SAMPLED value defined (clamp-to-front on NaN, clamp-to-back on Inf
+// for Clamp wrap), but the accumulator itself stays poisoned →
+// animation frozen forever. This is the SECOND-INGRESS pattern, same
+// family as sim::set_time_scale (70a9324) and Sky::set_hour /
+// set_day_length_seconds (this commit).
+void test_player_setter_nonfinite() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    const float inf  = std::numeric_limits<float>::infinity();
+
+    // Build a Player with a 0..10 → 0..100 ramp Curve.
+    float dst = -1.0f;
+    auto tr = std::make_unique<an::Track<float>>(
+        "n", [&](const float& v) { dst = v; });
+    tr->curve().add_key(0.0f,   0.0f, InterpMode::Linear);
+    tr->curve().add_key(10.0f, 100.0f, InterpMode::Linear);
+    auto clip = std::make_shared<an::Clip>("c");
+    clip->add_track(std::move(tr));
+    an::Player p(clip);
+    p.play();
+
+    // seek(NaN) → reset to 0 (not poisoned). A finite tick now samples
+    // from time 0 → expect dst == 0.0.
+    p.seek(qnan);
+    CHECK(ap(p.time(), 0.0f));
+    p.tick(0.0f);                        // no time advance, just apply
+    CHECK(ap(dst, 0.0f));
+
+    // seek(+Inf), seek(-Inf) — also route to 0.
+    p.seek( inf); CHECK(ap(p.time(), 0.0f));
+    p.seek(-inf); CHECK(ap(p.time(), 0.0f));
+
+    // set_speed(NaN) → reset to 0. tick(0.5) with speed=0 advances
+    // time_ by 0 (no change), so dst stays at front (0).
+    p.set_speed(qnan);
+    CHECK(ap(p.speed(), 0.0f));
+    p.tick(0.5f);
+    CHECK(ap(p.time(),  0.0f));
+    CHECK(ap(dst,       0.0f));
+
+    // set_speed(+Inf) / set_speed(-Inf) → also 0.
+    p.set_speed( inf); CHECK(ap(p.speed(), 0.0f));
+    p.set_speed(-inf); CHECK(ap(p.speed(), 0.0f));
+
+    // After resetting to a normal speed, animation advances normally
+    // (proves the prior NaN didn't leak into a future state).
+    p.set_speed(1.0f);
+    p.tick(0.5f);
+    CHECK(ap(p.time(), 0.5f));
+    CHECK(ap(dst,      5.0f));           // 0.5 on a 0..10 → 0..100 ramp
+}
+
 }  // namespace
 
 int main() {
@@ -322,6 +377,7 @@ int main() {
     test_vec3_curve();
     test_track_clip_player();
     test_nonfinite_time();
+    test_player_setter_nonfinite();
 
     if (g_fail == 0) {
         cardinal::log::infof("animtest", "OK  %d checks passed", g_checks);

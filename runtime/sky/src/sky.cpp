@@ -47,6 +47,13 @@ void Sky::sort_keys() {
 }
 
 void Sky::set_hour(float h) {
+    // Non-finite h: fmod(NaN, 24) = NaN, `NaN < 0.0f` is false → wrap
+    // skipped → state_.hour = NaN → recompute_state_ drives every
+    // derived field to NaN (cardinal::clamp passes NaN through; lerp
+    // of NaN is NaN). Reject up-front and treat as noon (the
+    // constructor default), so the caller's bad value doesn't poison
+    // a previously-good sky state.
+    if (!cardinal::isfinite(h)) h = 12.0f;
     h = cardinal::fmod(h, 24.0f);
     if (h < 0.0f) h += 24.0f;
     state_.hour = h;
@@ -54,7 +61,16 @@ void Sky::set_hour(float h) {
 }
 
 void Sky::set_day_length_seconds(float s) noexcept {
-    if (s < 0.001f) s = 0.001f;
+    // Non-finite s: same SECOND-INGRESS pattern as sim::set_time_scale
+    // (70a9324). The original `s < 0.001f` clamp is NaN-blind and
+    // +Inf-blind. NaN s → `time_scale_ = 24.0f / NaN = NaN`. The
+    // 6ac4418 Sky::tick guard rejects non-finite real_dt at the
+    // ingress, but if time_scale_ itself is NaN every state_.hour
+    // update for a FINITE real_dt still produces NaN (real_dt *
+    // NaN = NaN). +Inf s → time_scale_ = 0, day frozen — defined but
+    // useless. cardinal::isfinite catches both; preserve the existing
+    // min clamp.
+    if (!cardinal::isfinite(s) || s < 0.001f) s = 0.001f;
     // 24 in-game hours per `s` real seconds → time_scale (hours/sec) = 24/s
     // We store time_scale_ as "hours per real second" * 1.0f to avoid
     // re-deriving each frame.

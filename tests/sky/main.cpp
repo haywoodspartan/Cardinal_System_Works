@@ -157,6 +157,51 @@ void test_tick() {
     CHECK(apv(s.state().sun_dir, -kU, 0.0f, -kZ));       // cardinal hour 6
 }
 
+// ---- set_hour / set_day_length_seconds must reject non-finite -----
+// Same SECOND-INGRESS NaN-passthrough class as sim::set_time_scale
+// (70a9324). The original `if (h < 0.0f)` wrap-up guard was NaN-blind,
+// and `if (s < 0.001f) s = 0.001f` was NaN-blind AND +Inf-blind. NaN
+// set_hour → state_.hour permanently NaN → recompute_state_() poisons
+// every derived field (zenith/horizon/sun_color/sun_intensity/sun_dir)
+// via cardinal::clamp NaN-passthrough. NaN set_day_length_seconds →
+// time_scale_ = 24/NaN = NaN → every Sky::tick with FINITE real_dt
+// still produces NaN hour (real_dt * NaN = NaN), bypassing 6ac4418's
+// tick-ingress guard.
+void test_setter_nonfinite() {
+    sk::Sky s;
+    // Establish a known-good state, then feed NaN/+Inf/-Inf set_hour.
+    s.set_hour(12.0f);
+    CHECK(ap(s.state().hour, 12.0f));
+    const float intensity_pre = s.state().sun_intensity;
+
+    s.set_hour(nan_f());
+    // NaN routed to the default-noon fallback — recompute_state_ runs
+    // on a finite hour, so derived state stays sane.
+    CHECK(ap(s.state().hour, 12.0f));
+    CHECK(ap(s.state().sun_intensity, intensity_pre));
+    CHECK(ap(vlen(s.state().sun_dir), 1.0f, 1e-3f));
+
+    volatile float big = 1.0f; for (int i = 0; i < 16; ++i) big *= 1e30f;  // +Inf
+    s.set_hour( big);
+    CHECK(ap(s.state().hour, 12.0f));
+    s.set_hour(-big);
+    CHECK(ap(s.state().hour, 12.0f));
+
+    // set_day_length_seconds: NaN→0.001 min, +Inf→0.001 min. After
+    // either, time_scale_ must be finite so subsequent ticks update
+    // hour normally. After the NaN call, run a finite tick and verify
+    // hour advances (would stay at 12 forever if time_scale_ were NaN).
+    s.set_hour(10.0f);
+    s.set_day_length_seconds(nan_f());           // → s=0.001, time_scale_=24000
+    CHECK(ap(s.day_length_seconds(), 0.001f, 1e-5f));
+    s.tick(1.0f / 24000.0f);                     // expect hour += 24000 * (1/24000) = 1
+    CHECK(ap(s.state().hour, 11.0f, 1e-2f));     // crossed the threshold
+
+    s.set_day_length_seconds(24.0f);             // restore sane
+    s.set_day_length_seconds(big);               // +Inf → clamp
+    CHECK(ap(s.day_length_seconds(), 0.001f, 1e-5f));
+}
+
 // ---- non-finite real_dt must NOT poison state_.hour ----------------
 // Without the guard, `state_.hour += NaN * time_scale_` makes hour NaN.
 // The 24-wrap guards are both false for NaN, and recompute_state_()
@@ -205,6 +250,7 @@ int main() {
     test_day_length();
     test_tick();
     test_nonfinite_dt();
+    test_setter_nonfinite();
     test_defaults();
 
     if (g_fail == 0) {
