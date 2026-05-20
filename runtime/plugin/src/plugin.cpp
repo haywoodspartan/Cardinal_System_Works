@@ -202,31 +202,72 @@ DWORD invoke_tick_seh(void (*fn)(float), float dt) noexcept {
 
 void Registry::tick(float dt) {
     ensure_impl();
+    // Snapshot the tick entries before invoking any callback. A
+    // plugin's on_tick may call back into the Registry (load/unload/
+    // reload) — common via cppscript's hot-reload, where a watched
+    // file change triggers Registry::unload + Registry::load. A
+    // direct range-for over *impl_ would have the iterator dangle on
+    // unload (vector erase) and potentially realloc on load. Same
+    // iteration-callback UAF class as actor::World::broadcast
+    // (b7f36e1), sim::run_group_ (1f10242), partition (309abdf).
+    // Snapshot the function pointer + path (for re-find on SEH) so
+    // disable-on-crash writes land on the current Loaded entry even
+    // after callbacks shuffle the vector.
+    struct TickEntry {
+        const char*    name;
+        cardinal::string path;
+        void (*on_tick)(float);
+    };
+    cardinal::vector<TickEntry> snapshot;
+    snapshot.reserve(impl_->size());
     for (auto& p : *impl_) {
-        if (p->disabled || p->info.on_tick == nullptr) continue;
+        if (!p || p->disabled || p->info.on_tick == nullptr) continue;
+        snapshot.push_back({ p->info.name, p->path, p->info.on_tick });
+    }
+    for (const auto& e : snapshot) {
 #if CARDINAL_PLATFORM_WINDOWS
-        const DWORD seh = invoke_tick_seh(p->info.on_tick, dt);
+        const DWORD seh = invoke_tick_seh(e.on_tick, dt);
         if (seh != 0) {
-            p->disabled = true;
+            // Re-find the entry by path — the plugin may have
+            // unloaded itself before crashing, in which case the
+            // disable write lands on no entry (already gone).
+            for (auto& p : *impl_) {
+                if (p && p->path == e.path) { p->disabled = true; break; }
+            }
             cardinal::log::errorf("plugin",
                 "%s on_tick crashed (SEH 0x%08lx) — plugin disabled",
-                p->info.name ? p->info.name : "(unnamed)", seh);
+                e.name ? e.name : "(unnamed)", seh);
             // Capture a stack trace at the throw site for the panel.
             auto frames = trace::capture(0, 32);
             cardinal::log::errorf("plugin",
                 "stack:\n%s", trace::format_full(frames).c_str());
         }
 #else
-        p->info.on_tick(dt);
+        e.on_tick(dt);
 #endif
     }
 }
 
 void Registry::shutdown() {
     if (impl_ == nullptr) return;
+    // Snapshot the detach callbacks + lib handles before iterating.
+    // A re-entrant on_detach that calls Registry::load/unload would
+    // otherwise UAF the range-for (same class as Registry::tick
+    // above). We're tearing down anyway so this loop is final —
+    // any handlers added during a detach are still ignored by the
+    // final clear() below.
+    struct DetachEntry {
+        void (*on_detach)();
+        LibHandle lib;
+    };
+    cardinal::vector<DetachEntry> snapshot;
+    snapshot.reserve(impl_->size());
     for (auto& p : *impl_) {
-        if (p->info.on_detach) p->info.on_detach();
-        if (p->lib) lib_close(p->lib);
+        if (p) snapshot.push_back({ p->info.on_detach, p->lib });
+    }
+    for (const auto& e : snapshot) {
+        if (e.on_detach) e.on_detach();
+        if (e.lib) lib_close(e.lib);
     }
     impl_->clear();
 }
