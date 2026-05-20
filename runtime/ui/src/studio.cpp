@@ -1136,7 +1136,7 @@ public:
         // hidden by the lines. No-op when disabled or no camera pushed.
         draw_world_grid_overlay(image_pos, avail);
 
-        const bool gizmo_busy = draw_gizmo_overlay(image_pos, avail);
+        const bool gizmo_busy = draw_gizmo_overlay(image_pos, avail, viewport_id);
 
         // Per-frame interaction snapshot. Items are populated only when this
         // viewport is the one actually hovered; the host loop reads
@@ -1416,7 +1416,8 @@ public:
     // and scale modes have their own helpers. Returns true while an axis
     // is actively dragged (suppresses click-select).
     // -------------------------------------------------------------------
-    bool draw_translate_axes_(const ImVec2& image_pos, const ImVec2& avail) {
+    bool draw_translate_axes_(const ImVec2& image_pos, const ImVec2& avail,
+                              u32 viewport_id) {
         if (!gizmo_has_target_ || !gizmo_have_camera_) return false;
         if (avail.x < 4.0f || avail.y < 4.0f)          return false;
 
@@ -1553,12 +1554,23 @@ public:
                 auto r = closest_t_on_axis_from_mouse(click_local);
                 gizmo_drag_t_origin_ = r.first ? r.second : 0.0f;
                 gizmo_drag_in_progress_ = true;     // for undo coalescing
+                // Pin the drag to THIS panel so multi-viewport setups
+                // don't have every visible panel re-run the drag math
+                // each frame with its own matrices (last-drawn wins,
+                // teleports the object).
+                gizmo_drag_viewport_id_ = viewport_id;
             }
         } else {
             if (!io.MouseDown[0]) {
+                // Mouse-up handled in ANY panel — if the owning panel is
+                // closed mid-drag the release would otherwise never fire.
                 gizmo_axis_active_ = -1;
                 gizmo_drag_in_progress_ = false;
                 gizmo_drag_release_ = true;          // host fires the undo on this edge
+                gizmo_drag_viewport_id_ = 0xFFFFFFFFu;
+            } else if (viewport_id != gizmo_drag_viewport_id_) {
+                // Drag is live in a sibling panel — render only, never
+                // overwrite gizmo_target_ from this panel's frame.
             } else {
                 const ImVec2 mouse_local{ mp.x - image_pos.x, mp.y - image_pos.y };
                 auto r = closest_t_on_axis_from_mouse(mouse_local);
@@ -1689,7 +1701,8 @@ public:
     // ----- Translate: 3 plane handles (YZ/XZ/XY) + screen-space square --
     // Engages only when no single-axis drag is live. handle ids:
     //   3=YZ(normal X) 4=XZ(normal Y) 5=XY(normal Z) 6=screen(camera-facing)
-    bool draw_translate_planes_screen_(const ImVec2& ip, const ImVec2& av) {
+    bool draw_translate_planes_screen_(const ImVec2& ip, const ImVec2& av,
+                                       u32 viewport_id) {
         const cardinal::scene::Mat4 vp = gizmo_proj_ * gizmo_view_;
         const cardinal::scene::Mat4 ivp = vp.inverse();
         ImVec2 o_pix;
@@ -1772,6 +1785,7 @@ public:
                         gizmo_drag_origin_world_ = gizmo_target_;
                         gizmo_drag_plane_hit0_   = hit;
                         gizmo_drag_in_progress_  = true;
+                        gizmo_drag_viewport_id_  = viewport_id;   // pin to this panel
                     }
                 }
             }
@@ -1780,6 +1794,9 @@ public:
                 gizmo_handle_active_ = -1;
                 gizmo_drag_in_progress_ = false;
                 gizmo_drag_release_ = true;
+                gizmo_drag_viewport_id_ = 0xFFFFFFFFu;
+            } else if (viewport_id != gizmo_drag_viewport_id_) {
+                // Sibling panel — render only, never overwrite drag state.
             } else {
                 cardinal::scene::Vec3 ro, rd;
                 if (mouse_world_ray_(ip, av, ivp, ro, rd)) {
@@ -1828,7 +1845,8 @@ public:
     }
 
     // ----- Rotate: 3 world-axis rings -----------------------------------
-    bool draw_rotate_gizmo_(const ImVec2& ip, const ImVec2& av) {
+    bool draw_rotate_gizmo_(const ImVec2& ip, const ImVec2& av,
+                            u32 viewport_id) {
         const cardinal::scene::Mat4 vp  = gizmo_proj_ * gizmo_view_;
         const cardinal::scene::Mat4 ivp = vp.inverse();
         ImVec2 o_pix;
@@ -1908,6 +1926,7 @@ public:
                     gizmo_drag_angle0_     = a0;
                     gizmo_drag_origin_rot_ = gizmo_target_rot_;
                     gizmo_drag_in_progress_= true;
+                    gizmo_drag_viewport_id_ = viewport_id;   // pin to this panel
                 }
             }
         } else {
@@ -1915,6 +1934,9 @@ public:
                 gizmo_handle_active_ = -1;
                 gizmo_drag_in_progress_ = false;
                 gizmo_drag_release_ = true;
+                gizmo_drag_viewport_id_ = 0xFFFFFFFFu;
+            } else if (viewport_id != gizmo_drag_viewport_id_) {
+                // Sibling panel — render only, never overwrite rotation.
             } else {
                 float a1;
                 if (angle_on(gizmo_handle_active_, a1)) {
@@ -1959,7 +1981,8 @@ public:
     }
 
     // ----- Scale: 3 axis box-handles + uniform centre box ---------------
-    bool draw_scale_gizmo_(const ImVec2& ip, const ImVec2& av) {
+    bool draw_scale_gizmo_(const ImVec2& ip, const ImVec2& av,
+                           u32 viewport_id) {
         const cardinal::scene::Mat4 vp  = gizmo_proj_ * gizmo_view_;
         const cardinal::scene::Mat4 ivp = vp.inverse();
         ImVec2 o_pix;
@@ -2015,6 +2038,7 @@ public:
                 gizmo_handle_active_    = hover_h;
                 gizmo_drag_origin_scl_  = gizmo_target_scl_;
                 gizmo_drag_in_progress_ = true;
+                gizmo_drag_viewport_id_ = viewport_id;   // pin to this panel
                 if (hover_h == 6) {
                     gizmo_drag_uniform0_ = mp.y;
                 } else {
@@ -2027,6 +2051,9 @@ public:
                 gizmo_handle_active_ = -1;
                 gizmo_drag_in_progress_ = false;
                 gizmo_drag_release_ = true;
+                gizmo_drag_viewport_id_ = 0xFFFFFFFFu;
+            } else if (viewport_id != gizmo_drag_viewport_id_) {
+                // Sibling panel — render only, never overwrite scale.
             } else {
                 cardinal::scene::Vec3 ns = gizmo_drag_origin_scl_;
                 bool ok = false;
@@ -2085,7 +2112,8 @@ public:
     }
 
     // ----- Public dispatcher (call site unchanged) ----------------------
-    bool draw_gizmo_overlay(const ImVec2& image_pos, const ImVec2& avail) {
+    bool draw_gizmo_overlay(const ImVec2& image_pos, const ImVec2& avail,
+                            u32 viewport_id) {
         if (!gizmo_has_target_ || !gizmo_have_camera_) return false;
         if (avail.x < 4.0f || avail.y < 4.0f)          return false;
 
@@ -2097,14 +2125,14 @@ public:
 
         bool busy = false;
         if (gizmo_mode_ == GizmoMode::Rotate) {
-            busy = draw_rotate_gizmo_(image_pos, avail);
+            busy = draw_rotate_gizmo_(image_pos, avail, viewport_id);
         } else if (gizmo_mode_ == GizmoMode::Scale) {
-            busy = draw_scale_gizmo_(image_pos, avail);
+            busy = draw_scale_gizmo_(image_pos, avail, viewport_id);
         } else {
             // Single-axis path (proven) — skip while a plane/screen drag
             // owns the handle so the two can't fight.
             if (gizmo_handle_active_ < 0)
-                busy = draw_translate_axes_(image_pos, avail);
+                busy = draw_translate_axes_(image_pos, avail, viewport_id);
             // Gizmo-side snap for the axis result (idempotent if the host
             // also snaps — back-compat safe).
             if (gizmo_drag_.active &&
@@ -2122,7 +2150,7 @@ public:
             }
             // Plane + screen handles only when no axis drag is live.
             if (gizmo_axis_active_ < 0)
-                busy = draw_translate_planes_screen_(image_pos, avail) || busy;
+                busy = draw_translate_planes_screen_(image_pos, avail, viewport_id) || busy;
         }
         return busy;
     }
@@ -4036,6 +4064,16 @@ private:
     float                                    gizmo_drag_t_origin_{0.0f};
     bool                                     gizmo_drag_in_progress_{false};
     bool                                     gizmo_drag_release_{false};
+    // Which viewport panel owns the active drag. When multiple panels are
+    // visible (split-dock, torn-out), every panel runs the gizmo dispatcher
+    // each frame; without this gate, every panel's drag-update fires with
+    // its OWN matrices + local mouse and the LAST panel drawn overwrites
+    // gizmo_target_ — when the click-panel isn't drawn last, the object
+    // teleports per-frame to wherever the last panel's ray happens to
+    // intersect the captured axis. Captured at drag-start, cleared on
+    // mouse-up (mouse-up handled in ANY panel so a closed/torn-out owning
+    // panel can't strand the drag). 0xFFFFFFFFu = no drag owner.
+    u32                                      gizmo_drag_viewport_id_{0xFFFFFFFFu};
     GizmoDrag                                gizmo_drag_{};
 
     // ----- Extended gizmo state (modes / rotate / scale / snap) ---------
