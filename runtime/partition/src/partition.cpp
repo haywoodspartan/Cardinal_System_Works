@@ -84,18 +84,37 @@ CellId WorldPartition::add_cell(const CellDesc& desc) {
 bool WorldPartition::remove_cell(CellId id) {
     auto it = impl_->cells.find(id);
     if (it == impl_->cells.end()) return false;
-    if (it->second.state == CellState::Loaded && impl_->on_unload) {
-        impl_->on_unload(id, it->second.desc);
-    }
+    // `it` is held across the user callback below — if the callback
+    // re-enters (add_cell triggers rehash; remove_cell / clear_cells
+    // erases) the unordered_map iterator dangles → UAF on the erase
+    // that follows. Snapshot the desc, fire the callback, then re-
+    // find. Same shape as sim 1f10242 / actor f3ed9c1 — the partition
+    // companion. (Was the "ref-across-user-callback dangling /
+    // contract-ambiguous" item recorded in feedback_integration_
+    // coverage_map.md; the contract is now: callbacks MAY re-enter
+    // the partition.)
+    const bool was_loaded = (it->second.state == CellState::Loaded);
+    CellDesc   desc_copy  = it->second.desc;
+    if (was_loaded && impl_->on_unload) impl_->on_unload(id, desc_copy);
+    it = impl_->cells.find(id);
+    if (it == impl_->cells.end()) return true;   // callback already erased
     impl_->cells.erase(it);
     return true;
 }
 
 void WorldPartition::clear_cells() noexcept {
     if (impl_->on_unload) {
+        // Snapshot the (id, desc) pairs BEFORE firing callbacks. A
+        // range-for over the live cells_ map would dangle if the
+        // user callback re-enters and mutates cells_ (rehash on
+        // add_cell, erase on remove_cell). Snapshot decouples the
+        // iteration from the live structure.
+        cardinal::vector<cardinal::pair<CellId, CellDesc>> snapshot;
+        snapshot.reserve(impl_->cells.size());
         for (const auto& [id, e] : impl_->cells) {
-            if (e.state == CellState::Loaded) impl_->on_unload(id, e.desc);
+            if (e.state == CellState::Loaded) snapshot.push_back({id, e.desc});
         }
+        for (const auto& [id, desc] : snapshot) impl_->on_unload(id, desc);
     }
     impl_->cells.clear();
 }
@@ -214,19 +233,34 @@ void WorldPartition::tick() {
     }
 
     // Apply: unload first, then load.
+    //
+    // `e` references into impl_->cells across the user callback below
+    // — if the callback re-enters (add_cell rehashes the map; remove_
+    // cell erases) the reference dangles → UAF on `e.state = ...`.
+    // Snapshot desc, fire callback, re-find. Companion to sim 1f10242
+    // / actor f3ed9c1 — same range-for-or-ref-over-mutating-container
+    // UAF class.
     for (CellId id : want_unload) {
-        auto& e = impl_->cells[id];
-        if (e.state != CellState::Loaded) continue;
-        if (impl_->on_unload) impl_->on_unload(id, e.desc);
-        e.state = CellState::Unloaded;
+        auto it = impl_->cells.find(id);
+        if (it == impl_->cells.end()) continue;
+        if (it->second.state != CellState::Loaded) continue;
+        const CellDesc desc_copy = it->second.desc;
+        if (impl_->on_unload) impl_->on_unload(id, desc_copy);
+        it = impl_->cells.find(id);
+        if (it == impl_->cells.end()) continue;   // callback removed us
+        it->second.state = CellState::Unloaded;
         ++impl_->cells_unloaded_total;
     }
     for (CellId id : want_load) {
-        auto& e = impl_->cells[id];
-        if (e.state == CellState::Loaded) continue;
-        if (impl_->on_load) impl_->on_load(id, e.desc);
-        e.state    = CellState::Loaded;
-        e.load_seq = impl_->next_load_seq++;
+        auto it = impl_->cells.find(id);
+        if (it == impl_->cells.end()) continue;
+        if (it->second.state == CellState::Loaded) continue;
+        const CellDesc desc_copy = it->second.desc;
+        if (impl_->on_load) impl_->on_load(id, desc_copy);
+        it = impl_->cells.find(id);
+        if (it == impl_->cells.end()) continue;
+        it->second.state    = CellState::Loaded;
+        it->second.load_seq = impl_->next_load_seq++;
         ++impl_->cells_loaded_total;
     }
 }
@@ -234,7 +268,13 @@ void WorldPartition::tick() {
 void WorldPartition::force_load(CellId id) {
     auto it = impl_->cells.find(id);
     if (it == impl_->cells.end() || it->second.state == CellState::Loaded) return;
-    if (impl_->on_load) impl_->on_load(id, it->second.desc);
+    // See tick() comment: snapshot desc, fire callback, re-find — a
+    // re-entrant callback could rehash/erase impl_->cells and dangle
+    // the iterator.
+    const CellDesc desc_copy = it->second.desc;
+    if (impl_->on_load) impl_->on_load(id, desc_copy);
+    it = impl_->cells.find(id);
+    if (it == impl_->cells.end()) return;
     it->second.state    = CellState::Loaded;
     it->second.load_seq = impl_->next_load_seq++;
     ++impl_->cells_loaded_total;
@@ -242,7 +282,10 @@ void WorldPartition::force_load(CellId id) {
 void WorldPartition::force_unload(CellId id) {
     auto it = impl_->cells.find(id);
     if (it == impl_->cells.end() || it->second.state != CellState::Loaded) return;
-    if (impl_->on_unload) impl_->on_unload(id, it->second.desc);
+    const CellDesc desc_copy = it->second.desc;
+    if (impl_->on_unload) impl_->on_unload(id, desc_copy);
+    it = impl_->cells.find(id);
+    if (it == impl_->cells.end()) return;
     it->second.state = CellState::Unloaded;
     ++impl_->cells_unloaded_total;
 }

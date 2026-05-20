@@ -412,6 +412,103 @@ void test_force() {
     CHECK(W.stats().cells_unloaded_total == static_cast<cardinal::u64>(1));
 }
 
+// ---- re-entrant callback (callback mutates partition) must not UAF
+// Companion to sim 1f10242 / actor f3ed9c1 — same range-for-or-ref-
+// over-mutating-container UAF class. Was the "ref-across-user-
+// callback dangling / contract-ambiguous" item parked in feedback_
+// integration_coverage_map.md; contract is now: callbacks MAY re-
+// enter the partition (snapshot the desc, fire callback, re-find).
+void test_reentrant_callback() {
+    // (a) on_load callback spawns enough NEW cells to force the
+    //     unordered_map to rehash mid-iteration. Pre-fix the held
+    //     `auto& e` reference dangles → UAF on `e.state = ...`.
+    //     Post-fix the re-find returns a valid iterator.
+    {
+        auto wp = pn::WorldPartition::create();
+        auto& W = *wp;
+        pn::CellId trigger = W.add_cell(dist_cell(10.0f, 20.0f, 0, 0, 0));
+        int load_count = 0;
+        bool first = true;
+        W.set_on_load([&](pn::CellId, const pn::CellDesc&) {
+            ++load_count;
+            if (first) {
+                first = false;
+                // 128 add_cells force at least one map rehash.
+                for (int i = 0; i < 128; ++i) {
+                    W.add_cell(dist_cell(10.0f, 20.0f,
+                                         100.0f * (i + 2), 0, 0));
+                }
+            }
+        });
+        // force_load triggers the callback — must not crash.
+        W.force_load(trigger);
+        CHECK(load_count == 1);
+        // The trigger cell must STILL be marked Loaded post-callback
+        // (proves the re-find re-acquired a valid iterator and the
+        // state write landed).
+        CHECK(W.state(trigger) == pn::CellState::Loaded);
+        CHECK(W.cell_count() >= sz(129));
+    }
+    // (b) on_unload callback calls remove_cell on a DIFFERENT cell —
+    //     after the callback returns, the iterator must NOT be used
+    //     on the freed entry. Use a sibling target so we don't infinitely
+    //     re-enter the same on_unload via the recursion path.
+    {
+        auto wp = pn::WorldPartition::create();
+        auto& W = *wp;
+        pn::CellId a = W.add_cell(dist_cell(10.0f, 20.0f, 0, 0, 0));
+        pn::CellId b = W.add_cell(dist_cell(10.0f, 20.0f, 100, 0, 0));
+        W.force_load(a);
+        // No on_unload yet — b is Unloaded so remove_cell(b) won't
+        // re-enter the callback. Set the callback NOW so it only
+        // fires for `a` via force_unload below.
+        W.set_on_unload([&](pn::CellId id, const pn::CellDesc&) {
+            // Remove the sibling b — this mutates impl_->cells while
+            // we're holding an `it` reference into the map. Pre-fix
+            // the iterator's underlying node could be invalidated
+            // (rehash on insert is the more common trigger; erase
+            // of a different bucket entry is the per-implementation
+            // case). With the re-find pattern, we re-validate before
+            // touching state.
+            if (id == a) W.remove_cell(b);
+        });
+        // force_unload(a) fires the callback → callback erases b →
+        // post-fix re-find(a) succeeds → state(a) becomes Unloaded.
+        W.force_unload(a);
+        CHECK(W.state(a) == pn::CellState::Unloaded);
+        CHECK(W.cell_count() == sz(1));    // b is gone, a remains
+    }
+    // (c) clear_cells with a re-entrant unload callback that adds new
+    //     cells. The snapshot pattern means the new cells are NOT
+    //     unloaded this clear (they were added after the snapshot)
+    //     but the clear() removes them anyway at the end.
+    {
+        auto wp = pn::WorldPartition::create();
+        auto& W = *wp;
+        for (int i = 0; i < 8; ++i) {
+            pn::CellId cid = W.add_cell(dist_cell(10.0f, 20.0f,
+                                                  100.0f * i, 0, 0));
+            W.force_load(cid);
+        }
+        int unload_count = 0;
+        W.set_on_unload([&](pn::CellId, const pn::CellDesc&) {
+            ++unload_count;
+            // Add a new cell from inside the callback — mutates the
+            // live cells_ map mid-iteration. Pre-fix the range-for's
+            // iterator would dangle on rehash.
+            W.add_cell(dist_cell(10.0f, 20.0f, -100.0f, 0, 0));
+        });
+        W.clear_cells();
+        // All 8 originally-loaded cells received an unload callback
+        // (snapshot semantics — new cells added during the callbacks
+        // weren't in the snapshot).
+        CHECK(unload_count == 8);
+        // clear_cells unconditionally clears at the end, including
+        // the cells the callbacks added.
+        CHECK(W.cell_count() == sz(0));
+    }
+}
+
 // ---- stats / loaded_cells / describe_cells ------------------------
 void test_stats_describe() {
     auto wp = pn::WorldPartition::create();
@@ -465,6 +562,7 @@ int main() {
     test_cap_eviction();
     test_cap_eviction_lru_determinism();
     test_force();
+    test_reentrant_callback();
     test_stats_describe();
 
     if (g_fail == 0) {
