@@ -117,6 +117,20 @@ void test_seek_clamp() {
     p.seek(99.0f);  CHECK(ap(seq.play_head_s, 5.0f));   // clamp high
     p.seek(5.0f);   CHECK(ap(seq.play_head_s, 5.0f));   // exact upper
     p.seek(0.0f);   CHECK(ap(seq.play_head_s, 0.0f));
+
+    // Non-finite seek MUST be rejected (cardinal::clamp passes NaN
+    // through; without the isfinite guard, play_head_s = NaN and every
+    // subsequent tick stays NaN — no event ever fires, editor read-
+    // out shows "nan", same poison shape as anim::Player::seek 196f692).
+    // Volatile-launder NaN / Inf without <cmath>.
+    auto nanf = []{ volatile float z = 0.0f; return z / z;   };
+    auto inff = []{ volatile float z = 0.0f; return 1.0f / z; };
+    p.seek(2.5f);                                        // establish baseline
+    CHECK(ap(seq.play_head_s, 2.5f));
+    p.seek(nanf());  CHECK(ap(seq.play_head_s, 2.5f));   // rejected
+    p.seek( inff()); CHECK(ap(seq.play_head_s, 2.5f));   // rejected
+    p.seek(-inff()); CHECK(ap(seq.play_head_s, 2.5f));   // rejected
+    p.seek(1.0f);    CHECK(ap(seq.play_head_s, 1.0f));   // finite goes through
 }
 
 // ---- tick while paused is a no-op ----------------------------------

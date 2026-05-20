@@ -24,6 +24,15 @@ void Player::stop()  noexcept {
 }
 void Player::seek(float t) {
     if (seq_ == nullptr) return;
+    // cardinal::clamp passes NaN through (documented NaN-blind), so
+    // `seek(NaN)` would write NaN into seq_->play_head_s and
+    // prev_time_s_. The tick guard (this commit's sibling, 7c13632)
+    // rejects non-finite dt but operates on `prev + dt * speed` — a
+    // NaN prev poisons every subsequent tick (`t = NaN + finite*finite
+    // = NaN`, `t >= duration` is false, no wrap, no event ever fires).
+    // Same second-ingress shape as anim::Player::seek (196f692).
+    // Reject at the source so a bad caller doesn't park the sequencer.
+    if (!cardinal::isfinite(t)) return;
     seq_->play_head_s = cardinal::clamp(t, 0.0f, seq_->duration_s);
     prev_time_s_      = seq_->play_head_s;
 }
