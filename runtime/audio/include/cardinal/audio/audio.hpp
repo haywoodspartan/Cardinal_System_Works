@@ -140,7 +140,13 @@ public:
 
     // ---- Listener ---------------------------------------------------
     void  set_listener(const Listener& l);
-    const Listener& listener() const noexcept { return listener_; }
+    // Returns the listener BY VALUE (NOT by reference): listener_ is
+    // written by set_listener and read by compute_3d_attenuation_
+    // under mtx_, so an unlocked reference-returning getter raced
+    // every concurrent reader against a partial write — Listener is
+    // 36 B (3× Vec3), so the tear is per-float. Returning a copy
+    // under the same mutex closes the race; the copy is trivial POD.
+    Listener listener() const noexcept;
 
     // ---- Playback ---------------------------------------------------
     InstanceId play_2d(const cardinal::string& cue_id, ChannelId ch = kChannelSfx,

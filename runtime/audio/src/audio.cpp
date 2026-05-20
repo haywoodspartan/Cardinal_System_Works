@@ -152,7 +152,22 @@ void Engine::set_listener(const Listener& l) {
         return cardinal::isfinite(v.x) && cardinal::isfinite(v.y) && cardinal::isfinite(v.z);
     };
     if (!ok(l.position) || !ok(l.forward) || !ok(l.up)) return;
+    // Take mtx_ for the write — compute_3d_attenuation_ reads
+    // listener_.position from inside render() under mtx_, so an
+    // unlocked write here races every audio frame on the WASAPI
+    // thread (per-float tear: position.x can be the new value,
+    // position.y the old). Same data-race-on-shared-state class as
+    // budget::last_snapshot (033c642) and io::cancelled_handles
+    // (82604f9).
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
     listener_ = l;
+}
+
+Listener Engine::listener() const noexcept {
+    // See header: copy under mtx_ to close the partial-write race
+    // with set_listener / compute_3d_attenuation_'s reads.
+    cardinal::lock_guard<cardinal::mutex> lg(mtx_);
+    return listener_;
 }
 
 float Engine::compute_3d_attenuation_(const cardinal::scene::Vec3& pos) const noexcept {
