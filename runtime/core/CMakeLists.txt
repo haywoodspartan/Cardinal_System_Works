@@ -53,6 +53,19 @@ set(CARDINAL_CORE_HEADERS
     # empty no-op type on non-Windows so cross-platform code can hold it
     # unconditionally without #ifdef ladders at the use site.
     include/cardinal/core/kernel_object_attribute.hpp
+    # Pearl Abyss Pa* surface modernised onto C++20. Umbrella + per-component
+    # sub-headers under cardinal/core/pa/ — used as the porting bridge when
+    # bringing CrimsonDesert-style server / tooling code into cardinal::core.
+    include/cardinal/core/pa.hpp
+    include/cardinal/core/pa/lock.hpp
+    include/cardinal/core/pa/string.hpp
+    include/cardinal/core/pa/queue.hpp
+    include/cardinal/core/pa/wall_time.hpp
+    include/cardinal/core/pa/stopwatch.hpp
+    include/cardinal/core/pa/file.hpp
+    include/cardinal/core/pa/directory.hpp
+    include/cardinal/core/pa/thread.hpp
+    include/cardinal/core/pa/seh.hpp
 )
 
 set(CARDINAL_CORE_SOURCES
@@ -83,6 +96,14 @@ set(CARDINAL_CORE_SOURCES
     # gate (Windows path = full impl over OBJECT_ATTRIBUTES; non-Windows path =
     # no-op stubs so the symbol set is identical across platforms).
     src/kernel_object_attribute.cpp
+    # Pa* port — non-template TUs (lock-process / file-IO / directory-fs /
+    # thread-impl / wall-time / SEH-minidump). Templates stay header-only.
+    src/pa/lock.cpp
+    src/pa/file.cpp
+    src/pa/directory.cpp
+    src/pa/thread.cpp
+    src/pa/wall_time.cpp
+    src/pa/seh.cpp
 )
 
 if(WIN32)
@@ -111,10 +132,12 @@ target_link_libraries(cardinal_core PUBLIC cardinal::compile_flags)
 # Per-platform extras for HAL.
 if(WIN32)
     # psapi: HAL OS info / process metrics.
+    # version: pa/file.cpp uses GetFileVersionInfo / VerQueryValue (Win32
+    # Version Resource scan) for File::get_version / get_my_version.
     # crash.cpp resolves dbghelp.dll dynamically via LoadLibrary so we
     # don't need to link it here — keeps the core lib free of a hard
     # dependency on dbghelp for hosts that opt out of crash reporting.
-    target_link_libraries(cardinal_core PUBLIC psapi)
+    target_link_libraries(cardinal_core PUBLIC psapi version)
 elseif(UNIX AND NOT APPLE)
     # pthread for affinity APIs + std::thread + dl for dynamic loader.
     find_package(Threads REQUIRED)

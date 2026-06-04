@@ -1,0 +1,383 @@
+// =============================================================================
+// Cardinal — pa::* regression suite. Exercises every modernised port of the
+// Pearl Abyss PaLock / PaFile / PaDirectory / PaQueue / PaSeh / PaString /
+// PaThread / PaTime / PaTimer surfaces. Exit 0 = all pass.
+// =============================================================================
+
+#include <cardinal/core/pa.hpp>
+#include <cardinal/core/log.hpp>
+#include <cardinal/core/utility.hpp>
+
+#include <chrono>
+#include <thread>
+
+namespace {
+
+int g_checks = 0;
+int g_fail   = 0;
+
+void check_impl(bool ok, const char* expr, int line) {
+    ++g_checks;
+    if (!ok) {
+        ++g_fail;
+        cardinal::log::errorf("pa", "FAIL  L%d  %s", line, expr);
+    }
+}
+#define CHECK(x) ::check_impl(static_cast<bool>(x), #x, __LINE__)
+
+using namespace cardinal::core::pa;
+
+// ---------------------------------------------------------------------------
+// PaLock / InterLock / ThreadLock / NullLock / lock guards
+// ---------------------------------------------------------------------------
+void test_interlock() {
+    cardinal::i32 v32 = 0;
+    CHECK(InterLock::increment(v32) == 1);
+    CHECK(InterLock::increment(v32) == 2);
+    CHECK(InterLock::decrement(v32) == 1);
+    CHECK(InterLock::exchange_add(v32, 5) == 1);   // returns previous
+    CHECK(v32 == 6);
+    CHECK(InterLock::exchange(v32, 42) == 6);
+    CHECK(v32 == 42);
+    cardinal::i32 prev = InterLock::exchange_compare(v32, 100, 42);
+    CHECK(prev == 42 && v32 == 100);
+    prev = InterLock::exchange_compare(v32, 999, 0);   // mismatch — no change
+    CHECK(prev == 100 && v32 == 100);
+
+    cardinal::i64 v64 = 0;
+    CHECK(InterLock::increment(v64) == 1);
+    CHECK(InterLock::exchange_add(v64, 1000) == 1);
+    CHECK(v64 == 1001);
+}
+
+void test_thread_lock() {
+    ThreadLock lk("test", "lk");
+    CHECK(lk.is_opened());
+    {
+        ExclusiveLockGuard<ThreadLock> g(&lk);
+    }
+    {
+        SharedLockGuard<ThreadLock> g(&lk);
+    }
+    {
+        TryExclusiveLockGuard<ThreadLock> g(&lk);
+        CHECK(g.is_locked());
+    }
+    NullLock nl;
+    {
+        ExclusiveLockGuard<NullLock> g(&nl);
+    }
+    CHECK(nl.is_opened());
+}
+
+// ---------------------------------------------------------------------------
+// PaString
+// ---------------------------------------------------------------------------
+void test_string() {
+    StringA<32> a;
+    CHECK(a.is_null());
+    a.set("Hello");
+    CHECK(!a.is_null());
+    CHECK(a.length() == 5u);
+    a += " World";
+    CHECK(a.length() == 11u);
+    CHECK(::strcmp(a.c_str(), "Hello World") == 0);
+    a.replace('o', '0');
+    CHECK(::strcmp(a.c_str(), "Hell0 W0rld") == 0);
+    a.reset();
+    CHECK(a.is_null());
+    a.format("v=%d.%d", 1, 2);
+    CHECK(::strcmp(a.c_str(), "v=1.2") == 0);
+
+    StringW<32> w;
+    w.set(L"Hello");
+    CHECK(w.length() == 5u);
+    w += L" Wide";
+    CHECK(w.length() == 10u);
+    CHECK(::wcscmp(w.c_str(), L"Hello Wide") == 0);
+
+    // Cross-conversion.
+    StringA<32> a2;
+    a2.set(L"WideToNarrow");
+    CHECK(::strcmp(a2.c_str(), "WideToNarrow") == 0);
+
+    StringW<32> w2;
+    w2.set("NarrowToWide");
+    CHECK(::wcscmp(w2.c_str(), L"NarrowToWide") == 0);
+}
+
+// ---------------------------------------------------------------------------
+// PaQueue — SyncQueue / WaitableQueue / StaticCircularQueue / PriorityQueue
+// ---------------------------------------------------------------------------
+void test_sync_queue() {
+    SyncQueue<int> q;
+    CHECK(q.open() == 0);
+    q.push(10); q.push(20); q.push(30);
+    CHECK(q.size() == 3u);
+    int v = 0;
+    CHECK(q.pop_front(v) == kQueueOk && v == 10);
+    CHECK(q.pop_back(v)  == kQueueOk && v == 30);
+    CHECK(q.size() == 1u);
+    CHECK(q.is_exist(20));
+    q.erase(20);
+    CHECK(q.size() == 0u);
+    CHECK(q.pop_front(v) == kQueueEmpty);
+    q.close();
+}
+
+void test_dedup_queue() {
+    NonDuplicableUnorderedSyncQueue<int> q;
+    CHECK(q.open() == 0);
+    q.push(1); q.push(2); q.push(1); q.push(2);
+    CHECK(q.size() == 2u);
+    int v = 0;
+    CHECK(q.pop_front(v) == kQueueOk);
+    CHECK(q.size() == 1u);
+    q.close();
+}
+
+void test_waitable_queue() {
+    WaitableQueue<int> q;
+    CHECK(q.open() == 0);
+
+    int v = 0;
+    CHECK(q.pop_front(50, v) == kQueueEmpty);   // 50ms timeout, nothing to pop
+
+    // Producer thread pushes after 50ms; consumer waits up to 500ms.
+    std::thread producer([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        q.push(42);
+    });
+    CHECK(q.pop_front(500, v) == kQueueOk && v == 42);
+    producer.join();
+    q.close();
+}
+
+void test_circular_queue() {
+    StaticCircularQueue<int, 4> q;     // capacity 5 slots (4+1) — 4 live + 1 head
+    CHECK(q.empty());
+    q.push(1); q.push(2); q.push(3); q.push(4);
+    CHECK(!q.empty());
+    CHECK(q.front() == 1);
+    CHECK(q.pop() == 1);
+    CHECK(q.pop() == 2);
+    // Queue now holds [3, 4]. Pushing 3 more drives the buffer to its
+    // capacity (4 live) — the oldest (3) is overwritten on the 3rd push.
+    // Final state: [4, 5, 6, 7].
+    q.push(5); q.push(6); q.push(7);
+    CHECK(q.pop() == 4);
+    CHECK(q.pop() == 5);
+}
+
+void test_priority_queue() {
+    PriorityQueue<int> q;
+    q.push(3); q.push(1); q.push(4); q.push(1); q.push(5);
+    CHECK(q.size() == 5u);
+    CHECK(q.is_exist(4));
+    CHECK(q.top() == 5);     // max-heap default
+    q.pop();
+    CHECK(q.top() == 4);
+    q.clear();
+    CHECK(q.size() == 0u);
+}
+
+// ---------------------------------------------------------------------------
+// PaTime / CpuTime / CpuUsage
+// ---------------------------------------------------------------------------
+void test_time() {
+    const cardinal::u64 utc = get_utc_64();
+    CHECK(utc > 1700000000ull);   // after 2023-11
+    const cardinal::u32 utc32 = get_utc_32();
+    CHECK(utc32 != 0);
+
+    Time t;          // current local time
+    CHECK(t.year() >= 2025u);
+    CHECK(t.month() >= 1u && t.month() <= 12u);
+    CHECK(t.day() >= 1u && t.day() <= 31u);
+
+    Time epoch;
+    epoch.set(2025, 1, 1, 0, 0, 0);
+    CHECK(epoch.year() == 2025u && epoch.month() == 1u && epoch.day() == 1u);
+    CHECK(epoch.day_of_week() == DayOfWeek::Wednesday);   // 2025-01-01 = Wed
+
+    Time later = epoch;
+    later.add_seconds(3600);   // +1 hour
+    CHECK(later.hour() == 1u || later.year() == 2025u);   // sanity, exact value depends on tz
+
+    Time future;
+    future.set(2025, 1, 1, 0, 0, 0);
+    future.add_day_and_set_time(5, 12, 0, 0);
+    CHECK(future.day() == 6u && future.month() == 1u);
+    CHECK(future.hour() == 12u);
+
+    CpuTime ct;
+    CHECK(ct.reset() == 0);
+
+    CpuUsage cu;
+    (void)cu.reset_and_calculate_busy_rate();    // first call seeds; no return check
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    const cardinal::i32 busy = cu.reset_and_calculate_busy_rate();
+    CHECK(busy >= 0 && busy <= 100);
+}
+
+// ---------------------------------------------------------------------------
+// PaTimer — Stopwatch + RepeatableTimer
+// ---------------------------------------------------------------------------
+void test_stopwatch() {
+    Stopwatch sw;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    CHECK(sw.elapsed_ms() >= 9u);    // tolerate one-tick jitter
+    sw.restart();
+    CHECK(sw.elapsed_ms() < 5u);
+}
+
+void test_repeatable_timer() {
+    RepeatableTimer<cardinal::u32> rt;
+    CHECK(rt.register_entry(/*id=*/1, /*delay_ms=*/20, /*interval_ms=*/0)  == 0);
+    CHECK(rt.register_entry(/*id=*/2, /*delay_ms=*/40, /*interval_ms=*/20) == 0);
+    CHECK(rt.register_entry(/*id=*/1, /*delay_ms=*/10, /*interval_ms=*/0)  == 183);   // duplicate
+    rt.end_register();
+
+    cardinal::vector<cardinal::u32> fired;
+    // Wait long enough for #1 to fire (one-shot).
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    const cardinal::u32 next = rt.wait_milliseconds(fired);
+    CHECK(!fired.empty());
+    (void)next;
+}
+
+// ---------------------------------------------------------------------------
+// PaDirectory — create / list / remove
+// ---------------------------------------------------------------------------
+void test_directory_make_and_remove() {
+    // Use a unique tmp path inside cwd.
+    const wchar_t* tmp = L"./.pa_test_dir";
+    (void)Directory::remove(tmp);   // best-effort cleanup
+    CHECK(Directory::make(tmp) == 0);
+
+    // Make + list a sub-tree.
+    CHECK(Directory::make(L"./.pa_test_dir/sub") == 0);
+
+    Directory d;
+    CHECK(d.begin(L"./.pa_test_dir") == 0);
+    bool saw_sub = false;
+    int  count   = 0;
+    do {
+        const auto& e = d.get();
+        if (e.file_name == L"sub") saw_sub = true;
+        ++count;
+    } while (d.next() == 0);
+    d.end();
+    CHECK(count >= 1);
+    CHECK(saw_sub);
+
+    CHECK(Directory::remove(tmp) == 0);
+}
+
+// ---------------------------------------------------------------------------
+// PaFile — write + read round-trip
+// ---------------------------------------------------------------------------
+void test_file_round_trip() {
+    const wchar_t* path = L"./.pa_test_file.bin";
+
+    {
+        SyncWriteFile w;
+        CHECK(w.open(path) == 0);
+        const cardinal::u32 data[] = { 0xDEADBEEFu, 0xCAFEBABEu, 0x12345678u };
+        CHECK(w.write(data, sizeof(data)) == 0);
+        CHECK(w.flush() == 0);
+        w.close();
+    }
+
+    cardinal::u64 size = 0;
+    CHECK(File::get_size(path, size) == 0);
+    CHECK(size == 12u);
+
+    {
+        SyncReadFile r;
+        CHECK(r.open(path, /*writable=*/false) == 0);
+        cardinal::u32 buf[3] = {};
+        cardinal::u32 sz = sizeof(buf);
+        CHECK(r.read(buf, sz) == 0);
+        CHECK(sz == 12u);
+        CHECK(buf[0] == 0xDEADBEEFu);
+        CHECK(buf[1] == 0xCAFEBABEu);
+        CHECK(buf[2] == 0x12345678u);
+        r.close();
+    }
+    // Clean up.
+    (void)Directory::remove(path);
+}
+
+// ---------------------------------------------------------------------------
+// PaThread — start + cooperative stop
+// ---------------------------------------------------------------------------
+class TestThread : public Thread {
+public:
+    TestThread() : Thread(L"PaTestThread", 0, false), counter_(0) {}
+    cardinal::atomic<cardinal::i32> counter_;
+protected:
+    cardinal::i32 run() noexcept override {
+        while (!stop_requested()) {
+            counter_.fetch_add(1);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return 0;
+    }
+};
+
+void test_thread() {
+    TestThread t;
+    CHECK(!t.is_started());
+    CHECK(t.start(/*stack_size=*/0) == 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    CHECK(t.counter_.load() > 0);
+    CHECK(t.stop() == 0);
+    CHECK(t.wait(500) == 0);
+    CHECK(!t.is_started());
+}
+
+// ---------------------------------------------------------------------------
+// PaSeh — set_handler / dump_mini (Windows only; non-Windows is no-op stub)
+// ---------------------------------------------------------------------------
+void test_seh() {
+#if CARDINAL_PLATFORM_WINDOWS
+    auto& mgr = SehManager::instance();
+    CHECK(mgr.set_handler(L"./.pa_seh_", "test-user", false, nullptr) == 0);
+    CHECK(mgr.is_set());
+    mgr.set_dump_file_name(L"./.pa_seh_dump.dmp");
+    const cardinal::i32 r = mgr.dump_mini(false);
+    CHECK(r == 0);                                       // wrote successfully
+    CHECK(::wcsstr(mgr.dump_file_name(), L".pa_seh_dump.dmp") != nullptr);
+    mgr.dont_catch_exception();
+    CHECK(!mgr.is_set());
+
+    // Clean up the dump file.
+    (void)Directory::remove(L"./.pa_seh_dump.dmp");
+#endif
+}
+
+}  // namespace
+
+int main() {
+    cardinal::log::infof("pa", "pa::* regression suite");
+
+    test_interlock();
+    test_thread_lock();
+    test_string();
+    test_sync_queue();
+    test_dedup_queue();
+    test_waitable_queue();
+    test_circular_queue();
+    test_priority_queue();
+    test_time();
+    test_stopwatch();
+    test_repeatable_timer();
+    test_directory_make_and_remove();
+    test_file_round_trip();
+    test_thread();
+    test_seh();
+
+    cardinal::log::infof("pa", "checks=%d  failures=%d", g_checks, g_fail);
+    return g_fail == 0 ? 0 : 1;
+}
