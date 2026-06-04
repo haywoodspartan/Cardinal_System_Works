@@ -1803,6 +1803,279 @@ void test_primitives_and_wire_hlsl_nonempty() {
     CHECK(gpu::WireframePass::hlsl_source()[0] != '\0');
 }
 
+// ----------------------------------------------------------------------------
+// PlanePrimitivePass — the "rainbow floor" of the polygon viewport image.
+// ----------------------------------------------------------------------------
+void test_plane_primitive_triangle_count_scales_with_subdivisions() {
+    gpu::PlaneSpec spec;
+    spec.half_size_x = 5.0f; spec.half_size_z = 5.0f;
+    spec.subdivisions_x = 8;
+    spec.subdivisions_z = 4;
+    auto g = rg::Graph::create();
+    auto st = gpu::PlanePrimitivePass::add_to_graph(*g, spec);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->triangle_count == 2u * 8u * 4u);
+    auto out = b->buffer_contents(st->out_tris);
+    CHECK(out.size() == st->triangle_count * 9u * sizeof(float));
+}
+
+void test_plane_primitive_all_on_y_plane() {
+    gpu::PlaneSpec spec;
+    spec.half_size_x = 2.0f; spec.half_size_z = 2.0f;
+    spec.subdivisions_x = 4;
+    spec.subdivisions_z = 4;
+    spec.center_y = -1.0f;
+    auto g = rg::Graph::create();
+    auto st = gpu::PlanePrimitivePass::add_to_graph(*g, spec);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out = b->buffer_contents(st->out_tris);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    for (cardinal::usize i = 0; i < st->triangle_count * 9u; i += 3) {
+        const float y = of[i + 1];
+        CHECK(y == -1.0f);   // every vertex lies on Y = center_y
+    }
+}
+
+// ----------------------------------------------------------------------------
+// PyramidPrimitivePass — the spike in the image.
+// ----------------------------------------------------------------------------
+void test_pyramid_square_base_six_tris() {
+    gpu::PyramidSpec spec;
+    spec.base_half_extent = 1.0f;
+    spec.height = 2.0f;
+    spec.square_base = true;
+    auto g = rg::Graph::create();
+    auto st = gpu::PyramidPrimitivePass::add_to_graph(*g, spec);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->triangle_count == 6u);
+}
+
+void test_pyramid_tetrahedron_four_tris() {
+    gpu::PyramidSpec spec;
+    spec.base_half_extent = 1.0f;
+    spec.height = 2.0f;
+    spec.square_base = false;
+    auto g = rg::Graph::create();
+    auto st = gpu::PyramidPrimitivePass::add_to_graph(*g, spec);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->triangle_count == 4u);
+}
+
+void test_pyramid_apex_at_height() {
+    gpu::PyramidSpec spec;
+    spec.base_half_extent = 1.0f;
+    spec.height = 3.0f;
+    spec.square_base = true;
+    spec.center_x = 5.0f;
+    spec.center_y = 0.0f;
+    auto g = rg::Graph::create();
+    auto st = gpu::PyramidPrimitivePass::add_to_graph(*g, spec);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out = b->buffer_contents(st->out_tris);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    // First 4 triangles each have the apex as vertex 0. Apex y = center_y + height = 3.
+    for (cardinal::u32 t = 0; t < 4; ++t) {
+        CHECK(of[t * 9 + 0] == 5.0f);   // apex x
+        CHECK(of[t * 9 + 1] == 3.0f);   // apex y
+    }
+}
+
+// ----------------------------------------------------------------------------
+// PolygonViewportPass — flat hash-color per triangle.
+// ----------------------------------------------------------------------------
+void test_polygon_viewport_draws_with_hash_color() {
+    // Two non-overlapping triangles at different IDs should get different
+    // flat colors via the splitmix hash.
+    constexpr cardinal::u32 W = 64, H = 32;
+    cardinal::vector<float> tris = {
+        // Triangle 0: left half
+        -0.8f, -0.5f, 0.5f,
+        -0.2f, -0.5f, 0.5f,
+        -0.5f,  0.5f, 0.5f,
+        // Triangle 1: right half
+         0.2f, -0.5f, 0.5f,
+         0.8f, -0.5f, 0.5f,
+         0.5f,  0.5f, 0.5f,
+    };
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1,
+    };
+    auto g = rg::Graph::create();
+    auto h_t = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat",  mat.size()  * sizeof(float), 0, true});
+    InitBlob bt{h_t, tris.data(), tris.size() * sizeof(float)};
+    InitBlob bm{h_m, mat.data(),  mat.size()  * sizeof(float)};
+    add_init_pass(*g, "it", h_t, &bt);
+    add_init_pass(*g, "im", h_m, &bm);
+    auto st = gpu::PolygonViewportPass::add_to_graph(*g, h_t, h_m, W, H, 2, 0);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->triangles_drawn == 2u);
+    CHECK(st->fragments_drawn > 0u);
+    auto col = b->buffer_contents(st->out_color);
+    // Sample the left triangle's center and the right triangle's center.
+    // Convert NDC (-0.5, 0) → pixel (16, 16) for left, (-0.0+0.5, 0)*hw → (W*0.75-0.5, 16) for right.
+    const cardinal::usize left_pix  = (16u * W + 16u) * 4u;
+    const cardinal::usize right_pix = (16u * W + 48u) * 4u;
+    const cardinal::u8 lr = col[left_pix + 0],  lg = col[left_pix + 1],  lb = col[left_pix + 2];
+    const cardinal::u8 rr = col[right_pix + 0], rg_ = col[right_pix + 1], rb = col[right_pix + 2];
+    // Both triangles painted — not background black (which is 0,0,0).
+    const bool left_drawn  = (lr != 0) || (lg != 0) || (lb != 0);
+    const bool right_drawn = (rr != 0) || (rg_ != 0) || (rb != 0);
+    CHECK(left_drawn);
+    CHECK(right_drawn);
+    // Colors should differ between the two triangles (overwhelmingly likely
+    // given splitmix32 distinctness across two consecutive IDs).
+    const bool same_color = (lr == rr && lg == rg_ && lb == rb);
+    CHECK(!same_color);
+}
+
+void test_polygon_viewport_seed_changes_colors() {
+    // Same triangle, two different color seeds → different colors.
+    constexpr cardinal::u32 W = 16, H = 16;
+    cardinal::vector<float> tris = {
+        -0.5f, -0.5f, 0.5f,
+         0.5f, -0.5f, 0.5f,
+         0.0f,  0.5f, 0.5f,
+    };
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1,
+    };
+    auto run = [&](cardinal::u32 seed) {
+        auto g = rg::Graph::create();
+        auto h_t = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+        auto h_m = g->declare_buffer(rg::BufferDesc{"mat",  mat.size()  * sizeof(float), 0, true});
+        InitBlob bt{h_t, tris.data(), tris.size() * sizeof(float)};
+        InitBlob bm{h_m, mat.data(),  mat.size()  * sizeof(float)};
+        add_init_pass(*g, "it", h_t, &bt);
+        add_init_pass(*g, "im", h_m, &bm);
+        auto st = gpu::PolygonViewportPass::add_to_graph(*g, h_t, h_m, W, H, 1, seed);
+        g->compile();
+        auto b = rg::CpuBackend::create();
+        b->execute(*g);
+        return b->buffer_contents(st->out_color);
+    };
+    auto a = run(0);
+    auto c = run(42);
+    // Sample center pixel.
+    const cardinal::usize p = (8u * W + 8u) * 4u;
+    const bool diff = (a[p + 0] != c[p + 0]) || (a[p + 1] != c[p + 1]) || (a[p + 2] != c[p + 2]);
+    CHECK(diff);
+}
+
+void test_polygon_viewport_depth_test() {
+    // Near triangle wins over far triangle of a different color.
+    constexpr cardinal::u32 W = 16, H = 16;
+    cardinal::vector<float> tris = {
+        // Far: z = 0.8
+        -0.5f, -0.5f, 0.8f,
+         0.5f, -0.5f, 0.8f,
+         0.0f,  0.5f, 0.8f,
+        // Near: z = 0.2 (different triangle ID → different hash color)
+        -0.5f, -0.5f, 0.2f,
+         0.5f, -0.5f, 0.2f,
+         0.0f,  0.5f, 0.2f,
+    };
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1,
+    };
+    auto g = rg::Graph::create();
+    auto h_t = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat",  mat.size()  * sizeof(float), 0, true});
+    InitBlob bt{h_t, tris.data(), tris.size() * sizeof(float)};
+    InitBlob bm{h_m, mat.data(),  mat.size()  * sizeof(float)};
+    add_init_pass(*g, "it", h_t, &bt);
+    add_init_pass(*g, "im", h_m, &bm);
+    auto st = gpu::PolygonViewportPass::add_to_graph(*g, h_t, h_m, W, H, 2, 0);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto dep = b->buffer_contents(st->out_depth);
+    const float* df = reinterpret_cast<const float*>(dep.data());
+    // Center pixel depth should reflect the NEAR z (0.6 after NDC→[0,1] remap).
+    const float z = df[8u * W + 8u];
+    CHECK(z >= 0.5f);   // (0.2 + 1) * 0.5 = 0.6
+    CHECK(z <= 0.7f);
+}
+
+void test_polygon_viewport_nan_safe() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    constexpr cardinal::u32 W = 8, H = 8;
+    cardinal::vector<float> tris(9u, qnan);
+    cardinal::vector<float> mat(16u, qnan);
+    auto g = rg::Graph::create();
+    auto h_t = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat",  mat.size()  * sizeof(float), 0, true});
+    InitBlob bt{h_t, tris.data(), tris.size() * sizeof(float)};
+    InitBlob bm{h_m, mat.data(),  mat.size()  * sizeof(float)};
+    add_init_pass(*g, "it", h_t, &bt);
+    add_init_pass(*g, "im", h_m, &bm);
+    auto st = gpu::PolygonViewportPass::add_to_graph(*g, h_t, h_m, W, H, 1, 0);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto dep = b->buffer_contents(st->out_depth);
+    const float* df = reinterpret_cast<const float*>(dep.data());
+    for (cardinal::usize i = 0; i < W * H; ++i) CHECK(df[i] == df[i]);
+}
+
+// End-to-end: rainbow-floor + sphere + pyramid → polygon viewport, like the
+// reference image. Pin the triangle counts that go through each stage.
+void test_chain_scene_polygon_viewport() {
+    gpu::PlaneSpec floor_spec;
+    floor_spec.half_size_x = 5.0f; floor_spec.half_size_z = 5.0f;
+    floor_spec.subdivisions_x = 8; floor_spec.subdivisions_z = 8;
+    floor_spec.center_y = -1.0f;
+
+    gpu::SphereSpec sphere_spec;
+    sphere_spec.radius = 0.8f;
+    sphere_spec.latitude_segments = 8; sphere_spec.longitude_segments = 12;
+    sphere_spec.center_x = 1.5f; sphere_spec.center_y = -0.2f;
+
+    gpu::PyramidSpec pyramid_spec;
+    pyramid_spec.base_half_extent = 0.6f;
+    pyramid_spec.height = 1.2f;
+    pyramid_spec.square_base = true;
+    pyramid_spec.center_x = -1.0f; pyramid_spec.center_y = -1.0f;
+
+    auto g = rg::Graph::create();
+    auto floor   = gpu::PlanePrimitivePass  ::add_to_graph(*g, floor_spec);
+    auto sphere  = gpu::SpherePrimitivePass ::add_to_graph(*g, sphere_spec);
+    auto pyramid = gpu::PyramidPrimitivePass::add_to_graph(*g, pyramid_spec);
+
+    // Floor: 8*8*2 = 128 triangles.
+    CHECK(floor->triangle_count == 128u);
+    // Sphere: 2*8*12 = 192 triangles.
+    CHECK(sphere->triangle_count == 192u);
+    // Square pyramid: 6 triangles.
+    CHECK(pyramid->triangle_count == 6u);
+
+    // Total triangles the polygon viewport could rasterize across all three
+    // primitives = 128 + 192 + 6 = 326.
+    const cardinal::u32 total = floor->triangle_count + sphere->triangle_count + pyramid->triangle_count;
+    CHECK(total == 326u);
+}
+
+void test_polygon_viewport_hlsl_nonempty() {
+    CHECK(gpu::PolygonViewportPass::hlsl_source() != nullptr);
+    CHECK(gpu::PolygonViewportPass::hlsl_source()[0] != '\0');
+    CHECK(gpu::PlanePrimitivePass::hlsl_source() != nullptr);
+    CHECK(gpu::PlanePrimitivePass::hlsl_source()[0] != '\0');
+    CHECK(gpu::PyramidPrimitivePass::hlsl_source() != nullptr);
+    CHECK(gpu::PyramidPrimitivePass::hlsl_source()[0] != '\0');
+}
+
 void test_reset_clears_state() {
     auto g = rg::Graph::create();
     FillOp op{};
@@ -1890,6 +2163,18 @@ int main() {
     test_wireframe_pass_nan_matrix_safe();
     test_chain_sphere_adaptive_wireframe_edge_count_scales_with_tier();
     test_primitives_and_wire_hlsl_nonempty();
+
+    test_plane_primitive_triangle_count_scales_with_subdivisions();
+    test_plane_primitive_all_on_y_plane();
+    test_pyramid_square_base_six_tris();
+    test_pyramid_tetrahedron_four_tris();
+    test_pyramid_apex_at_height();
+    test_polygon_viewport_draws_with_hash_color();
+    test_polygon_viewport_seed_changes_colors();
+    test_polygon_viewport_depth_test();
+    test_polygon_viewport_nan_safe();
+    test_chain_scene_polygon_viewport();
+    test_polygon_viewport_hlsl_nonempty();
 
     test_zero_size_buffer_safe();
     test_reset_clears_state();
