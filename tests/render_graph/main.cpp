@@ -16,6 +16,7 @@
 #include <cardinal/render/gpu_raster.hpp>
 #include <cardinal/render/gpu_geometry.hpp>
 #include <cardinal/render/gpu_primitives.hpp>
+#include <cardinal/render/gpu_visbuf.hpp>
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/utility.hpp>
 #include <cardinal/core/simd_math.hpp>
@@ -2346,6 +2347,299 @@ void test_label_and_gizmo_hlsl_nonempty() {
     CHECK(gpu::WorldAxisGizmoPass::hlsl_source()[0] != '\0');
 }
 
+// ----------------------------------------------------------------------------
+// VisibilityBufferPass — compact V-Buf with PrimID/MatID/Normal/Depth/...
+// (AEGIS pipeline box 6)
+// ----------------------------------------------------------------------------
+void test_visbuf_records_prim_and_material_ids() {
+    constexpr cardinal::u32 W = 16, H = 16;
+    // Two centered triangles at different depths + different material IDs.
+    cardinal::vector<float> tris = {
+        -0.5f, -0.5f, 0.3f,
+         0.5f, -0.5f, 0.3f,
+         0.0f,  0.5f, 0.3f,
+        -0.5f, -0.5f, 0.7f,
+         0.5f, -0.5f, 0.7f,
+         0.0f,  0.5f, 0.7f,
+    };
+    cardinal::vector<cardinal::u32> mat_ids = { 100u, 200u };
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1,
+    };
+
+    auto g = rg::Graph::create();
+    auto h_t = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    auto h_i = g->declare_buffer(rg::BufferDesc{"mids", mat_ids.size() * sizeof(cardinal::u32), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat",  mat.size() * sizeof(float), 0, true});
+    InitBlob bt{h_t, tris.data(), tris.size() * sizeof(float)};
+    InitBlob bi{h_i, mat_ids.data(), mat_ids.size() * sizeof(cardinal::u32)};
+    InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+    add_init_pass(*g, "it", h_t, &bt);
+    add_init_pass(*g, "ii", h_i, &bi);
+    add_init_pass(*g, "im", h_m, &bm);
+
+    rg::ResourceHandle no_aux;
+    auto st = gpu::VisibilityBufferPass::add_to_graph(*g, h_t, h_i, h_m, no_aux, W, H, 2);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+
+    // Center pixel — the near triangle (z=0.3, prim 0, mat 100) wins.
+    auto prim = b->buffer_contents(st->out_prim_id);
+    auto matb = b->buffer_contents(st->out_mat_id);
+    auto dep  = b->buffer_contents(st->out_depth);
+    auto nrm  = b->buffer_contents(st->out_normal);
+    const cardinal::u32* prim_f = reinterpret_cast<const cardinal::u32*>(prim.data());
+    const cardinal::u32* mat_f  = reinterpret_cast<const cardinal::u32*>(matb.data());
+    const float*         dep_f  = reinterpret_cast<const float*>(dep.data());
+    const cardinal::u32* nrm_f  = reinterpret_cast<const cardinal::u32*>(nrm.data());
+    const cardinal::usize cp = 8u * W + 8u;
+    CHECK(prim_f[cp] == 0u);                       // near tri = prim 0
+    CHECK(mat_f[cp]  == 100u);
+    // Depth at center = (0.3 + 1) * 0.5 = 0.65.
+    CHECK(dep_f[cp]  >= 0.6f && dep_f[cp] <= 0.7f);
+    // Normal must be non-zero (oct-packed from cross-product of edges).
+    CHECK(nrm_f[cp] != 0u);
+    // A pixel that no triangle covered (corner) = kInvalidPrim.
+    CHECK(prim_f[0] == gpu::kInvalidPrimId);
+    CHECK(mat_f[0]  == gpu::kInvalidMatId);
+    CHECK(dep_f[0]  == 1.0f);
+    CHECK(st->fragments_drawn > 0u);
+}
+
+void test_visbuf_aux_channel_writes_per_triangle() {
+    constexpr cardinal::u32 W = 8, H = 8;
+    cardinal::vector<float> tris = {
+        -0.5f, -0.5f, 0.5f,
+         0.5f, -0.5f, 0.5f,
+         0.0f,  0.5f, 0.5f,
+    };
+    cardinal::vector<cardinal::u32> mat_ids = { 7u };
+    cardinal::vector<cardinal::u32> aux     = { 0xDEADBEEFu };
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1,
+    };
+
+    auto g = rg::Graph::create();
+    auto h_t = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    auto h_i = g->declare_buffer(rg::BufferDesc{"mids", mat_ids.size() * sizeof(cardinal::u32), 0, true});
+    auto h_x = g->declare_buffer(rg::BufferDesc{"aux",  aux.size() * sizeof(cardinal::u32), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat",  mat.size() * sizeof(float), 0, true});
+    InitBlob bt{h_t, tris.data(), tris.size() * sizeof(float)};
+    InitBlob bi{h_i, mat_ids.data(), mat_ids.size() * sizeof(cardinal::u32)};
+    InitBlob bx{h_x, aux.data(), aux.size() * sizeof(cardinal::u32)};
+    InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+    add_init_pass(*g, "it", h_t, &bt);
+    add_init_pass(*g, "ii", h_i, &bi);
+    add_init_pass(*g, "ix", h_x, &bx);
+    add_init_pass(*g, "im", h_m, &bm);
+
+    auto st = gpu::VisibilityBufferPass::add_to_graph(*g, h_t, h_i, h_m, h_x, W, H, 1);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto auxb = b->buffer_contents(st->out_aux);
+    const cardinal::u32* af = reinterpret_cast<const cardinal::u32*>(auxb.data());
+    CHECK(af[4u * W + 4u] == 0xDEADBEEFu);
+}
+
+void test_visbuf_nan_inputs_safe() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    constexpr cardinal::u32 W = 4, H = 4;
+    cardinal::vector<float> tris(9u, qnan);
+    cardinal::vector<cardinal::u32> mat_ids = { 0u };
+    cardinal::vector<float> mat(16, qnan);
+
+    auto g = rg::Graph::create();
+    auto h_t = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    auto h_i = g->declare_buffer(rg::BufferDesc{"mids", mat_ids.size() * sizeof(cardinal::u32), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat",  mat.size() * sizeof(float), 0, true});
+    InitBlob bt{h_t, tris.data(), tris.size() * sizeof(float)};
+    InitBlob bi{h_i, mat_ids.data(), mat_ids.size() * sizeof(cardinal::u32)};
+    InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+    add_init_pass(*g, "it", h_t, &bt);
+    add_init_pass(*g, "ii", h_i, &bi);
+    add_init_pass(*g, "im", h_m, &bm);
+
+    rg::ResourceHandle no_aux;
+    auto st = gpu::VisibilityBufferPass::add_to_graph(*g, h_t, h_i, h_m, no_aux, W, H, 1);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto dep = b->buffer_contents(st->out_depth);
+    const float* df = reinterpret_cast<const float*>(dep.data());
+    for (cardinal::usize i = 0; i < W * H; ++i) CHECK(df[i] == df[i]);
+}
+
+// ----------------------------------------------------------------------------
+// HiZBuildPass — depth pyramid construction (AEGIS pipeline box 4 → Hi-Z)
+// ----------------------------------------------------------------------------
+void test_hiz_build_two_mips_max_reduction() {
+    constexpr cardinal::u32 W = 4, H = 4;
+    // Depth values laid out so the max is in known cells.
+    cardinal::vector<float> dep = {
+        0.1f, 0.2f, 0.3f, 0.4f,
+        0.5f, 0.6f, 0.7f, 0.8f,
+        0.9f, 0.95f, 0.7f, 0.5f,
+        0.3f, 0.2f, 0.1f, 0.05f,
+    };
+    auto g = rg::Graph::create();
+    auto h_d = g->declare_buffer(rg::BufferDesc{"dep", dep.size() * sizeof(float), 0, true});
+    InitBlob bd{h_d, dep.data(), dep.size() * sizeof(float)};
+    add_init_pass(*g, "id", h_d, &bd);
+    auto st = gpu::HiZBuildPass::add_to_graph(*g, h_d, W, H);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+
+    CHECK(st->mip_count == 3u);                    // 4x4 → 2x2 → 1x1
+    CHECK(st->mips_built == 3u);
+
+    auto pyr = b->buffer_contents(st->out_pyramid);
+    const float* pf = reinterpret_cast<const float*>(pyr.data());
+
+    // Mip 1 (2x2) — each cell = max of 2x2 of mip 0.
+    const cardinal::u32 m1 = st->mip_offsets_f[1];
+    // (0, 0) = max(0.1, 0.2, 0.5, 0.6) = 0.6
+    CHECK(pf[m1 + 0] >= 0.59f && pf[m1 + 0] <= 0.61f);
+    // (1, 0) = max(0.3, 0.4, 0.7, 0.8) = 0.8
+    CHECK(pf[m1 + 1] >= 0.79f && pf[m1 + 1] <= 0.81f);
+    // (0, 1) = max(0.9, 0.95, 0.3, 0.2) = 0.95
+    CHECK(pf[m1 + 2] >= 0.94f && pf[m1 + 2] <= 0.96f);
+    // (1, 1) = max(0.7, 0.5, 0.1, 0.05) = 0.7
+    CHECK(pf[m1 + 3] >= 0.69f && pf[m1 + 3] <= 0.71f);
+
+    // Mip 2 (1x1) — global max across all of mip 1 = 0.95.
+    const cardinal::u32 m2 = st->mip_offsets_f[2];
+    CHECK(pf[m2] >= 0.94f && pf[m2] <= 0.96f);
+    CHECK(st->max_depth >= 0.94f && st->max_depth <= 0.96f);
+}
+
+void test_hiz_build_uniform_depth() {
+    // Uniform input → every mip should hold the same uniform value.
+    constexpr cardinal::u32 W = 8, H = 8;
+    cardinal::vector<float> dep(W * H, 0.42f);
+    auto g = rg::Graph::create();
+    auto h_d = g->declare_buffer(rg::BufferDesc{"dep", dep.size() * sizeof(float), 0, true});
+    InitBlob bd{h_d, dep.data(), dep.size() * sizeof(float)};
+    add_init_pass(*g, "id", h_d, &bd);
+    auto st = gpu::HiZBuildPass::add_to_graph(*g, h_d, W, H);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+
+    auto pyr = b->buffer_contents(st->out_pyramid);
+    const float* pf = reinterpret_cast<const float*>(pyr.data());
+    for (cardinal::u32 m = 0; m < st->mip_count; ++m) {
+        const cardinal::u32 mw = st->mip_widths[m];
+        const cardinal::u32 mh = st->mip_heights[m];
+        const cardinal::u32 off = st->mip_offsets_f[m];
+        for (cardinal::u32 i = 0; i < mw * mh; ++i) {
+            CHECK(pf[off + i] >= 0.41f && pf[off + i] <= 0.43f);
+        }
+    }
+    CHECK(st->max_depth >= 0.41f && st->max_depth <= 0.43f);
+}
+
+void test_hiz_build_nan_inputs_safe() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    constexpr cardinal::u32 W = 4, H = 4;
+    cardinal::vector<float> dep(W * H, qnan);
+    auto g = rg::Graph::create();
+    auto h_d = g->declare_buffer(rg::BufferDesc{"dep", dep.size() * sizeof(float), 0, true});
+    InitBlob bd{h_d, dep.data(), dep.size() * sizeof(float)};
+    add_init_pass(*g, "id", h_d, &bd);
+    auto st = gpu::HiZBuildPass::add_to_graph(*g, h_d, W, H);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto pyr = b->buffer_contents(st->out_pyramid);
+    const float* pf = reinterpret_cast<const float*>(pyr.data());
+    // Every pyramid sample must be finite (fzf coerced NaN → 1.0).
+    for (cardinal::usize i = 0; i < pyr.size() / sizeof(float); ++i) {
+        CHECK(pf[i] == pf[i]);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// HiZOcclusionTestPass — AABBs vs depth pyramid (AEGIS Hi-Z Occlusion)
+// ----------------------------------------------------------------------------
+void test_hiz_occlusion_visible_when_pyramid_is_far() {
+    // Pyramid = uniform 1.0 (everything far) → every AABB visible.
+    constexpr cardinal::u32 W = 8, H = 8;
+    cardinal::vector<float> dep(W * H, 1.0f);
+    auto g = rg::Graph::create();
+    auto h_d = g->declare_buffer(rg::BufferDesc{"dep", dep.size() * sizeof(float), 0, true});
+    InitBlob bd{h_d, dep.data(), dep.size() * sizeof(float)};
+    add_init_pass(*g, "id", h_d, &bd);
+    auto hiz = gpu::HiZBuildPass::add_to_graph(*g, h_d, W, H);
+
+    constexpr cardinal::u32 N = 2;
+    cardinal::vector<float> aabbs(N * 6u, 0.0f);
+    aabbs[0 * N + 0] = -0.3f; aabbs[3 * N + 0] = 0.3f;   // x
+    aabbs[1 * N + 0] = -0.3f; aabbs[4 * N + 0] = 0.3f;   // y
+    aabbs[2 * N + 0] =  0.4f; aabbs[5 * N + 0] = 0.5f;   // z
+    aabbs[0 * N + 1] = -0.2f; aabbs[3 * N + 1] = 0.2f;
+    aabbs[1 * N + 1] = -0.2f; aabbs[4 * N + 1] = 0.2f;
+    aabbs[2 * N + 1] =  0.2f; aabbs[5 * N + 1] = 0.3f;
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1,
+    };
+    auto h_a = g->declare_buffer(rg::BufferDesc{"aabbs", aabbs.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat",   mat.size() * sizeof(float), 0, true});
+    InitBlob ba{h_a, aabbs.data(), aabbs.size() * sizeof(float)};
+    InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+    add_init_pass(*g, "ia", h_a, &ba);
+    add_init_pass(*g, "im", h_m, &bm);
+    auto test = gpu::HiZOcclusionTestPass::add_to_graph(*g, h_a, h_m, N, *hiz);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(test->visible == N);
+    CHECK(test->occluded == 0u);
+}
+
+void test_hiz_occlusion_culls_when_aabb_behind_pyramid() {
+    // Pyramid = uniform 0.3 (near). AABB at z = 0.8 is FARTHER than 0.3 → occluded.
+    constexpr cardinal::u32 W = 8, H = 8;
+    cardinal::vector<float> dep(W * H, 0.3f);
+    auto g = rg::Graph::create();
+    auto h_d = g->declare_buffer(rg::BufferDesc{"dep", dep.size() * sizeof(float), 0, true});
+    InitBlob bd{h_d, dep.data(), dep.size() * sizeof(float)};
+    add_init_pass(*g, "id", h_d, &bd);
+    auto hiz = gpu::HiZBuildPass::add_to_graph(*g, h_d, W, H);
+
+    constexpr cardinal::u32 N = 1;
+    cardinal::vector<float> aabbs(N * 6u, 0.0f);
+    aabbs[0 * N + 0] = -0.3f; aabbs[3 * N + 0] = 0.3f;
+    aabbs[1 * N + 0] = -0.3f; aabbs[4 * N + 0] = 0.3f;
+    aabbs[2 * N + 0] =  0.8f; aabbs[5 * N + 0] = 0.9f;   // FAR z
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1,
+    };
+    auto h_a = g->declare_buffer(rg::BufferDesc{"aabbs", aabbs.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat",   mat.size() * sizeof(float), 0, true});
+    InitBlob ba{h_a, aabbs.data(), aabbs.size() * sizeof(float)};
+    InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+    add_init_pass(*g, "ia", h_a, &ba);
+    add_init_pass(*g, "im", h_m, &bm);
+    auto test = gpu::HiZOcclusionTestPass::add_to_graph(*g, h_a, h_m, N, *hiz);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(test->visible == 0u);
+    CHECK(test->occluded == 1u);
+}
+
+void test_visbuf_and_hiz_hlsl_nonempty() {
+    CHECK(gpu::VisibilityBufferPass::hlsl_source() != nullptr);
+    CHECK(gpu::VisibilityBufferPass::hlsl_source()[0] != '\0');
+    CHECK(gpu::HiZBuildPass::hlsl_source() != nullptr);
+    CHECK(gpu::HiZBuildPass::hlsl_source()[0] != '\0');
+    CHECK(gpu::HiZOcclusionTestPass::hlsl_source() != nullptr);
+    CHECK(gpu::HiZOcclusionTestPass::hlsl_source()[0] != '\0');
+}
+
 void test_reset_clears_state() {
     auto g = rg::Graph::create();
     FillOp op{};
@@ -2455,6 +2749,16 @@ int main() {
     test_axis_gizmo_offscreen_origin_zero_pixels();
     test_axis_gizmo_nan_matrix_safe();
     test_label_and_gizmo_hlsl_nonempty();
+
+    test_visbuf_records_prim_and_material_ids();
+    test_visbuf_aux_channel_writes_per_triangle();
+    test_visbuf_nan_inputs_safe();
+    test_hiz_build_two_mips_max_reduction();
+    test_hiz_build_uniform_depth();
+    test_hiz_build_nan_inputs_safe();
+    test_hiz_occlusion_visible_when_pyramid_is_far();
+    test_hiz_occlusion_culls_when_aabb_behind_pyramid();
+    test_visbuf_and_hiz_hlsl_nonempty();
 
     test_zero_size_buffer_safe();
     test_reset_clears_state();
