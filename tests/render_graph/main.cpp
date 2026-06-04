@@ -13,6 +13,7 @@
 
 #include <cardinal/render/graph.hpp>
 #include <cardinal/render/gpu_passes.hpp>
+#include <cardinal/render/gpu_raster.hpp>
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/utility.hpp>
 #include <cardinal/core/simd_math.hpp>
@@ -872,6 +873,335 @@ void test_xform_pass_nan_matrix_safe() {
     }
 }
 
+// ----------------------------------------------------------------------------
+// TriangleRasterPass
+// ----------------------------------------------------------------------------
+namespace gpu = cardinal::render::gpu;
+
+// Helper to wire a "load these bytes" init pass into the graph.
+struct InitBlob { rg::ResourceHandle h; const void* src; cardinal::usize bytes; };
+void rec_init_blob(rg::ExecutionContext& ec, void* uctx) noexcept {
+    auto* c = static_cast<InitBlob*>(uctx);
+    void* dst = ec.map_buffer_write(c->h);
+    if (!dst) return;
+    auto* d = static_cast<cardinal::u8*>(dst);
+    auto* s = static_cast<const cardinal::u8*>(c->src);
+    for (cardinal::usize i = 0; i < c->bytes; ++i) d[i] = s[i];
+}
+cardinal::u32 add_init_pass(rg::Graph& g, const char* name, rg::ResourceHandle h, InitBlob* blob) {
+    rg::PassDesc pd; pd.name = name; pd.kind = rg::PassKind::Compute;
+    pd.accesses.push_back(rg::ResourceAccess{h, rg::AccessMode::Write, 0});
+    pd.record = rec_init_blob; pd.user_ctx = blob;
+    return g.add_pass(cardinal::move(pd));
+}
+
+void test_raster_single_triangle_inside_box() {
+    constexpr cardinal::u32 W = 16, H = 16;
+    // One CCW triangle that covers the centre pixel (8, 8) — pure red.
+    cardinal::vector<float> tris = {
+        // v0           v1           v2
+         2.0f, 2.0f, 0.5f,   1.0f, 0.0f, 0.0f,
+        14.0f, 2.0f, 0.5f,   1.0f, 0.0f, 0.0f,
+         8.0f,14.0f, 0.5f,   1.0f, 0.0f, 0.0f,
+    };
+    auto g = rg::Graph::create();
+    auto h_tris = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    InitBlob blob{h_tris, tris.data(), tris.size() * sizeof(float)};
+    add_init_pass(*g, "init_tris", h_tris, &blob);
+    auto st = gpu::TriangleRasterPass::add_to_graph(*g, h_tris, W, H, 1);
+    CHECK(g->compile());
+    auto backend = rg::CpuBackend::create();
+    backend->execute(*g);
+    auto col = backend->buffer_contents(st->out_color);
+    auto dep = backend->buffer_contents(st->out_depth);
+    CHECK(col.size() == W * H * 4u);
+    CHECK(dep.size() == W * H * sizeof(float));
+    // Sample the centre pixel — should be red.
+    const cardinal::usize pix = (8u * W + 8u) * 4u;
+    CHECK(col[pix + 0] == 255);
+    CHECK(col[pix + 1] == 0);
+    CHECK(col[pix + 2] == 0);
+    CHECK(col[pix + 3] == 255);
+    // Depth at centre should match the triangle z (0.5).
+    const float z = reinterpret_cast<const float*>(dep.data())[8u * W + 8u];
+    CHECK(z >= 0.49f && z <= 0.51f);
+    // Pixel (0, 0) is outside the triangle — black + far depth.
+    CHECK(col[0] == 0);
+    CHECK(reinterpret_cast<const float*>(dep.data())[0] == 1.0f);
+    // Stats sane.
+    CHECK(st->fragments_drawn > 0u);
+}
+
+void test_raster_depth_test_keeps_closest() {
+    // Two overlapping triangles: a far blue one, then a near red one.
+    constexpr cardinal::u32 W = 8, H = 8;
+    cardinal::vector<float> tris = {
+        // far blue (z = 0.8)
+         0.0f, 0.0f, 0.8f,   0.0f, 0.0f, 1.0f,
+         8.0f, 0.0f, 0.8f,   0.0f, 0.0f, 1.0f,
+         4.0f, 8.0f, 0.8f,   0.0f, 0.0f, 1.0f,
+        // near red (z = 0.2)
+         0.0f, 0.0f, 0.2f,   1.0f, 0.0f, 0.0f,
+         8.0f, 0.0f, 0.2f,   1.0f, 0.0f, 0.0f,
+         4.0f, 8.0f, 0.2f,   1.0f, 0.0f, 0.0f,
+    };
+    auto g = rg::Graph::create();
+    auto h = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    InitBlob blob{h, tris.data(), tris.size() * sizeof(float)};
+    add_init_pass(*g, "i", h, &blob);
+    auto st = gpu::TriangleRasterPass::add_to_graph(*g, h, W, H, 2);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto col = b->buffer_contents(st->out_color);
+    const cardinal::usize pix = (4u * W + 4u) * 4u;
+    CHECK(col[pix + 0] == 255);                // near red wins
+    CHECK(col[pix + 2] == 0);
+}
+
+void test_raster_offscreen_triangle_safe() {
+    constexpr cardinal::u32 W = 8, H = 8;
+    cardinal::vector<float> tris = {
+       100.0f, 100.0f, 0.5f,   1.0f, 1.0f, 1.0f,
+       200.0f, 100.0f, 0.5f,   1.0f, 1.0f, 1.0f,
+       150.0f, 200.0f, 0.5f,   1.0f, 1.0f, 1.0f,
+    };
+    auto g = rg::Graph::create();
+    auto h = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    InitBlob blob{h, tris.data(), tris.size() * sizeof(float)};
+    add_init_pass(*g, "i", h, &blob);
+    auto st = gpu::TriangleRasterPass::add_to_graph(*g, h, W, H, 1);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->fragments_drawn == 0u);
+    CHECK(st->triangles_offscreen == 1u);
+}
+
+void test_raster_nan_triangle_safe() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    constexpr cardinal::u32 W = 4, H = 4;
+    cardinal::vector<float> tris = {
+        qnan, qnan, qnan,   qnan, qnan, qnan,
+        qnan, qnan, qnan,   qnan, qnan, qnan,
+        qnan, qnan, qnan,   qnan, qnan, qnan,
+    };
+    auto g = rg::Graph::create();
+    auto h = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    InitBlob blob{h, tris.data(), tris.size() * sizeof(float)};
+    add_init_pass(*g, "i", h, &blob);
+    auto st = gpu::TriangleRasterPass::add_to_graph(*g, h, W, H, 1);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    // Every depth value must be finite.
+    auto dep = b->buffer_contents(st->out_depth);
+    const float* df = reinterpret_cast<const float*>(dep.data());
+    for (cardinal::usize i = 0; i < W * H; ++i) {
+        CHECK(df[i] == df[i]);                 // NaN check
+    }
+}
+
+// ----------------------------------------------------------------------------
+// PolygonClipPass — Sutherland-Hodgman
+// ----------------------------------------------------------------------------
+void test_clip_quad_against_x_plane_full_inside() {
+    // Unit square at z=0 entirely inside x >= -1.
+    constexpr cardinal::u32 N = 4;
+    cardinal::vector<float> verts(static_cast<cardinal::usize>(N) * 3u, 0.0f);
+    float* vx = verts.data() + 0 * N;
+    float* vy = verts.data() + 1 * N;
+    float* vz = verts.data() + 2 * N;
+    vx[0] = 0; vy[0] = 0; vz[0] = 0;
+    vx[1] = 1; vy[1] = 0; vz[1] = 0;
+    vx[2] = 1; vy[2] = 1; vz[2] = 0;
+    vx[3] = 0; vy[3] = 1; vz[3] = 0;
+    cardinal::vector<float> plane = {1.0f, 0.0f, 0.0f, 1.0f};  // x >= -1
+
+    auto g = rg::Graph::create();
+    auto hv = g->declare_buffer(rg::BufferDesc{"verts", verts.size() * sizeof(float), 0, true});
+    auto hp = g->declare_buffer(rg::BufferDesc{"plane", plane.size() * sizeof(float), 0, true});
+    InitBlob bv{hv, verts.data(), verts.size() * sizeof(float)};
+    InitBlob bp{hp, plane.data(), plane.size() * sizeof(float)};
+    add_init_pass(*g, "iv", hv, &bv);
+    add_init_pass(*g, "ip", hp, &bp);
+    auto st = gpu::PolygonClipPass::add_to_graph(*g, hv, hp, N, N + 1);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->produced == 4u);                 // All 4 verts emitted (B-of-A=in,B=in case)
+}
+
+void test_clip_quad_against_x_plane_half_in() {
+    // Unit square at z=0; clip against x >= 0.5. Two verts in, two out.
+    constexpr cardinal::u32 N = 4;
+    cardinal::vector<float> verts(static_cast<cardinal::usize>(N) * 3u, 0.0f);
+    float* vx = verts.data() + 0 * N;
+    float* vy = verts.data() + 1 * N;
+    float* vz = verts.data() + 2 * N;
+    vx[0] = 0; vy[0] = 0;
+    vx[1] = 1; vy[1] = 0;
+    vx[2] = 1; vy[2] = 1;
+    vx[3] = 0; vy[3] = 1;
+    (void)vz;
+    cardinal::vector<float> plane = {1.0f, 0.0f, 0.0f, -0.5f};   // x >= 0.5
+
+    auto g = rg::Graph::create();
+    auto hv = g->declare_buffer(rg::BufferDesc{"verts", verts.size() * sizeof(float), 0, true});
+    auto hp = g->declare_buffer(rg::BufferDesc{"plane", plane.size() * sizeof(float), 0, true});
+    InitBlob bv{hv, verts.data(), verts.size() * sizeof(float)};
+    InitBlob bp{hp, plane.data(), plane.size() * sizeof(float)};
+    add_init_pass(*g, "iv", hv, &bv);
+    add_init_pass(*g, "ip", hp, &bp);
+    auto st = gpu::PolygonClipPass::add_to_graph(*g, hv, hp, N, N + 1);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    // Should produce 4 vertices (the two inside + two intersection points).
+    CHECK(st->produced == 4u);
+    auto out = b->buffer_contents(st->out_verts);
+    const cardinal::u32 max_out = N + 1;
+    const float* ox = reinterpret_cast<const float*>(out.data()) + 0 * max_out;
+    // All resulting x coords must be ≥ 0.5 (within float tolerance).
+    for (cardinal::u32 i = 0; i < st->produced; ++i) {
+        CHECK(ox[i] >= 0.5f - 1e-3f);
+    }
+}
+
+void test_clip_quad_fully_outside() {
+    constexpr cardinal::u32 N = 4;
+    cardinal::vector<float> verts(static_cast<cardinal::usize>(N) * 3u, 0.0f);
+    float* vx = verts.data() + 0 * N;
+    vx[0] = -5; vx[1] = -4; vx[2] = -4; vx[3] = -5;
+    cardinal::vector<float> plane = {1.0f, 0.0f, 0.0f, 0.0f};  // x >= 0
+
+    auto g = rg::Graph::create();
+    auto hv = g->declare_buffer(rg::BufferDesc{"verts", verts.size() * sizeof(float), 0, true});
+    auto hp = g->declare_buffer(rg::BufferDesc{"plane", plane.size() * sizeof(float), 0, true});
+    InitBlob bv{hv, verts.data(), verts.size() * sizeof(float)};
+    InitBlob bp{hp, plane.data(), plane.size() * sizeof(float)};
+    add_init_pass(*g, "iv", hv, &bv);
+    add_init_pass(*g, "ip", hp, &bp);
+    auto st = gpu::PolygonClipPass::add_to_graph(*g, hv, hp, N, N + 1);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->produced == 0u);                 // entirely culled
+}
+
+void test_clip_nan_plane_safe() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    constexpr cardinal::u32 N = 3;
+    cardinal::vector<float> verts(static_cast<cardinal::usize>(N) * 3u, 0.0f);
+    verts[0 * N + 0] = 0; verts[0 * N + 1] = 1; verts[0 * N + 2] = 0;   // x
+    verts[1 * N + 0] = 0; verts[1 * N + 1] = 0; verts[1 * N + 2] = 1;   // y
+    cardinal::vector<float> plane = {qnan, qnan, qnan, qnan};
+    auto g = rg::Graph::create();
+    auto hv = g->declare_buffer(rg::BufferDesc{"verts", verts.size() * sizeof(float), 0, true});
+    auto hp = g->declare_buffer(rg::BufferDesc{"plane", plane.size() * sizeof(float), 0, true});
+    InitBlob bv{hv, verts.data(), verts.size() * sizeof(float)};
+    InitBlob bp{hp, plane.data(), plane.size() * sizeof(float)};
+    add_init_pass(*g, "iv", hv, &bv);
+    add_init_pass(*g, "ip", hp, &bp);
+    auto st = gpu::PolygonClipPass::add_to_graph(*g, hv, hp, N, N + 1);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    // Output buffer + count must be finite no matter what (plane → x >= 0 fallback).
+    auto cnt = b->buffer_contents(st->out_count);
+    const cardinal::u32 c = *reinterpret_cast<const cardinal::u32*>(cnt.data());
+    CHECK(c <= N + 1);                         // bounded
+}
+
+// ----------------------------------------------------------------------------
+// PolygonTriangulatePass — fan triangulation
+// ----------------------------------------------------------------------------
+void test_triangulate_quad() {
+    // A quad → exactly 2 triangles (fan anchored at vertex 0).
+    constexpr cardinal::u32 N = 4;
+    cardinal::vector<float> verts(static_cast<cardinal::usize>(N) * 3u, 0.0f);
+    float* vx = verts.data() + 0 * N;
+    float* vy = verts.data() + 1 * N;
+    vx[0] = 0; vy[0] = 0;
+    vx[1] = 1; vy[1] = 0;
+    vx[2] = 1; vy[2] = 1;
+    vx[3] = 0; vy[3] = 1;
+    auto g = rg::Graph::create();
+    auto hv = g->declare_buffer(rg::BufferDesc{"verts", verts.size() * sizeof(float), 0, true});
+    InitBlob bv{hv, verts.data(), verts.size() * sizeof(float)};
+    add_init_pass(*g, "iv", hv, &bv);
+    auto st = gpu::PolygonTriangulatePass::add_to_graph(*g, hv, N);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->triangles_produced == 2u);
+    auto out = b->buffer_contents(st->out_tris);
+    CHECK(out.size() == 2u * 9u * sizeof(float));
+    const float* ot = reinterpret_cast<const float*>(out.data());
+    // Triangle 0: (v0, v1, v2) = (0,0,0), (1,0,0), (1,1,0)
+    CHECK(ot[0] == 0.0f); CHECK(ot[1] == 0.0f);
+    CHECK(ot[3] == 1.0f); CHECK(ot[4] == 0.0f);
+    CHECK(ot[6] == 1.0f); CHECK(ot[7] == 1.0f);
+    // Triangle 1: (v0, v2, v3)
+    CHECK(ot[ 9] == 0.0f); CHECK(ot[10] == 0.0f);   // v0
+    CHECK(ot[12] == 1.0f); CHECK(ot[13] == 1.0f);   // v2
+    CHECK(ot[15] == 0.0f); CHECK(ot[16] == 1.0f);   // v3
+}
+
+void test_triangulate_below_three_is_empty() {
+    constexpr cardinal::u32 N = 2;
+    cardinal::vector<float> verts(static_cast<cardinal::usize>(N) * 3u, 0.0f);
+    auto g = rg::Graph::create();
+    auto hv = g->declare_buffer(rg::BufferDesc{"verts", verts.size() * sizeof(float), 0, true});
+    InitBlob bv{hv, verts.data(), verts.size() * sizeof(float)};
+    add_init_pass(*g, "iv", hv, &bv);
+    auto st = gpu::PolygonTriangulatePass::add_to_graph(*g, hv, N);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->triangles_produced == 0u);
+}
+
+// ----------------------------------------------------------------------------
+// Chain: clip → triangulate → raster (all on the graph, all one execute).
+// ----------------------------------------------------------------------------
+void test_chain_clip_triangulate_raster() {
+    constexpr cardinal::u32 N = 4;
+    cardinal::vector<float> verts(static_cast<cardinal::usize>(N) * 3u, 0.0f);
+    float* vx = verts.data() + 0 * N;
+    float* vy = verts.data() + 1 * N;
+    // Quad spanning (2..14, 2..14) at depth 0.5.
+    vx[0] = 2;  vy[0] = 2;
+    vx[1] = 14; vy[1] = 2;
+    vx[2] = 14; vy[2] = 14;
+    vx[3] = 2;  vy[3] = 14;
+    // Don't clip anything off (plane: x >= -100).
+    cardinal::vector<float> plane = {1.0f, 0.0f, 0.0f, 100.0f};
+
+    auto g = rg::Graph::create();
+    auto hv = g->declare_buffer(rg::BufferDesc{"verts", verts.size() * sizeof(float), 0, true});
+    auto hp = g->declare_buffer(rg::BufferDesc{"plane", plane.size() * sizeof(float), 0, true});
+    InitBlob bv{hv, verts.data(), verts.size() * sizeof(float)};
+    InitBlob bp{hp, plane.data(), plane.size() * sizeof(float)};
+    add_init_pass(*g, "iv", hv, &bv);
+    add_init_pass(*g, "ip", hp, &bp);
+    // Both passes need to agree on the SoA stride (max_output_count for
+    // clip == input_count for triangulate). For chains where the
+    // polygon doesn't grow under clipping (always true when the entire
+    // polygon is fully inside the plane), max_output_count = N keeps
+    // the strides matched. For chains that may grow, the consumer needs
+    // a dynamic count + matching stride — that's the natural extension.
+    auto clip = gpu::PolygonClipPass::add_to_graph(*g, hv, hp, N, N);
+    auto tri  = gpu::PolygonTriangulatePass::add_to_graph(*g, clip->out_verts, N);
+    (void)tri;
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(clip->produced == 4u);
+    // Triangulate sees 4 vertices in the buffer → 2 triangles.
+    CHECK(tri->triangles_produced == 2u);
+}
+
 void test_reset_clears_state() {
     auto g = rg::Graph::create();
     FillOp op{};
@@ -918,6 +1248,20 @@ int main() {
     test_xform_pass_identity_matrix();
     test_xform_pass_translation();
     test_xform_pass_nan_matrix_safe();
+
+    test_raster_single_triangle_inside_box();
+    test_raster_depth_test_keeps_closest();
+    test_raster_offscreen_triangle_safe();
+    test_raster_nan_triangle_safe();
+
+    test_clip_quad_against_x_plane_full_inside();
+    test_clip_quad_against_x_plane_half_in();
+    test_clip_quad_fully_outside();
+    test_clip_nan_plane_safe();
+
+    test_triangulate_quad();
+    test_triangulate_below_three_is_empty();
+    test_chain_clip_triangulate_raster();
 
     test_zero_size_buffer_safe();
     test_reset_clears_state();
