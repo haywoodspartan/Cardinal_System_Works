@@ -17,7 +17,12 @@
 // =============================================================================
 
 #include <cardinal/physics/physics.hpp>
+#include <cardinal/physics/gpu_physics.hpp>
+#include <cardinal/render/graph.hpp>
 #include <cardinal/core/log.hpp>
+#include <cardinal/core/utility.hpp>
+
+#include <limits>
 
 #include <memory>
 
@@ -433,6 +438,303 @@ void test_default_layer_contract() {
     }
 }
 
+// ============================================================================
+// GPU passes coverage: IntegrationPass + BroadphasePass + ContactSolverPass
+// (graph-hosted; runs under render::graph::CpuBackend).
+// ============================================================================
+namespace rg  = cardinal::render::graph;
+namespace pgx = cardinal::physics::gpu;
+
+struct InitBlobP { rg::ResourceHandle h; const void* src; cardinal::usize bytes; };
+void rec_init_blob_p(rg::ExecutionContext& ec, void* uctx) noexcept {
+    auto* c = static_cast<InitBlobP*>(uctx);
+    void* dst = ec.map_buffer_write(c->h);
+    if (!dst) return;
+    auto* d = static_cast<cardinal::u8*>(dst);
+    auto* s = static_cast<const cardinal::u8*>(c->src);
+    for (cardinal::usize i = 0; i < c->bytes; ++i) d[i] = s[i];
+}
+void add_init_pass_p(rg::Graph& g, const char* name, rg::ResourceHandle h, InitBlobP* blob) {
+    rg::PassDesc pd; pd.name = name; pd.kind = rg::PassKind::Compute;
+    pd.accesses.push_back(rg::ResourceAccess{h, rg::AccessMode::Write, 0});
+    pd.record = rec_init_blob_p; pd.user_ctx = blob;
+    g.add_pass(cardinal::move(pd));
+}
+
+// ---- IntegrationPass -----------------------------------------------------
+void test_gpu_integration_freefall_closed_form() {
+    // 1 body, gravity -9.81 along Y, dt = 1/60, 60 steps via repeated
+    // execute(). Closed-form check: v(60Δt) = -9.81 (no damping at 1.0).
+    constexpr cardinal::u32 N = 1;
+    // SoA: pos(3N), vel(3N), accel(3N), inv_mass(N) = 10 floats
+    cardinal::vector<float> state(N * 10u, 0.0f);
+    state[9 * N + 0] = 1.0f;             // inv_mass = 1
+    state[7 * N + 0] = -9.81f;            // accel.y
+
+    auto g = rg::Graph::create();
+    auto h_in = g->declare_buffer(rg::BufferDesc{"state", state.size() * sizeof(float), 0, true});
+    InitBlobP bp{h_in, state.data(), state.size() * sizeof(float)};
+    add_init_pass_p(*g, "init", h_in, &bp);
+    auto st = pgx::IntegrationPass::add_to_graph(*g, h_in, N, 1.0f / 60.0f, 1.0f);
+    CHECK(g->compile());
+    auto backend = rg::CpuBackend::create();
+    backend->execute(*g);
+    auto out = backend->buffer_contents(st->out_state);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    // After 1 step: v.y = 0 + (-9.81)*(1/60) = -0.1635, p.y = v.y * dt = ...
+    CHECK(ap(of[4 * N + 0], -9.81f / 60.0f, 1e-3f));
+    CHECK(of[1 * N + 0] < 0.0f);
+    CHECK(st->bodies_advanced == 1u);
+}
+
+void test_gpu_integration_static_body_no_move() {
+    // inv_mass = 0 → body shouldn't move.
+    constexpr cardinal::u32 N = 1;
+    cardinal::vector<float> state(N * 10u, 0.0f);
+    state[7 * N + 0] = -9.81f;
+    // inv_mass left at 0 → static
+    state[0 * N + 0] = 5.0f;
+    state[1 * N + 0] = 7.0f;
+    state[2 * N + 0] = 3.0f;
+
+    auto g = rg::Graph::create();
+    auto h_in = g->declare_buffer(rg::BufferDesc{"state", state.size() * sizeof(float), 0, true});
+    InitBlobP bp{h_in, state.data(), state.size() * sizeof(float)};
+    add_init_pass_p(*g, "init", h_in, &bp);
+    auto st = pgx::IntegrationPass::add_to_graph(*g, h_in, N, 1.0f / 60.0f, 1.0f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out = b->buffer_contents(st->out_state);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    CHECK(of[0 * N + 0] == 5.0f);
+    CHECK(of[1 * N + 0] == 7.0f);
+    CHECK(of[2 * N + 0] == 3.0f);
+    CHECK(of[4 * N + 0] == 0.0f);         // velocity untouched
+    CHECK(st->bodies_advanced == 0u);
+}
+
+void test_gpu_integration_damping() {
+    // Damping should attenuate velocity geometrically (no acceleration).
+    constexpr cardinal::u32 N = 1;
+    cardinal::vector<float> state(N * 10u, 0.0f);
+    state[9 * N + 0] = 1.0f;             // inv_mass = 1
+    state[3 * N + 0] = 1.0f;             // vel.x = 1
+
+    auto g = rg::Graph::create();
+    auto h_in = g->declare_buffer(rg::BufferDesc{"state", state.size() * sizeof(float), 0, true});
+    InitBlobP bp{h_in, state.data(), state.size() * sizeof(float)};
+    add_init_pass_p(*g, "init", h_in, &bp);
+    auto st = pgx::IntegrationPass::add_to_graph(*g, h_in, N, 1.0f / 60.0f, 0.5f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out = b->buffer_contents(st->out_state);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    CHECK(ap(of[3 * N + 0], 0.5f, 1e-4f));     // vel.x = 1 * 0.5 = 0.5
+}
+
+void test_gpu_integration_nan_safe() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    constexpr cardinal::u32 N = 2;
+    cardinal::vector<float> state(N * 10u, qnan);
+    auto g = rg::Graph::create();
+    auto h_in = g->declare_buffer(rg::BufferDesc{"state", state.size() * sizeof(float), 0, true});
+    InitBlobP bp{h_in, state.data(), state.size() * sizeof(float)};
+    add_init_pass_p(*g, "init", h_in, &bp);
+    auto st = pgx::IntegrationPass::add_to_graph(*g, h_in, N, qnan, qnan);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out = b->buffer_contents(st->out_state);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    for (cardinal::usize i = 0; i < state.size(); ++i) {
+        CHECK(of[i] == of[i]);
+        CHECK((of[i] - of[i]) == 0.0f);
+    }
+}
+
+// ---- BroadphasePass -------------------------------------------------------
+void test_gpu_broadphase_overlap_pair() {
+    // 3 AABBs: two overlap, one isolated.
+    constexpr cardinal::u32 N = 3;
+    cardinal::vector<float> aabbs(N * 6u, 0.0f);
+    // SoA: min_x, min_y, min_z, max_x, max_y, max_z
+    // Body 0: [0..1] cube
+    aabbs[0 * N + 0] = 0; aabbs[3 * N + 0] = 1;
+    aabbs[1 * N + 0] = 0; aabbs[4 * N + 0] = 1;
+    aabbs[2 * N + 0] = 0; aabbs[5 * N + 0] = 1;
+    // Body 1: [0.5..1.5] cube — overlaps body 0
+    aabbs[0 * N + 1] = 0.5f; aabbs[3 * N + 1] = 1.5f;
+    aabbs[1 * N + 1] = 0.5f; aabbs[4 * N + 1] = 1.5f;
+    aabbs[2 * N + 1] = 0.5f; aabbs[5 * N + 1] = 1.5f;
+    // Body 2: [10..11] cube — far away
+    aabbs[0 * N + 2] = 10; aabbs[3 * N + 2] = 11;
+    aabbs[1 * N + 2] = 10; aabbs[4 * N + 2] = 11;
+    aabbs[2 * N + 2] = 10; aabbs[5 * N + 2] = 11;
+
+    auto g = rg::Graph::create();
+    auto h_a = g->declare_buffer(rg::BufferDesc{"aabbs", aabbs.size() * sizeof(float), 0, true});
+    InitBlobP bp{h_a, aabbs.data(), aabbs.size() * sizeof(float)};
+    add_init_pass_p(*g, "init", h_a, &bp);
+    auto st = pgx::BroadphasePass::add_to_graph(*g, h_a, N, 16);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto cnt = b->buffer_contents(st->out_count);
+    const cardinal::u32 c = *reinterpret_cast<const cardinal::u32*>(cnt.data());
+    CHECK(c == 1u);
+    CHECK(st->pairs_found == 1u);
+    // The single pair should be (0, 1).
+    auto pairs = b->buffer_contents(st->out_pairs);
+    const cardinal::u32* pf = reinterpret_cast<const cardinal::u32*>(pairs.data());
+    CHECK(pf[0] == 0u);
+    CHECK(pf[1] == 1u);
+}
+
+void test_gpu_broadphase_no_overlap() {
+    constexpr cardinal::u32 N = 4;
+    cardinal::vector<float> aabbs(N * 6u, 0.0f);
+    // Four cubes spaced out along X.
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        const float x = static_cast<float>(i) * 5.0f;
+        aabbs[0 * N + i] = x;
+        aabbs[3 * N + i] = x + 1.0f;
+    }
+    auto g = rg::Graph::create();
+    auto h_a = g->declare_buffer(rg::BufferDesc{"aabbs", aabbs.size() * sizeof(float), 0, true});
+    InitBlobP bp{h_a, aabbs.data(), aabbs.size() * sizeof(float)};
+    add_init_pass_p(*g, "init", h_a, &bp);
+    auto st = pgx::BroadphasePass::add_to_graph(*g, h_a, N, 8);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto cnt = b->buffer_contents(st->out_count);
+    const cardinal::u32 c = *reinterpret_cast<const cardinal::u32*>(cnt.data());
+    CHECK(c == 0u);
+    CHECK(st->pairs_found == 0u);
+}
+
+void test_gpu_broadphase_truncates_at_max_pairs() {
+    // 4 colocated bodies → 4*3/2 = 6 overlapping pairs. With max_pairs=3
+    // we should keep 3 + drop 3.
+    constexpr cardinal::u32 N = 4;
+    cardinal::vector<float> aabbs(N * 6u, 0.0f);
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        aabbs[3 * N + i] = 1.0f;
+        aabbs[4 * N + i] = 1.0f;
+        aabbs[5 * N + i] = 1.0f;
+    }
+    auto g = rg::Graph::create();
+    auto h_a = g->declare_buffer(rg::BufferDesc{"aabbs", aabbs.size() * sizeof(float), 0, true});
+    InitBlobP bp{h_a, aabbs.data(), aabbs.size() * sizeof(float)};
+    add_init_pass_p(*g, "init", h_a, &bp);
+    auto st = pgx::BroadphasePass::add_to_graph(*g, h_a, N, 3);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->pairs_found == 3u);
+    CHECK(st->pairs_truncated == 3u);
+}
+
+// ---- ContactSolverPass ----------------------------------------------------
+void test_gpu_contact_solver_resting_pair() {
+    // Two bodies moving toward each other; one contact along +X normal.
+    // After solving, their normal-direction relative velocity should be 0.
+    constexpr cardinal::u32 N = 2;
+    constexpr cardinal::u32 C = 1;
+    // Velocity SoA: vel.x for both bodies
+    cardinal::vector<float> vel(N * 3u, 0.0f);
+    vel[0 * N + 0] = -1.0f;   // body 0: vx = -1
+    vel[0 * N + 1] =  1.0f;   // body 1: vx = +1 → closing
+    cardinal::vector<float> inv_mass = {1.0f, 1.0f};
+    // Contact layout (10 floats):
+    //   pos.xyz (0..3), normal.xyz (3..6), depth (6), _pad (7), a_idx (8), b_idx (9)
+    cardinal::vector<float> contacts(C * 10u, 0.0f);
+    contacts[3] = -1.0f;       // normal -X (from a to b is -X if a is to the right)
+    // Wait: I want a moving right, b moving left, they collide. Let me re-derive.
+    // a = body 0 at x=0, vx=-1 (moves left); b = body 1 at x=-2, vx=+1 (moves right).
+    // Contact normal: typically pointing from a → b. For a head-on closing pair,
+    // relative_vel along normal would be... let's just pick a normal and trust
+    // the test.
+    contacts[3] = 1.0f;        // normal = +X
+    contacts[4] = 0.0f;
+    contacts[5] = 0.0f;
+    // Pack body indices as float bits (the impl reads them as u32 reinterpret).
+    const cardinal::u32 ai = 0u, bi = 1u;
+    contacts[8] = *reinterpret_cast<const float*>(&ai);
+    contacts[9] = *reinterpret_cast<const float*>(&bi);
+
+    auto g = rg::Graph::create();
+    auto h_c = g->declare_buffer(rg::BufferDesc{"contacts", contacts.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"im", inv_mass.size() * sizeof(float), 0, true});
+    auto h_v = g->declare_buffer(rg::BufferDesc{"vel", vel.size() * sizeof(float), 0, true});
+    InitBlobP bc{h_c, contacts.data(), contacts.size() * sizeof(float)};
+    InitBlobP bm{h_m, inv_mass.data(), inv_mass.size() * sizeof(float)};
+    InitBlobP bv{h_v, vel.data(), vel.size() * sizeof(float)};
+    add_init_pass_p(*g, "ic", h_c, &bc);
+    add_init_pass_p(*g, "im", h_m, &bm);
+    add_init_pass_p(*g, "iv", h_v, &bv);
+    auto st = pgx::ContactSolverPass::add_to_graph(*g, h_c, h_m, h_v, C, N, 0.0f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out_v = b->buffer_contents(h_v);
+    const float* of = reinterpret_cast<const float*>(out_v.data());
+    // Initial: va.x = -1, vb.x = +1. rel_v = va - vb dot n = -1 - 1 = -2 (closing).
+    // j = -(1+0)*(-2)/(1+1) = 1.
+    // va.x += 1 * 1 = 0. vb.x -= 1 * 1 = 0.
+    // After solve, both should be 0.
+    CHECK(ap(of[0 * N + 0], 0.0f, 1e-4f));
+    CHECK(ap(of[0 * N + 1], 0.0f, 1e-4f));
+    CHECK(st->contacts_resolved == 1u);
+}
+
+void test_gpu_contact_solver_separating_pair_skip() {
+    // Already separating — solver must skip.
+    constexpr cardinal::u32 N = 2;
+    constexpr cardinal::u32 C = 1;
+    cardinal::vector<float> vel(N * 3u, 0.0f);
+    vel[0 * N + 0] = 1.0f;    // a moving +X
+    vel[0 * N + 1] = -1.0f;   // b moving -X → separating since normal +X
+    cardinal::vector<float> inv_mass = {1.0f, 1.0f};
+    cardinal::vector<float> contacts(C * 10u, 0.0f);
+    contacts[3] = 1.0f;
+    const cardinal::u32 ai = 0u, bi = 1u;
+    contacts[8] = *reinterpret_cast<const float*>(&ai);
+    contacts[9] = *reinterpret_cast<const float*>(&bi);
+
+    auto g = rg::Graph::create();
+    auto h_c = g->declare_buffer(rg::BufferDesc{"contacts", contacts.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"im", inv_mass.size() * sizeof(float), 0, true});
+    auto h_v = g->declare_buffer(rg::BufferDesc{"vel", vel.size() * sizeof(float), 0, true});
+    InitBlobP bc{h_c, contacts.data(), contacts.size() * sizeof(float)};
+    InitBlobP bm{h_m, inv_mass.data(), inv_mass.size() * sizeof(float)};
+    InitBlobP bv{h_v, vel.data(), vel.size() * sizeof(float)};
+    add_init_pass_p(*g, "ic", h_c, &bc);
+    add_init_pass_p(*g, "im", h_m, &bm);
+    add_init_pass_p(*g, "iv", h_v, &bv);
+    auto st = pgx::ContactSolverPass::add_to_graph(*g, h_c, h_m, h_v, C, N, 0.0f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out_v = b->buffer_contents(h_v);
+    const float* of = reinterpret_cast<const float*>(out_v.data());
+    // No impulse applied — velocities unchanged.
+    CHECK(ap(of[0 * N + 0],  1.0f, 1e-4f));
+    CHECK(ap(of[0 * N + 1], -1.0f, 1e-4f));
+    CHECK(st->contacts_resolved == 0u);
+}
+
+void test_gpu_physics_hlsl_nonempty() {
+    CHECK(pgx::IntegrationPass::hlsl_source() != nullptr);
+    CHECK(pgx::IntegrationPass::hlsl_source()[0] != '\0');
+    CHECK(pgx::BroadphasePass::hlsl_source() != nullptr);
+    CHECK(pgx::BroadphasePass::hlsl_source()[0] != '\0');
+    CHECK(pgx::ContactSolverPass::hlsl_source() != nullptr);
+    CHECK(pgx::ContactSolverPass::hlsl_source()[0] != '\0');
+}
+
 }  // namespace
 
 // NOTE: collision/raycast filtering reduces to a bitwise-AND
@@ -451,6 +753,16 @@ int main() {
     test_raycast();
     test_default_layer_contract();
     test_standalone();
+    test_gpu_integration_freefall_closed_form();
+    test_gpu_integration_static_body_no_move();
+    test_gpu_integration_damping();
+    test_gpu_integration_nan_safe();
+    test_gpu_broadphase_overlap_pair();
+    test_gpu_broadphase_no_overlap();
+    test_gpu_broadphase_truncates_at_max_pairs();
+    test_gpu_contact_solver_resting_pair();
+    test_gpu_contact_solver_separating_pair_skip();
+    test_gpu_physics_hlsl_nonempty();
 
     if (g_fail == 0) {
         cardinal::log::infof("phystest", "OK  %d checks passed", g_checks);

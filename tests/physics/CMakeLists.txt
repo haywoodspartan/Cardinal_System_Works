@@ -9,6 +9,7 @@
 add_executable(Cardinal_Test_Physics main.cpp)
 target_link_libraries(Cardinal_Test_Physics PRIVATE
     cardinal::physics
+    cardinal::render
     cardinal::core
     cardinal::compile_flags)
 set_target_properties(Cardinal_Test_Physics PROPERTIES FOLDER tests)
