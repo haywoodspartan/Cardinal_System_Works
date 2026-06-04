@@ -19,6 +19,7 @@
 #include <cardinal/render/gpu_visbuf.hpp>
 #include <cardinal/render/gpu_aegis.hpp>
 #include <cardinal/render/gpu_restir.hpp>
+#include <cardinal/render/gpu_postvol.hpp>
 #include <cardinal/render/aegis_runner.hpp>
 #include <cardinal/render/pipeline.hpp>
 #include <cardinal/core/log.hpp>
@@ -3697,6 +3698,238 @@ void test_aegis_orchestrator_skips_restir_when_inputs_absent() {
     CHECK(runner->stages().restir_temporal == nullptr);
 }
 
+// ----------------------------------------------------------------------------
+// TAAPass — temporal accumulation (AEGIS Block 12)
+// ----------------------------------------------------------------------------
+void test_taa_no_history_uses_current() {
+    constexpr cardinal::u32 W = 4, H = 4;
+    cardinal::vector<float> cur(W * H * 3u, 0.7f);
+    cardinal::vector<float> hist(W * H * 3u, 0.0f);
+    cardinal::vector<cardinal::u32> mv(W * H, 0u);
+    auto g = rg::Graph::create();
+    auto h_c = g->declare_buffer(rg::BufferDesc{"cur",  cur.size() * sizeof(float), 0, true});
+    auto h_h = g->declare_buffer(rg::BufferDesc{"hist", hist.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mv",   mv.size() * sizeof(cardinal::u32), 0, true});
+    InitBlob bc{h_c, cur.data(),  cur.size() * sizeof(float)};
+    InitBlob bh{h_h, hist.data(), hist.size() * sizeof(float)};
+    InitBlob bm{h_m, mv.data(),   mv.size() * sizeof(cardinal::u32)};
+    add_init_pass(*g, "iC", h_c, &bc);
+    add_init_pass(*g, "iH", h_h, &bh);
+    add_init_pass(*g, "iM", h_m, &bm);
+    // Pass an INVALID history handle to force "no history" path.
+    rg::ResourceHandle no_hist;
+    auto st = gpu::TAAPass::add_to_graph(*g, h_c, no_hist, h_m, W, H, 0.1f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->pixels_disoccluded == W * H);
+    CHECK(st->pixels_blended == 0u);
+    // Output equals current (no history blend).
+    auto out = b->buffer_contents(st->out_radiance);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    for (cardinal::u32 i = 0; i < W * H; ++i) {
+        CHECK(of[i * 3 + 0] >= 0.69f && of[i * 3 + 0] <= 0.71f);
+    }
+}
+
+void test_taa_zero_motion_blends_history() {
+    constexpr cardinal::u32 W = 4, H = 4;
+    cardinal::vector<float> cur(W * H * 3u, 1.0f);   // current = white
+    cardinal::vector<float> hist(W * H * 3u, 0.5f);  // history = grey
+    cardinal::vector<cardinal::u32> mv(W * H, 0u);
+    auto g = rg::Graph::create();
+    auto h_c = g->declare_buffer(rg::BufferDesc{"cur",  cur.size() * sizeof(float), 0, true});
+    auto h_h = g->declare_buffer(rg::BufferDesc{"hist", hist.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mv",   mv.size() * sizeof(cardinal::u32), 0, true});
+    InitBlob bc{h_c, cur.data(),  cur.size() * sizeof(float)};
+    InitBlob bh{h_h, hist.data(), hist.size() * sizeof(float)};
+    InitBlob bm{h_m, mv.data(),   mv.size() * sizeof(cardinal::u32)};
+    add_init_pass(*g, "iC", h_c, &bc);
+    add_init_pass(*g, "iH", h_h, &bh);
+    add_init_pass(*g, "iM", h_m, &bm);
+    auto st = gpu::TAAPass::add_to_graph(*g, h_c, h_h, h_m, W, H, 0.1f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->pixels_blended == W * H);
+    CHECK(st->pixels_disoccluded == 0u);
+    // Neighbourhood-clamped: 3×3 window of current = uniform 1.0 →
+    // history (0.5) gets clamped to 1.0. Output = lerp(1.0, 1.0, 0.1) = 1.0.
+    auto out = b->buffer_contents(st->out_radiance);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    for (cardinal::u32 i = 0; i < W * H; ++i) {
+        CHECK(of[i * 3 + 0] >= 0.99f && of[i * 3 + 0] <= 1.01f);
+    }
+    CHECK(st->pixels_clamped == W * H);   // every pixel had history clamped
+}
+
+void test_taa_history_within_neighbourhood_blends_uniformly() {
+    // Current = 1.0, history = 0.95 (already in 3×3 window since window
+    // is uniform 1.0 too). Without clamp, blend with α=0.1 → 0.955.
+    // But neighbourhood window IS uniform 1.0, so 0.95 IS clamped to 1.0
+    // → output = 1.0. Use a non-uniform current to widen the window.
+    constexpr cardinal::u32 W = 4, H = 4;
+    cardinal::vector<float> cur(W * H * 3u, 1.0f);
+    // Break the window: one corner pixel = 0.0.
+    cur[0] = 0.0f; cur[1] = 0.0f; cur[2] = 0.0f;
+    cardinal::vector<float> hist(W * H * 3u, 0.5f);
+    cardinal::vector<cardinal::u32> mv(W * H, 0u);
+    auto g = rg::Graph::create();
+    auto h_c = g->declare_buffer(rg::BufferDesc{"cur",  cur.size() * sizeof(float), 0, true});
+    auto h_h = g->declare_buffer(rg::BufferDesc{"hist", hist.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mv",   mv.size() * sizeof(cardinal::u32), 0, true});
+    InitBlob bc{h_c, cur.data(),  cur.size() * sizeof(float)};
+    InitBlob bh{h_h, hist.data(), hist.size() * sizeof(float)};
+    InitBlob bm{h_m, mv.data(),   mv.size() * sizeof(cardinal::u32)};
+    add_init_pass(*g, "iC", h_c, &bc);
+    add_init_pass(*g, "iH", h_h, &bh);
+    add_init_pass(*g, "iM", h_m, &bm);
+    auto st = gpu::TAAPass::add_to_graph(*g, h_c, h_h, h_m, W, H, 0.5f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    // Pixel (1, 1) — has the black corner in its 3×3 → window is [0, 1].
+    // History 0.5 IS in [0, 1] → no clamp → blend = lerp(0.5, 1.0, 0.5) = 0.75.
+    auto out = b->buffer_contents(st->out_radiance);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    const cardinal::usize p11 = (1u * W + 1u) * 3;
+    CHECK(of[p11 + 0] >= 0.74f && of[p11 + 0] <= 0.76f);
+}
+
+void test_taa_nan_safe() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    constexpr cardinal::u32 W = 2, H = 2;
+    cardinal::vector<float> cur(W * H * 3u, qnan);
+    cardinal::vector<float> hist(W * H * 3u, qnan);
+    cardinal::vector<cardinal::u32> mv(W * H, 0u);
+    auto g = rg::Graph::create();
+    auto h_c = g->declare_buffer(rg::BufferDesc{"cur",  cur.size() * sizeof(float), 0, true});
+    auto h_h = g->declare_buffer(rg::BufferDesc{"hist", hist.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mv",   mv.size() * sizeof(cardinal::u32), 0, true});
+    InitBlob bc{h_c, cur.data(),  cur.size() * sizeof(float)};
+    InitBlob bh{h_h, hist.data(), hist.size() * sizeof(float)};
+    InitBlob bm{h_m, mv.data(),   mv.size() * sizeof(cardinal::u32)};
+    add_init_pass(*g, "iC", h_c, &bc);
+    add_init_pass(*g, "iH", h_h, &bh);
+    add_init_pass(*g, "iM", h_m, &bm);
+    auto st = gpu::TAAPass::add_to_graph(*g, h_c, h_h, h_m, W, H, 0.1f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out = b->buffer_contents(st->out_radiance);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    for (cardinal::u32 i = 0; i < W * H * 3; ++i) CHECK(of[i] == of[i]);
+}
+
+// ----------------------------------------------------------------------------
+// VolumetricFogPass — froxel grid scattering (AEGIS Block 9)
+// ----------------------------------------------------------------------------
+void test_fog_no_lights_only_ambient() {
+    constexpr cardinal::u32 W = 16, H = 16;
+    cardinal::vector<float> depth(W * H, 0.5f);   // mid-depth surface
+    cardinal::vector<float> empty(1, 0.0f);
+    cardinal::vector<float> mat(16, 0.0f);
+    mat[0] = 1; mat[5] = 1; mat[10] = 1; mat[15] = 1;
+    cardinal::vector<float> amb = { 0.3f, 0.4f, 0.5f };
+
+    auto g = rg::Graph::create();
+    auto h_l = g->declare_buffer(rg::BufferDesc{"lts", empty.size() * sizeof(float), 0, true});
+    auto h_d = g->declare_buffer(rg::BufferDesc{"dep", depth.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"vp",  mat.size()   * sizeof(float), 0, true});
+    auto h_a = g->declare_buffer(rg::BufferDesc{"amb", amb.size()   * sizeof(float), 0, true});
+    InitBlob bl{h_l, empty.data(), empty.size() * sizeof(float)};
+    InitBlob bd{h_d, depth.data(), depth.size() * sizeof(float)};
+    InitBlob bm{h_m, mat.data(),   mat.size()   * sizeof(float)};
+    InitBlob ba{h_a, amb.data(),   amb.size()   * sizeof(float)};
+    add_init_pass(*g, "iL", h_l, &bl);
+    add_init_pass(*g, "iD", h_d, &bd);
+    add_init_pass(*g, "iM", h_m, &bm);
+    add_init_pass(*g, "iA", h_a, &ba);
+    auto st = gpu::VolumetricFogPass::add_to_graph(*g, h_l, h_d, h_m, h_a, W, H, 0,
+                                                   0.05f, 0.7f, 200.0f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    // With ambient > 0 and density > 0, every froxel should accumulate
+    // some scattering → froxels_lit > 0.
+    CHECK(st->froxels_lit > 0u);
+    // Tile count derived from viewport.
+    CHECK(st->tiles_x == (W + gpu::kFogTileSize - 1) / gpu::kFogTileSize);
+    CHECK(st->tiles_y == (H + gpu::kFogTileSize - 1) / gpu::kFogTileSize);
+    // Some pixels should report being in fog.
+    CHECK(st->pixels_in_fog > 0u);
+}
+
+void test_fog_zero_density_zero_fog() {
+    constexpr cardinal::u32 W = 8, H = 8;
+    cardinal::vector<float> depth(W * H, 0.5f);
+    cardinal::vector<float> empty(1, 0.0f);
+    cardinal::vector<float> mat(16, 0.0f);
+    cardinal::vector<float> amb = { 1.0f, 1.0f, 1.0f };
+
+    auto g = rg::Graph::create();
+    auto h_l = g->declare_buffer(rg::BufferDesc{"lts", empty.size() * sizeof(float), 0, true});
+    auto h_d = g->declare_buffer(rg::BufferDesc{"dep", depth.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"vp",  mat.size()   * sizeof(float), 0, true});
+    auto h_a = g->declare_buffer(rg::BufferDesc{"amb", amb.size()   * sizeof(float), 0, true});
+    InitBlob bl{h_l, empty.data(), empty.size() * sizeof(float)};
+    InitBlob bd{h_d, depth.data(), depth.size() * sizeof(float)};
+    InitBlob bm{h_m, mat.data(),   mat.size()   * sizeof(float)};
+    InitBlob ba{h_a, amb.data(),   amb.size()   * sizeof(float)};
+    add_init_pass(*g, "iL", h_l, &bl);
+    add_init_pass(*g, "iD", h_d, &bd);
+    add_init_pass(*g, "iM", h_m, &bm);
+    add_init_pass(*g, "iA", h_a, &ba);
+    auto st = gpu::VolumetricFogPass::add_to_graph(*g, h_l, h_d, h_m, h_a, W, H, 0,
+                                                   0.0f, 0.0f, 100.0f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->froxels_lit == 0u);     // density=0 → no scattering accumulated
+    auto rgba = b->buffer_contents(st->out_fog_rgba);
+    // Fog alpha should be 0 everywhere (transmittance == 1).
+    for (cardinal::u32 i = 0; i < W * H; ++i) {
+        CHECK(rgba[i * 4 + 3] == 0);
+    }
+}
+
+void test_fog_nan_safe() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    constexpr cardinal::u32 W = 4, H = 4;
+    cardinal::vector<float> depth(W * H, qnan);
+    cardinal::vector<float> empty(1, 0.0f);
+    cardinal::vector<float> mat(16, qnan);
+    cardinal::vector<float> amb = { qnan, qnan, qnan };
+
+    auto g = rg::Graph::create();
+    auto h_l = g->declare_buffer(rg::BufferDesc{"lts", empty.size() * sizeof(float), 0, true});
+    auto h_d = g->declare_buffer(rg::BufferDesc{"dep", depth.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"vp",  mat.size()   * sizeof(float), 0, true});
+    auto h_a = g->declare_buffer(rg::BufferDesc{"amb", amb.size()   * sizeof(float), 0, true});
+    InitBlob bl{h_l, empty.data(), empty.size() * sizeof(float)};
+    InitBlob bd{h_d, depth.data(), depth.size() * sizeof(float)};
+    InitBlob bm{h_m, mat.data(),   mat.size()   * sizeof(float)};
+    InitBlob ba{h_a, amb.data(),   amb.size()   * sizeof(float)};
+    add_init_pass(*g, "iL", h_l, &bl);
+    add_init_pass(*g, "iD", h_d, &bd);
+    add_init_pass(*g, "iM", h_m, &bm);
+    add_init_pass(*g, "iA", h_a, &ba);
+    auto st = gpu::VolumetricFogPass::add_to_graph(*g, h_l, h_d, h_m, h_a, W, H, 0);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto scat = b->buffer_contents(st->out_scattering);
+    const float* sf = reinterpret_cast<const float*>(scat.data());
+    for (cardinal::usize i = 0; i < scat.size() / sizeof(float); ++i) {
+        CHECK(sf[i] == sf[i]);
+    }
+}
+
+void test_postvol_hlsl_nonempty() {
+    CHECK(gpu::TAAPass::hlsl_source()[0]            != '\0');
+    CHECK(gpu::VolumetricFogPass::hlsl_source()[0]  != '\0');
+}
+
 void test_pipeline_id_includes_aegis() {
     // Verify that the registry slot for the AEGIS pipeline exists in the
     // PipelineId enum (forward-compat marker for the AegisRenderPipeline
@@ -3859,6 +4092,14 @@ int main() {
     test_restir_hlsl_nonempty();
     test_aegis_orchestrator_wires_restir_when_inputs_supplied();
     test_aegis_orchestrator_skips_restir_when_inputs_absent();
+    test_taa_no_history_uses_current();
+    test_taa_zero_motion_blends_history();
+    test_taa_history_within_neighbourhood_blends_uniformly();
+    test_taa_nan_safe();
+    test_fog_no_lights_only_ambient();
+    test_fog_zero_density_zero_fog();
+    test_fog_nan_safe();
+    test_postvol_hlsl_nonempty();
     test_pipeline_id_includes_aegis();
 
     test_zero_size_buffer_safe();
