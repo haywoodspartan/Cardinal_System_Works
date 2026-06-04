@@ -18,6 +18,7 @@
 
 #include <cardinal/lighting/lighting.hpp>
 #include <cardinal/lighting/raytracer.hpp>
+#include <cardinal/lighting/bake.hpp>
 #include <cardinal/core/log.hpp>
 
 #include <limits>
@@ -580,6 +581,363 @@ void test_rng_unit_sphere_is_unit() {
     }
 }
 
+// ----------------------------------------------------------------------------
+// BakedLightmap — sampler bilinear + clamp + NaN UV.
+// ----------------------------------------------------------------------------
+void test_lightmap_sampler_uniform() {
+    // A uniformly-coloured atlas samples to that exact colour everywhere.
+    lx::BakedLightmap lm;
+    lm.resize(8, 8);
+    for (cardinal::usize i = 0; i < lm.data.size(); i += 3) {
+        lm.data[i + 0] = 0.5f;
+        lm.data[i + 1] = 0.25f;
+        lm.data[i + 2] = 0.75f;
+    }
+    const sc::Vec3 c = lx::sample_lightmap(lm, 0.5f, 0.5f);
+    CHECK(ap(c.x, 0.5f,  1e-4f));
+    CHECK(ap(c.y, 0.25f, 1e-4f));
+    CHECK(ap(c.z, 0.75f, 1e-4f));
+}
+
+void test_lightmap_sampler_bilinear() {
+    // Two-colour atlas: left half = (0,0,0), right half = (1,1,1).
+    // Midpoint of the gradient is ~0.5 in each channel.
+    lx::BakedLightmap lm;
+    lm.resize(4, 1);
+    auto set = [&](cardinal::u32 x, float r, float g, float b) {
+        lm.data[x * 3 + 0] = r;
+        lm.data[x * 3 + 1] = g;
+        lm.data[x * 3 + 2] = b;
+    };
+    set(0, 0, 0, 0); set(1, 0, 0, 0);
+    set(2, 1, 1, 1); set(3, 1, 1, 1);
+    const sc::Vec3 left  = lx::sample_lightmap(lm, 0.0f, 0.0f);
+    const sc::Vec3 right = lx::sample_lightmap(lm, 1.0f, 0.0f);
+    const sc::Vec3 mid   = lx::sample_lightmap(lm, 0.5f, 0.0f);
+    CHECK(ap(left.x,  0.0f, 1e-3f));
+    CHECK(ap(right.x, 1.0f, 1e-3f));
+    CHECK(mid.x > 0.0f && mid.x < 1.0f);     // strictly between (bilinear blend)
+}
+
+void test_lightmap_sampler_nan_uv_safe() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    lx::BakedLightmap lm;
+    lm.resize(4, 4);
+    for (cardinal::usize i = 0; i < lm.data.size(); ++i) lm.data[i] = 0.3f;
+    const sc::Vec3 c = lx::sample_lightmap(lm, qnan, qnan);
+    CHECK(finv(c));
+    CHECK(ap(c.x, 0.3f, 1e-4f));
+}
+
+void test_lightmap_sampler_oob_clamps() {
+    lx::BakedLightmap lm;
+    lm.resize(4, 4);
+    for (cardinal::usize i = 0; i < lm.data.size(); ++i) lm.data[i] = 0.7f;
+    const sc::Vec3 a = lx::sample_lightmap(lm, -10.0f, -10.0f);
+    const sc::Vec3 b = lx::sample_lightmap(lm,  10.0f,  10.0f);
+    CHECK(finv(a)); CHECK(finv(b));
+    CHECK(ap(a.x, 0.7f, 1e-4f));
+    CHECK(ap(b.x, 0.7f, 1e-4f));
+}
+
+void test_lightmap_sampler_empty_safe() {
+    lx::BakedLightmap lm;            // empty
+    const sc::Vec3 c = lx::sample_lightmap(lm, 0.5f, 0.5f);
+    CHECK(c.x == 0.0f); CHECK(c.y == 0.0f); CHECK(c.z == 0.0f);
+}
+
+// ----------------------------------------------------------------------------
+// LightmapBaker — end-to-end bake on a known scene.
+// ----------------------------------------------------------------------------
+void test_lightmap_bake_directional_floor() {
+    // Open floor under a bright sky → every cosine-hemisphere ray from a
+    // floor texel goes up, misses, and returns sky radiance. With a
+    // constant sky every texel must read the same value (within MC
+    // variance). This is a sky-only bake — directional lights have zero
+    // angular extent, so NEE is the right primitive for them and BRDF-
+    // hemisphere integration alone can't see one; this test isolates the
+    // hemisphere integral.
+    sc::LightSet lights;
+    lights.set_ambient(sc::Vec3{0, 0, 0});
+    lx::Scene s;
+    s.materials.push_back(lx::Material{sc::Vec3{0.8f, 0.8f, 0.8f}, sc::Vec3{0, 0, 0}, 0.0f, 1.0f});
+    s.planes.push_back(lx::Plane{sc::Vec3{0, 0, 0}, sc::Vec3{0, 1, 0}, 0u});
+    s.lights = &lights;
+
+    cardinal::vector<lx::LightmapTexel> texels;
+    constexpr cardinal::u32 N = 4;
+    for (cardinal::u32 v = 0; v < N; ++v) {
+        for (cardinal::u32 u = 0; u < N; ++u) {
+            lx::LightmapTexel t;
+            t.world_pos = sc::Vec3{
+                static_cast<float>(u) - static_cast<float>(N) * 0.5f,
+                0.1f,
+                static_cast<float>(v) - static_cast<float>(N) * 0.5f,
+            };
+            t.world_normal = sc::Vec3{0, 1, 0};
+            t.atlas_u = u;
+            t.atlas_v = v;
+            texels.push_back(t);
+        }
+    }
+    lx::PathTracerConfig pcfg;
+    pcfg.max_bounces       = 0;
+    pcfg.samples_per_pixel = 1;
+    pcfg.enable_indirect   = false;
+    pcfg.sky_color         = sc::Vec3{1.0f, 1.0f, 1.0f};
+    auto tracer = lx::PathTracer::create(pcfg);
+
+    lx::BakedLightmap lm;
+    lx::LightmapBakeConfig bcfg;
+    bcfg.samples_per_texel = 16;
+    bcfg.rng_seed = 1234u;
+    auto baker = lx::LightmapBaker::create(tracer);
+    baker->bake(s, texels, N, N, lm, bcfg);
+
+    CHECK(lm.width == N);
+    CHECK(lm.height == N);
+    CHECK(baker->stats().texels == N * N);
+    CHECK(baker->stats().rays == static_cast<cardinal::u64>(N * N * bcfg.samples_per_texel));
+
+    // Every texel reads ~sky radiance (1.0) — the hemisphere is fully
+    // open above each floor texel.
+    float min_v = 1e30f, max_v = 0.0f;
+    for (cardinal::usize i = 0; i < lm.data.size(); i += 3) {
+        const float r = lm.data[i + 0];
+        CHECK(fin(r)); CHECK(r >= 0.0f);
+        if (r < min_v) min_v = r;
+        if (r > max_v) max_v = r;
+    }
+    CHECK(min_v > 0.5f);    // sky=1, MC variance keeps it well above 0.5
+    CHECK(max_v < 1.5f);    // and below 1.5
+}
+
+void test_lightmap_bake_determinism() {
+    sc::LightSet lights;
+    sc::Light L; L.kind = sc::LightKind::Directional;
+    L.direction = sc::Vec3{0, -1, 0}; L.color = sc::Vec3{1, 1, 1}; L.intensity = 1.0f;
+    lights.add(L);
+    lx::Scene s = make_basic_scene(lights);
+
+    cardinal::vector<lx::LightmapTexel> texels;
+    for (cardinal::u32 u = 0; u < 4; ++u) {
+        lx::LightmapTexel t;
+        t.world_pos = sc::Vec3{static_cast<float>(u) * 0.5f, 0.0f, 0.0f};
+        t.world_normal = sc::Vec3{0, 1, 0};
+        t.atlas_u = u; t.atlas_v = 0;
+        texels.push_back(t);
+    }
+    lx::PathTracerConfig pcfg;
+    pcfg.max_bounces = 1;
+    auto t_a = lx::PathTracer::create(pcfg);
+    auto t_b = lx::PathTracer::create(pcfg);
+    auto b_a = lx::LightmapBaker::create(t_a);
+    auto b_b = lx::LightmapBaker::create(t_b);
+
+    lx::BakedLightmap lm_a, lm_b;
+    lx::LightmapBakeConfig bcfg;
+    bcfg.samples_per_texel = 4;
+    bcfg.rng_seed = 0x77u;
+    b_a->bake(s, texels, 4, 1, lm_a, bcfg);
+    b_b->bake(s, texels, 4, 1, lm_b, bcfg);
+    for (cardinal::usize i = 0; i < lm_a.data.size(); ++i) CHECK(lm_a.data[i] == lm_b.data[i]);
+}
+
+void test_lightmap_bake_nan_texel_safe() {
+    // A NaN-positioned texel mustn't crash, mustn't poison its slot.
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    sc::LightSet lights;
+    sc::Light L; L.kind = sc::LightKind::Directional;
+    L.direction = sc::Vec3{0, -1, 0}; L.color = sc::Vec3{1, 1, 1}; L.intensity = 1.0f;
+    lights.add(L);
+    lx::Scene s = make_basic_scene(lights);
+
+    cardinal::vector<lx::LightmapTexel> texels;
+    {
+        lx::LightmapTexel t;
+        t.world_pos = sc::Vec3{qnan, qnan, qnan};
+        t.world_normal = sc::Vec3{qnan, qnan, qnan};
+        t.atlas_u = 0; t.atlas_v = 0;
+        texels.push_back(t);
+    }
+    auto tracer = lx::PathTracer::create();
+    auto baker = lx::LightmapBaker::create(tracer);
+    lx::BakedLightmap lm;
+    lx::LightmapBakeConfig bcfg;
+    bcfg.samples_per_texel = 2;
+    baker->bake(s, texels, 2, 2, lm, bcfg);
+    for (float v : lm.data) CHECK(fin(v));
+}
+
+void test_lightmap_bake_skips_oob_texels() {
+    sc::LightSet lights;
+    lx::Scene s = make_basic_scene(lights);
+    cardinal::vector<lx::LightmapTexel> texels;
+    {   // out of bounds (atlas only 2x2)
+        lx::LightmapTexel t;
+        t.world_pos = sc::Vec3{0, 0, 0};
+        t.world_normal = sc::Vec3{0, 1, 0};
+        t.atlas_u = 99; t.atlas_v = 99;
+        texels.push_back(t);
+    }
+    auto tracer = lx::PathTracer::create();
+    auto baker = lx::LightmapBaker::create(tracer);
+    lx::BakedLightmap lm;
+    baker->bake(s, texels, 2, 2, lm, {});
+    CHECK(baker->stats().texels == 0u);
+    // Atlas is still resized + cleared to 0 → all finite zero.
+    for (float v : lm.data) CHECK(fin(v));
+}
+
+// ----------------------------------------------------------------------------
+// IrradianceProbeVolume — sampler + bake.
+// ----------------------------------------------------------------------------
+void test_probe_sampler_axis_weights() {
+    // A 1×1×1 volume with known per-axis values. Sampling with normal +Y
+    // returns the +Y face; with normal -Y returns the -Y face.
+    lx::IrradianceProbeVolume vol;
+    vol.origin  = sc::Vec3{0, 0, 0};
+    vol.spacing = sc::Vec3{1, 1, 1};
+    vol.resize(1, 1, 1);
+    // axis order: +X, -X, +Y, -Y, +Z, -Z
+    auto setf = [&](int axis, float r, float g, float b) {
+        vol.data[axis * 3 + 0] = r;
+        vol.data[axis * 3 + 1] = g;
+        vol.data[axis * 3 + 2] = b;
+    };
+    setf(0, 1, 0, 0);   // +X red
+    setf(1, 0, 1, 0);   // -X green
+    setf(2, 0, 0, 1);   // +Y blue
+    setf(3, 1, 1, 0);   // -Y yellow
+    setf(4, 1, 0, 1);   // +Z magenta
+    setf(5, 0, 1, 1);   // -Z cyan
+
+    const sc::Vec3 py = lx::sample_probe_volume(vol, sc::Vec3{0, 0, 0}, sc::Vec3{0,  1, 0});
+    const sc::Vec3 ny = lx::sample_probe_volume(vol, sc::Vec3{0, 0, 0}, sc::Vec3{0, -1, 0});
+    const sc::Vec3 px = lx::sample_probe_volume(vol, sc::Vec3{0, 0, 0}, sc::Vec3{ 1, 0, 0});
+    CHECK(ap(py.z, 1.0f, 1e-3f));   // +Y blue
+    CHECK(ap(py.x, 0.0f, 1e-3f));
+    CHECK(ap(ny.x, 1.0f, 1e-3f));   // -Y yellow → R=1
+    CHECK(ap(ny.y, 1.0f, 1e-3f));   // -Y yellow → G=1
+    CHECK(ap(px.x, 1.0f, 1e-3f));   // +X red
+}
+
+void test_probe_sampler_trilinear() {
+    // 2×1×1 volume: x=0 probe is (1,0,0), x=1 probe is (0,0,1). Sampling
+    // midway should give roughly (0.5, 0, 0.5) on the +X axis weight.
+    lx::IrradianceProbeVolume vol;
+    vol.origin = sc::Vec3{0, 0, 0};
+    vol.spacing = sc::Vec3{1, 1, 1};
+    vol.resize(2, 1, 1);
+    // Probe 0 (x=0): +X face = red
+    vol.data[0 * 6 * 3 + 0 * 3 + 0] = 1.0f;
+    // Probe 1 (x=1): +X face = blue
+    vol.data[1 * 6 * 3 + 0 * 3 + 2] = 1.0f;
+
+    const sc::Vec3 lo  = lx::sample_probe_volume(vol, sc::Vec3{0.0f, 0, 0}, sc::Vec3{1, 0, 0});
+    const sc::Vec3 hi  = lx::sample_probe_volume(vol, sc::Vec3{1.0f, 0, 0}, sc::Vec3{1, 0, 0});
+    const sc::Vec3 mid = lx::sample_probe_volume(vol, sc::Vec3{0.5f, 0, 0}, sc::Vec3{1, 0, 0});
+    CHECK(ap(lo.x, 1.0f, 1e-3f));
+    CHECK(ap(hi.z, 1.0f, 1e-3f));
+    CHECK(ap(mid.x, 0.5f, 1e-3f));
+    CHECK(ap(mid.z, 0.5f, 1e-3f));
+}
+
+void test_probe_sampler_oob_clamps() {
+    lx::IrradianceProbeVolume vol;
+    vol.origin  = sc::Vec3{0, 0, 0};
+    vol.spacing = sc::Vec3{1, 1, 1};
+    vol.resize(2, 2, 2);
+    vol.data[0 * 3 + 0] = 0.42f;     // +X of probe (0,0,0)
+    const sc::Vec3 inside  = lx::sample_probe_volume(vol, sc::Vec3{0, 0, 0},   sc::Vec3{1, 0, 0});
+    const sc::Vec3 outside = lx::sample_probe_volume(vol, sc::Vec3{-99, -99, -99}, sc::Vec3{1, 0, 0});
+    CHECK(ap(inside.x, 0.42f, 1e-3f));
+    CHECK(ap(outside.x, 0.42f, 1e-3f));   // clamped to boundary probe (0,0,0)
+}
+
+void test_probe_sampler_nan_pos_safe() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    lx::IrradianceProbeVolume vol;
+    vol.origin = sc::Vec3{0, 0, 0};
+    vol.spacing = sc::Vec3{1, 1, 1};
+    vol.resize(2, 2, 2);
+    for (cardinal::usize i = 0; i < vol.data.size(); ++i) vol.data[i] = 0.25f;
+    const sc::Vec3 c = lx::sample_probe_volume(vol, sc::Vec3{qnan, qnan, qnan},
+                                                    sc::Vec3{qnan, qnan, qnan});
+    CHECK(finv(c));
+}
+
+void test_probe_sampler_empty_safe() {
+    lx::IrradianceProbeVolume vol;
+    const sc::Vec3 c = lx::sample_probe_volume(vol, sc::Vec3{0, 0, 0}, sc::Vec3{0, 1, 0});
+    CHECK(c.x == 0.0f); CHECK(c.y == 0.0f); CHECK(c.z == 0.0f);
+}
+
+void test_probe_volume_bake_end_to_end() {
+    // Open scene under a bright sky → every probe + axis facing up sees
+    // sky radiance. Floor under the probes occludes the -Y axis.
+    sc::LightSet lights;
+    lights.set_ambient(sc::Vec3{0, 0, 0});
+    lx::Scene s;
+    s.materials.push_back(lx::Material{sc::Vec3{0.5f, 0.5f, 0.5f}, sc::Vec3{0, 0, 0}, 0.0f, 1.0f});
+    s.planes.push_back(lx::Plane{sc::Vec3{0, 0, 0}, sc::Vec3{0, 1, 0}, 0u});
+    s.lights = &lights;
+
+    lx::PathTracerConfig pcfg;
+    pcfg.max_bounces = 0;
+    pcfg.enable_indirect = false;
+    pcfg.sky_color = sc::Vec3{1.0f, 1.0f, 1.0f};
+    auto tracer = lx::PathTracer::create(pcfg);
+
+    lx::IrradianceProbeVolume vol;
+    vol.origin  = sc::Vec3{-1, 1, -1};
+    vol.spacing = sc::Vec3{1, 1, 1};
+    vol.resize(2, 2, 2);
+    auto baker = lx::ProbeVolumeBaker::create(tracer);
+    lx::ProbeBakeConfig cfg;
+    cfg.samples_per_axis = 16;
+    cfg.rng_seed = 999u;
+    baker->bake(s, vol, cfg);
+
+    CHECK(baker->stats().probes == vol.probe_count());
+    CHECK(baker->stats().rays == static_cast<cardinal::u64>(vol.probe_count() * 6 * cfg.samples_per_axis));
+
+    // For the (0,0,0) probe at world (-1, 1, -1): +Y must see the bright
+    // sky. -Y faces the floor — the directional sky lookup integrates to
+    // ~0 (floor absorbs / doesn't emit in this direct-only config).
+    const cardinal::usize base = 0;            // probe (0,0,0)
+    const float plus_y_r  = vol.data[base + 2 * 3 + 0];
+    const float minus_y_r = vol.data[base + 3 * 3 + 0];
+    CHECK(fin(plus_y_r));
+    CHECK(fin(minus_y_r));
+    CHECK(plus_y_r > 0.0f);
+    CHECK(plus_y_r > minus_y_r);             // sky brighter than floor
+}
+
+void test_probe_volume_bake_determinism() {
+    sc::LightSet lights;
+    sc::Light L; L.kind = sc::LightKind::Directional;
+    L.direction = sc::Vec3{0, -1, 0}; L.color = sc::Vec3{1, 1, 1}; L.intensity = 1.0f;
+    lights.add(L);
+    lx::Scene s = make_basic_scene(lights);
+
+    auto t_a = lx::PathTracer::create();
+    auto t_b = lx::PathTracer::create();
+    auto b_a = lx::ProbeVolumeBaker::create(t_a);
+    auto b_b = lx::ProbeVolumeBaker::create(t_b);
+
+    lx::IrradianceProbeVolume v_a, v_b;
+    v_a.origin = v_b.origin = sc::Vec3{0, 1, 0};
+    v_a.spacing = v_b.spacing = sc::Vec3{1, 1, 1};
+    v_a.resize(2, 2, 2); v_b.resize(2, 2, 2);
+    lx::ProbeBakeConfig cfg;
+    cfg.samples_per_axis = 4;
+    cfg.rng_seed = 0xDEADBEEFu;
+    b_a->bake(s, v_a, cfg);
+    b_b->bake(s, v_b, cfg);
+    for (cardinal::usize i = 0; i < v_a.data.size(); ++i) CHECK(v_a.data[i] == v_b.data[i]);
+}
+
 }  // namespace
 
 int main() {
@@ -618,6 +976,24 @@ int main() {
     test_rng_determinism();
     test_rng_cosine_hemisphere_above_horizon();
     test_rng_unit_sphere_is_unit();
+
+    // ---- baked lighting (lightmap + probe volume)
+    test_lightmap_sampler_uniform();
+    test_lightmap_sampler_bilinear();
+    test_lightmap_sampler_nan_uv_safe();
+    test_lightmap_sampler_oob_clamps();
+    test_lightmap_sampler_empty_safe();
+    test_lightmap_bake_directional_floor();
+    test_lightmap_bake_determinism();
+    test_lightmap_bake_nan_texel_safe();
+    test_lightmap_bake_skips_oob_texels();
+    test_probe_sampler_axis_weights();
+    test_probe_sampler_trilinear();
+    test_probe_sampler_oob_clamps();
+    test_probe_sampler_nan_pos_safe();
+    test_probe_sampler_empty_safe();
+    test_probe_volume_bake_end_to_end();
+    test_probe_volume_bake_determinism();
 
     if (g_fail == 0) {
         cardinal::log::infof("rtxtest", "OK  %d checks passed", g_checks);
