@@ -43,6 +43,7 @@
 #include <cardinal/render/gpu_geometry.hpp>
 #include <cardinal/render/gpu_primitives.hpp>
 #include <cardinal/render/gpu_visbuf.hpp>
+#include <cardinal/render/gpu_restir.hpp>
 #include <cardinal/core/types.hpp>
 
 namespace cardinal::render::gpu {
@@ -366,6 +367,14 @@ struct AegisSceneInputs {
     graph::ResourceHandle camera_dir;        // 3 floats
     graph::ResourceHandle ui_overlay;        // optional w*h*4 bytes
     graph::ResourceHandle gizmo_overlay;     // optional w*h*4 bytes
+    // --- ReSTIR DI inputs (optional — when world_pos + world_normal +
+    //     seeds are all valid, the orchestrator wires the 3-pass DI
+    //     chain after the V-Buf resolve).
+    graph::ResourceHandle restir_world_pos;       // 3*W*H f32 (host reconstructs from depth)
+    graph::ResourceHandle restir_world_normal;    // 3*W*H f32 (host unpacks from V-Buf normal)
+    graph::ResourceHandle restir_seeds;           // W*H u32
+    graph::ResourceHandle restir_prev_reservoirs; // optional W*H * kReservoirBytes
+    graph::ResourceHandle restir_prev_world_normal; // optional 3*W*H f32
     cardinal::u32 triangle_count {0};
 };
 
@@ -394,6 +403,9 @@ struct AegisStageRefs {
     cardinal::shared_ptr<AdaptiveGeometryPass::State>   adaptive;
     cardinal::shared_ptr<VisibilityBufferPass::State>   vbuf;
     cardinal::shared_ptr<TiledLightCullPass::State>     light_cull;
+    cardinal::shared_ptr<ReSTIRSamplePass::State>       restir_sample;
+    cardinal::shared_ptr<ReSTIRSpatialPass::State>      restir_spatial;
+    cardinal::shared_ptr<ReSTIRTemporalPass::State>     restir_temporal;
     cardinal::shared_ptr<VBufResolvePass::State>        resolve;
     cardinal::shared_ptr<MotionVectorPass::State>       motion;
     cardinal::shared_ptr<TonemapPass::State>            tonemap;

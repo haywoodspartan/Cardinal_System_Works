@@ -18,6 +18,7 @@
 #include <cardinal/render/gpu_primitives.hpp>
 #include <cardinal/render/gpu_visbuf.hpp>
 #include <cardinal/render/gpu_aegis.hpp>
+#include <cardinal/render/gpu_restir.hpp>
 #include <cardinal/render/aegis_runner.hpp>
 #include <cardinal/render/pipeline.hpp>
 #include <cardinal/core/log.hpp>
@@ -3144,6 +3145,337 @@ void test_precision_caps_select_tier() {
     CHECK(gpu::select_tier(caps) == gpu::GeometryTier::Fp4);
 }
 
+// ----------------------------------------------------------------------------
+// ReSTIR DI — Sample / Spatial / Temporal reservoir reuse
+// (AEGIS Block 7 "ReSTIR DI + GI Unified" Key Innovation)
+// ----------------------------------------------------------------------------
+void test_restir_sample_picks_visible_light() {
+    constexpr cardinal::u32 W = 4, H = 4;
+    const cardinal::u32 N = W * H;
+    // 1 fragment per pixel at world (0, 1, 0), normal +Y.
+    cardinal::vector<float> wp(3u * N, 0.0f);
+    for (cardinal::u32 i = 0; i < N; ++i) wp[1 * N + i] = 1.0f;
+    cardinal::vector<float> wn(3u * N, 0.0f);
+    for (cardinal::u32 i = 0; i < N; ++i) wn[1 * N + i] = 1.0f;
+    // 2 lights: light 0 is below (won't light +Y normal), light 1 is above.
+    cardinal::vector<float> lights(32, 0.0f);
+    // Light 0: directional pointing UP (direction = +Y → light_dir = -Y).
+    // Normal is +Y, light_dir is -Y → NdotL = -1 → target = 0 → rejected.
+    lights[0] = 0;                              // kind = directional
+    lights[5] = 0; lights[6] = 1; lights[7] = 0;    // direction
+    lights[8] = 1; lights[9] = 1; lights[10] = 1;   // color
+    lights[11] = 1.0f;                          // intensity
+    // Light 1: directional pointing DOWN (direction = -Y → light_dir = +Y).
+    // Normal is +Y, light_dir is +Y → NdotL = 1 → good.
+    lights[16 + 0] = 0;
+    lights[16 + 5] = 0; lights[16 + 6] = -1; lights[16 + 7] = 0;
+    lights[16 + 8] = 1; lights[16 + 9] = 1; lights[16 + 10] = 1;
+    lights[16 + 11] = 1.0f;
+
+    cardinal::vector<cardinal::u32> seeds(N, 0);
+    for (cardinal::u32 i = 0; i < N; ++i) seeds[i] = i * 0x9E3779B9u + 1;
+
+    auto g = rg::Graph::create();
+    auto h_p = g->declare_buffer(rg::BufferDesc{"wp", wp.size() * sizeof(float), 0, true});
+    auto h_n = g->declare_buffer(rg::BufferDesc{"wn", wn.size() * sizeof(float), 0, true});
+    auto h_l = g->declare_buffer(rg::BufferDesc{"lts", lights.size() * sizeof(float), 0, true});
+    auto h_s = g->declare_buffer(rg::BufferDesc{"sds", seeds.size() * sizeof(cardinal::u32), 0, true});
+    InitBlob bp{h_p, wp.data(), wp.size() * sizeof(float)};
+    InitBlob bn{h_n, wn.data(), wn.size() * sizeof(float)};
+    InitBlob bl{h_l, lights.data(), lights.size() * sizeof(float)};
+    InitBlob bs{h_s, seeds.data(), seeds.size() * sizeof(cardinal::u32)};
+    add_init_pass(*g, "iP", h_p, &bp);
+    add_init_pass(*g, "iN", h_n, &bn);
+    add_init_pass(*g, "iL", h_l, &bl);
+    add_init_pass(*g, "iS", h_s, &bs);
+
+    auto st = gpu::ReSTIRSamplePass::add_to_graph(*g, h_p, h_n, h_l, h_s, W, H, 2, 32);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+
+    CHECK(st->pixels_sampled == N);
+    CHECK(st->pixels_with_valid_pick > 0u);
+
+    // Spot-check a reservoir: chosen_light should be 1 (the visible one).
+    auto rs = b->buffer_contents(st->out_reservoirs);
+    const float* rf = reinterpret_cast<const float*>(rs.data());
+    bool any_picked_1 = false;
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        const cardinal::u32 chosen =
+            *reinterpret_cast<const cardinal::u32*>(&rf[i * gpu::kReservoirDwords + 0]);
+        const float w_sum = rf[i * gpu::kReservoirDwords + 1];
+        CHECK(w_sum >= 0.0f);     // must be finite-non-negative
+        if (chosen == 1u) any_picked_1 = true;
+        // The unlit light (0) shouldn't be picked when target = 0.
+        CHECK(chosen != 0u || w_sum == 0.0f);
+    }
+    CHECK(any_picked_1);
+}
+
+void test_restir_sample_zero_lights_safe() {
+    constexpr cardinal::u32 W = 4, H = 4;
+    const cardinal::u32 N = W * H;
+    cardinal::vector<float> wp(3u * N, 0.0f);
+    cardinal::vector<float> wn(3u * N, 0.0f);
+    for (cardinal::u32 i = 0; i < N; ++i) wn[1 * N + i] = 1.0f;
+    cardinal::vector<float> empty_lights(1, 0.0f);
+    cardinal::vector<cardinal::u32> seeds(N, 42u);
+
+    auto g = rg::Graph::create();
+    auto h_p = g->declare_buffer(rg::BufferDesc{"wp", wp.size() * sizeof(float), 0, true});
+    auto h_n = g->declare_buffer(rg::BufferDesc{"wn", wn.size() * sizeof(float), 0, true});
+    auto h_l = g->declare_buffer(rg::BufferDesc{"lts", empty_lights.size() * sizeof(float), 0, true});
+    auto h_s = g->declare_buffer(rg::BufferDesc{"sds", seeds.size() * sizeof(cardinal::u32), 0, true});
+    InitBlob bp{h_p, wp.data(), wp.size() * sizeof(float)};
+    InitBlob bn{h_n, wn.data(), wn.size() * sizeof(float)};
+    InitBlob bl{h_l, empty_lights.data(), empty_lights.size() * sizeof(float)};
+    InitBlob bs{h_s, seeds.data(), seeds.size() * sizeof(cardinal::u32)};
+    add_init_pass(*g, "iP", h_p, &bp);
+    add_init_pass(*g, "iN", h_n, &bn);
+    add_init_pass(*g, "iL", h_l, &bl);
+    add_init_pass(*g, "iS", h_s, &bs);
+
+    auto st = gpu::ReSTIRSamplePass::add_to_graph(*g, h_p, h_n, h_l, h_s, W, H, 0, 16);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->pixels_with_valid_pick == 0u);
+    auto rs = b->buffer_contents(st->out_reservoirs);
+    const float* rf = reinterpret_cast<const float*>(rs.data());
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        const cardinal::u32 chosen =
+            *reinterpret_cast<const cardinal::u32*>(&rf[i * gpu::kReservoirDwords + 0]);
+        CHECK(chosen == gpu::kInvalidLight);
+    }
+}
+
+void test_restir_spatial_combines_reservoirs() {
+    constexpr cardinal::u32 W = 8, H = 8;
+    const cardinal::u32 N = W * H;
+    // Initial reservoirs: every pixel "picked" light 5 with weight 1.
+    cardinal::vector<float> in_r(static_cast<cardinal::usize>(N) * gpu::kReservoirDwords, 0.0f);
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        cardinal::u32 cidx = 5u;
+        in_r[i * gpu::kReservoirDwords + 0] = *reinterpret_cast<float*>(&cidx);
+        in_r[i * gpu::kReservoirDwords + 1] = 1.0f;        // w_sum
+        in_r[i * gpu::kReservoirDwords + 2] = 1.0f;        // m_count
+        in_r[i * gpu::kReservoirDwords + 3] = 1.0f;        // target_pdf
+    }
+    cardinal::vector<float> wp(3u * N, 0.0f);
+    cardinal::vector<float> wn(3u * N, 0.0f);
+    for (cardinal::u32 i = 0; i < N; ++i) wn[1 * N + i] = 1.0f;
+    cardinal::vector<cardinal::u32> seeds(N);
+    for (cardinal::u32 i = 0; i < N; ++i) seeds[i] = i + 12345u;
+
+    auto g = rg::Graph::create();
+    auto h_r = g->declare_buffer(rg::BufferDesc{"res", in_r.size() * sizeof(float), 0, true});
+    auto h_p = g->declare_buffer(rg::BufferDesc{"wp", wp.size() * sizeof(float), 0, true});
+    auto h_n = g->declare_buffer(rg::BufferDesc{"wn", wn.size() * sizeof(float), 0, true});
+    auto h_s = g->declare_buffer(rg::BufferDesc{"sds", seeds.size() * sizeof(cardinal::u32), 0, true});
+    InitBlob br{h_r, in_r.data(), in_r.size() * sizeof(float)};
+    InitBlob bp{h_p, wp.data(), wp.size() * sizeof(float)};
+    InitBlob bn{h_n, wn.data(), wn.size() * sizeof(float)};
+    InitBlob bs{h_s, seeds.data(), seeds.size() * sizeof(cardinal::u32)};
+    add_init_pass(*g, "iR", h_r, &br);
+    add_init_pass(*g, "iP", h_p, &bp);
+    add_init_pass(*g, "iN", h_n, &bn);
+    add_init_pass(*g, "iS", h_s, &bs);
+    auto st = gpu::ReSTIRSpatialPass::add_to_graph(*g, h_r, h_p, h_n, h_s, W, H, 5, 4.0f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->reservoirs_combined > 0u);
+
+    // Every pixel still picks light 5 (no other candidates were proposed).
+    auto rs = b->buffer_contents(st->out_reservoirs);
+    const float* rf = reinterpret_cast<const float*>(rs.data());
+    cardinal::u32 picked_5 = 0;
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        const cardinal::u32 chosen =
+            *reinterpret_cast<const cardinal::u32*>(&rf[i * gpu::kReservoirDwords + 0]);
+        if (chosen == 5u) ++picked_5;
+    }
+    CHECK(picked_5 == N);
+}
+
+void test_restir_temporal_reproject_with_zero_motion() {
+    constexpr cardinal::u32 W = 4, H = 4;
+    const cardinal::u32 N = W * H;
+    // Current and prev reservoirs both pick light 9 (steady-state scene).
+    cardinal::vector<float> cur(static_cast<cardinal::usize>(N) * gpu::kReservoirDwords, 0.0f);
+    cardinal::vector<float> prev(static_cast<cardinal::usize>(N) * gpu::kReservoirDwords, 0.0f);
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        cardinal::u32 cidx = 9u;
+        cur[i * gpu::kReservoirDwords + 0]  = *reinterpret_cast<float*>(&cidx);
+        cur[i * gpu::kReservoirDwords + 1]  = 1.0f;
+        cur[i * gpu::kReservoirDwords + 2]  = 1.0f;
+        cur[i * gpu::kReservoirDwords + 3]  = 1.0f;
+        prev[i * gpu::kReservoirDwords + 0] = *reinterpret_cast<float*>(&cidx);
+        prev[i * gpu::kReservoirDwords + 1] = 1.0f;
+        prev[i * gpu::kReservoirDwords + 2] = 5.0f;        // 5 frames of history
+        prev[i * gpu::kReservoirDwords + 3] = 1.0f;
+    }
+    cardinal::vector<cardinal::u32> motion(N, 0u);  // zero motion
+    cardinal::vector<float> wn(3u * N, 0.0f);
+    cardinal::vector<float> pwn(3u * N, 0.0f);
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        wn[1 * N + i]  = 1.0f;
+        pwn[1 * N + i] = 1.0f;
+    }
+    auto g = rg::Graph::create();
+    auto h_c = g->declare_buffer(rg::BufferDesc{"cur",  cur.size() * sizeof(float), 0, true});
+    auto h_p = g->declare_buffer(rg::BufferDesc{"prev", prev.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mv",   motion.size() * sizeof(cardinal::u32), 0, true});
+    auto h_n = g->declare_buffer(rg::BufferDesc{"wn",   wn.size() * sizeof(float), 0, true});
+    auto h_pn= g->declare_buffer(rg::BufferDesc{"pwn",  pwn.size() * sizeof(float), 0, true});
+    InitBlob bc{h_c, cur.data(), cur.size() * sizeof(float)};
+    InitBlob bp{h_p, prev.data(), prev.size() * sizeof(float)};
+    InitBlob bm{h_m, motion.data(), motion.size() * sizeof(cardinal::u32)};
+    InitBlob bn{h_n, wn.data(), wn.size() * sizeof(float)};
+    InitBlob bpn{h_pn, pwn.data(), pwn.size() * sizeof(float)};
+    add_init_pass(*g, "iC", h_c, &bc);
+    add_init_pass(*g, "iP", h_p, &bp);
+    add_init_pass(*g, "iM", h_m, &bm);
+    add_init_pass(*g, "iN", h_n, &bn);
+    add_init_pass(*g, "iPN", h_pn, &bpn);
+    auto st = gpu::ReSTIRTemporalPass::add_to_graph(*g, h_c, h_p, h_m, h_n, h_pn, W, H);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    // All pixels should pick up the history (no disocclusion).
+    CHECK(st->pixels_with_history == N);
+    CHECK(st->pixels_disoccluded  == 0u);
+    auto rs = b->buffer_contents(st->out_reservoirs);
+    const float* rf = reinterpret_cast<const float*>(rs.data());
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        const cardinal::u32 chosen =
+            *reinterpret_cast<const cardinal::u32*>(&rf[i * gpu::kReservoirDwords + 0]);
+        // Either cur (9) or prev (9) — both are 9 here so it must be 9.
+        CHECK(chosen == 9u);
+        // m_count = cur (1) + prev clamped (≤20)
+        const float m = rf[i * gpu::kReservoirDwords + 2];
+        CHECK(m >= 1.0f && m <= 21.0f);
+    }
+}
+
+void test_restir_temporal_disocclusion_rejects_history() {
+    constexpr cardinal::u32 W = 2, H = 2;
+    const cardinal::u32 N = W * H;
+    cardinal::vector<float> cur(static_cast<cardinal::usize>(N) * gpu::kReservoirDwords, 0.0f);
+    cardinal::vector<float> prev(static_cast<cardinal::usize>(N) * gpu::kReservoirDwords, 0.0f);
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        cardinal::u32 c = 3u;
+        cur[i * gpu::kReservoirDwords + 0]  = *reinterpret_cast<float*>(&c);
+        cur[i * gpu::kReservoirDwords + 1]  = 1.0f;
+        cur[i * gpu::kReservoirDwords + 2]  = 1.0f;
+        cur[i * gpu::kReservoirDwords + 3]  = 1.0f;
+        prev[i * gpu::kReservoirDwords + 0] = *reinterpret_cast<float*>(&c);
+        prev[i * gpu::kReservoirDwords + 1] = 1.0f;
+        prev[i * gpu::kReservoirDwords + 2] = 10.0f;
+        prev[i * gpu::kReservoirDwords + 3] = 1.0f;
+    }
+    cardinal::vector<cardinal::u32> motion(N, 0u);
+    // Current normal +Y, previous normal -Y → fully disoccluded.
+    cardinal::vector<float> wn(3u * N, 0.0f);
+    cardinal::vector<float> pwn(3u * N, 0.0f);
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        wn[1 * N + i]  =  1.0f;
+        pwn[1 * N + i] = -1.0f;
+    }
+    auto g = rg::Graph::create();
+    auto h_c = g->declare_buffer(rg::BufferDesc{"cur",  cur.size() * sizeof(float), 0, true});
+    auto h_p = g->declare_buffer(rg::BufferDesc{"prev", prev.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mv",   motion.size() * sizeof(cardinal::u32), 0, true});
+    auto h_n = g->declare_buffer(rg::BufferDesc{"wn",   wn.size() * sizeof(float), 0, true});
+    auto h_pn= g->declare_buffer(rg::BufferDesc{"pwn",  pwn.size() * sizeof(float), 0, true});
+    InitBlob bc{h_c, cur.data(), cur.size() * sizeof(float)};
+    InitBlob bp{h_p, prev.data(), prev.size() * sizeof(float)};
+    InitBlob bm{h_m, motion.data(), motion.size() * sizeof(cardinal::u32)};
+    InitBlob bn{h_n, wn.data(), wn.size() * sizeof(float)};
+    InitBlob bpn{h_pn, pwn.data(), pwn.size() * sizeof(float)};
+    add_init_pass(*g, "iC", h_c, &bc);
+    add_init_pass(*g, "iP", h_p, &bp);
+    add_init_pass(*g, "iM", h_m, &bm);
+    add_init_pass(*g, "iN", h_n, &bn);
+    add_init_pass(*g, "iPN", h_pn, &bpn);
+    auto st = gpu::ReSTIRTemporalPass::add_to_graph(*g, h_c, h_p, h_m, h_n, h_pn, W, H);
+    CHECK(g->compile());
+    rg::CpuBackend::create()->execute(*g);
+    CHECK(st->pixels_disoccluded == N);
+    CHECK(st->pixels_with_history == 0u);
+}
+
+void test_restir_hlsl_nonempty() {
+    CHECK(gpu::ReSTIRSamplePass::hlsl_source()[0]   != '\0');
+    CHECK(gpu::ReSTIRSpatialPass::hlsl_source()[0]  != '\0');
+    CHECK(gpu::ReSTIRTemporalPass::hlsl_source()[0] != '\0');
+}
+
+void test_aegis_orchestrator_wires_restir_when_inputs_supplied() {
+    namespace rd = cardinal::render;
+    gpu::AegisConfig cfg;
+    cfg.width = 4; cfg.height = 4;
+    cfg.light_count = 1;
+    auto runner = rd::AegisPipelineRunner::create(cfg, rd::AegisBackendMode::Null);
+    auto& g = runner->graph();
+    gpu::AegisSceneInputs in;
+    in.tris         = g.declare_buffer(rg::BufferDesc{"tris", 0, 0, true});
+    in.material_ids = g.declare_buffer(rg::BufferDesc{"mids", 0, 0, true});
+    in.materials    = g.declare_buffer(rg::BufferDesc{"mats", 0, 0, true});
+    in.lights       = g.declare_buffer(rg::BufferDesc{"lts",  16 * sizeof(float), 0, true});
+    in.ambient      = g.declare_buffer(rg::BufferDesc{"amb",  12, 0, true});
+    in.view_proj    = g.declare_buffer(rg::BufferDesc{"vp",   64, 0, true});
+    in.camera_dir   = g.declare_buffer(rg::BufferDesc{"dir",  12, 0, true});
+    // ReSTIR inputs — when present, the orchestrator wires the 3-pass chain.
+    const cardinal::usize px = static_cast<cardinal::usize>(cfg.width) * cfg.height;
+    in.restir_world_pos    = g.declare_buffer(rg::BufferDesc{"rwp", px * 3 * sizeof(float), 0, true});
+    in.restir_world_normal = g.declare_buffer(rg::BufferDesc{"rwn", px * 3 * sizeof(float), 0, true});
+    in.restir_seeds        = g.declare_buffer(rg::BufferDesc{"rsd", px * sizeof(cardinal::u32), 0, true});
+    in.triangle_count = 0;
+
+    CHECK(runner->build(in));
+    runner->execute();
+    auto trace = runner->null_trace();
+    // ReSTIR passes should appear in the trace.
+    bool saw_sample = false, saw_spatial = false, saw_temporal = false;
+    for (const auto& ev : trace) {
+        if (ev.name == "ReSTIRSamplePass")    saw_sample   = true;
+        if (ev.name == "ReSTIRSpatialPass")   saw_spatial  = true;
+        if (ev.name == "ReSTIRTemporalPass")  saw_temporal = true;
+    }
+    CHECK(saw_sample);
+    CHECK(saw_spatial);
+    CHECK(saw_temporal);
+    CHECK(runner->stages().restir_sample   != nullptr);
+    CHECK(runner->stages().restir_spatial  != nullptr);
+    CHECK(runner->stages().restir_temporal != nullptr);
+}
+
+void test_aegis_orchestrator_skips_restir_when_inputs_absent() {
+    namespace rd = cardinal::render;
+    gpu::AegisConfig cfg;
+    cfg.width = 4; cfg.height = 4;
+    auto runner = rd::AegisPipelineRunner::create(cfg, rd::AegisBackendMode::Null);
+    auto& g = runner->graph();
+    gpu::AegisSceneInputs in;
+    in.tris         = g.declare_buffer(rg::BufferDesc{"tris", 0, 0, true});
+    in.material_ids = g.declare_buffer(rg::BufferDesc{"mids", 0, 0, true});
+    in.materials    = g.declare_buffer(rg::BufferDesc{"mats", 0, 0, true});
+    in.lights       = g.declare_buffer(rg::BufferDesc{"lts",  0, 0, true});
+    in.ambient      = g.declare_buffer(rg::BufferDesc{"amb",  12, 0, true});
+    in.view_proj    = g.declare_buffer(rg::BufferDesc{"vp",   64, 0, true});
+    in.camera_dir   = g.declare_buffer(rg::BufferDesc{"dir",  12, 0, true});
+    // ReSTIR inputs DELIBERATELY NOT WIRED → orchestrator skips DI chain.
+    in.triangle_count = 0;
+
+    CHECK(runner->build(in));
+    runner->execute();
+    CHECK(runner->stages().restir_sample   == nullptr);
+    CHECK(runner->stages().restir_spatial  == nullptr);
+    CHECK(runner->stages().restir_temporal == nullptr);
+}
+
 void test_pipeline_id_includes_aegis() {
     // Verify that the registry slot for the AEGIS pipeline exists in the
     // PipelineId enum (forward-compat marker for the AegisRenderPipeline
@@ -3288,6 +3620,14 @@ int main() {
     test_aegis_runner_null_mode_records_full_topology();
     test_aegis_runner_rhi_mode_falls_back_to_null();
     test_precision_caps_select_tier();
+    test_restir_sample_picks_visible_light();
+    test_restir_sample_zero_lights_safe();
+    test_restir_spatial_combines_reservoirs();
+    test_restir_temporal_reproject_with_zero_motion();
+    test_restir_temporal_disocclusion_rejects_history();
+    test_restir_hlsl_nonempty();
+    test_aegis_orchestrator_wires_restir_when_inputs_supplied();
+    test_aegis_orchestrator_skips_restir_when_inputs_absent();
     test_pipeline_id_includes_aegis();
 
     test_zero_size_buffer_safe();

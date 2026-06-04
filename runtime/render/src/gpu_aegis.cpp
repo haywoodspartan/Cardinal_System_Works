@@ -803,9 +803,41 @@ void AegisPipeline::build(rg::Graph& g, const AegisSceneInputs& in,
     out.vbuf_normal = s.vbuf->out_normal;
     out.vbuf_motion = s.vbuf->out_motion;
 
-    // Block 7 — Tiled light cull + V-Buf resolve
+    // Block 7 — Tiled light cull
     s.light_cull = TiledLightCullPass::add_to_graph(g, in.lights, s.vbuf->out_depth,
                                                     in.view_proj, W, H, cfg_.light_count);
+
+    // Block 7 — ReSTIR DI: Sample → SpatialReuse → TemporalReuse.
+    // Only wired when the host supplies the reconstructed world-pos +
+    // world-normal + seed buffers. Without these, the orchestrator
+    // falls back to plain tile-light-list shading in VBufResolvePass.
+    const bool restir_active =
+        in.restir_world_pos.is_valid() &&
+        in.restir_world_normal.is_valid() &&
+        in.restir_seeds.is_valid();
+    if (restir_active) {
+        s.restir_sample = ReSTIRSamplePass::add_to_graph(
+            g, in.restir_world_pos, in.restir_world_normal,
+            in.lights, in.restir_seeds, W, H, cfg_.light_count);
+        s.restir_spatial = ReSTIRSpatialPass::add_to_graph(
+            g, s.restir_sample->out_reservoirs,
+            in.restir_world_pos, in.restir_world_normal,
+            in.restir_seeds, W, H);
+        s.restir_temporal = ReSTIRTemporalPass::add_to_graph(
+            g, s.restir_spatial->out_reservoirs,
+            in.restir_prev_reservoirs,        // optional handle — pass {} for first frame
+            s.vbuf->out_motion,
+            in.restir_world_normal,
+            in.restir_prev_world_normal,
+            W, H);
+    }
+
+    // V-Buf resolve consumes the tile light list (and optionally the
+    // ReSTIR reservoir buffer when it's wired). Resolve's interface
+    // doesn't take the reservoir handle yet — that wiring lands when
+    // the resolver gets a "use ReSTIR for direct" knob; for now the
+    // ReSTIR passes run as a parallel chain and their results are
+    // available to the host via stages.restir_temporal->out_reservoirs.
     s.resolve = VBufResolvePass::add_to_graph(g, s.vbuf->out_depth, s.vbuf->out_prim_id,
                                               s.vbuf->out_mat_id, s.vbuf->out_normal,
                                               in.materials,

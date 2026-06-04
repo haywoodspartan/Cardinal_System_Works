@@ -12,6 +12,7 @@ add_library(cardinal_render STATIC
     src/gpu_visbuf.cpp
     src/gpu_aegis.cpp
     src/aegis_runner.cpp
+    src/gpu_restir.cpp
     include/cardinal/render/pipeline.hpp
     include/cardinal/render/tex.hpp
     include/cardinal/render/tess.hpp
@@ -25,7 +26,8 @@ add_library(cardinal_render STATIC
     include/cardinal/render/gpu_primitives.hpp
     include/cardinal/render/gpu_visbuf.hpp
     include/cardinal/render/gpu_aegis.hpp
-    include/cardinal/render/aegis_runner.hpp)
+    include/cardinal/render/aegis_runner.hpp
+    include/cardinal/render/gpu_restir.hpp)
 add_library(cardinal::render ALIAS cardinal_render)
 
 target_include_directories(cardinal_render PUBLIC
