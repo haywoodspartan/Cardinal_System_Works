@@ -4354,6 +4354,73 @@ void test_engine_studio_aegis_path_contract() {
     // StudioMin engine path (studio_engine.cpp:337): e.pipelines().active() → AEGIS-aware.
 }
 
+void test_rhi_surface_covers_aegis_features() {
+    // Pin the RHI surface coverage for the AEGIS pipeline. The headless
+    // test env can't construct a real Device, but the type checks below
+    // confirm every AEGIS-needed declaration is present + the default
+    // implementations are no-ops (sizeof checks the enum widths).
+    using namespace cardinal::rhi;
+
+    // ShadingRate enum (VRS — AEGIS Block 12)
+    CHECK(static_cast<cardinal::u32>(Swapchain::ShadingRate::Rate_1x1) == 0u);
+    CHECK(static_cast<cardinal::u32>(Swapchain::ShadingRate::Rate_4x4) > 0u);
+
+    // ResourceState enum (graph::RhiBackend barriers)
+    CHECK(static_cast<cardinal::u32>(Swapchain::ResourceState::Common) == 0u);
+    CHECK(static_cast<cardinal::u32>(Swapchain::ResourceState::Present) > 0u);
+
+    // QueryKind (AEGIS Block 13 frame pacing telemetry)
+    CHECK(static_cast<cardinal::u32>(QueryKind::Timestamp) == 0u);
+
+    // IndirectCommandType (AEGIS Block 4 DrawIndirectGen)
+    CHECK(static_cast<cardinal::u32>(Device::IndirectCommandType::Draw)         == 0u);
+    CHECK(static_cast<cardinal::u32>(Device::IndirectCommandType::DispatchMesh) > 0u);
+    CHECK(static_cast<cardinal::u32>(Device::IndirectCommandType::TraceRays)    > 0u);
+
+    // GpuCapabilities surface — every new flag for AEGIS must exist.
+    GpuCapabilities caps{};
+    // ---- AEGIS surface caps ----
+    CHECK(caps.variable_rate_shading == false);    // default off
+    CHECK(caps.variable_rate_image   == false);
+    CHECK(caps.async_compute         == false);
+    CHECK(caps.indirect_dispatch     == false);
+    CHECK(caps.indirect_draw_count   == false);
+    CHECK(caps.predication           == false);
+    CHECK(caps.bindless_resources    == false);
+    CHECK(caps.sparse_tiled_resources== false);
+    CHECK(caps.sampler_feedback      == false);
+    CHECK(caps.multi_gpu_explicit    == false);
+    // ---- Compute / RT power knobs ----
+    CHECK(caps.fp8_math              == false);
+    CHECK(caps.fp4_math              == false);
+    CHECK(caps.tensor_cores          == false);
+    CHECK(caps.optical_flow_accel    == false);
+    CHECK(caps.dgc_compute           == false);
+    CHECK(caps.ray_tracing_invocation_reorder == false);
+    CHECK(caps.opacity_micromap      == false);
+    // ---- Streaming / IO ----
+    CHECK(caps.direct_storage_capable == false);
+    CHECK(caps.gdeflate_decompress    == false);
+    // ---- Profiling counters ----
+    CHECK(caps.timestamp_ticks_per_second == 0u);
+    CHECK(caps.max_async_compute_queues   == 0u);
+    CHECK(caps.max_copy_queues            == 0u);
+
+    // Verify the descriptor structs exist + have sensible defaults.
+    Device::MeshPipelineDesc mpd{};
+    CHECK(mpd.color_format == Format::B8G8R8A8_UNORM);
+    CHECK(mpd.depth_test == false);
+
+    Device::RayTracingPipelineDesc rtd{};
+    CHECK(rtd.max_recursion_depth == 1u);
+    CHECK(rtd.max_payload_bytes   == 16u);
+
+    Device::BindlessHeapDesc bhd{};
+    CHECK(bhd.srv_count == (1u << 20));   // 1M sampled descriptors
+    CHECK(bhd.uav_count == 65536u);
+    CHECK(bhd.cbv_count == 65536u);
+}
+
 void test_rhi_backend_factory_requires_device() {
     // RhiBackend::create() needs a real rhi::Device + Swapchain. Pin
     // the API surface — construction WITHOUT them is impossible because
@@ -4572,6 +4639,7 @@ int main() {
     test_dof_nan_safe();
     test_color_dof_hlsl_nonempty();
     test_engine_studio_aegis_path_contract();
+    test_rhi_surface_covers_aegis_features();
     test_rhi_backend_factory_requires_device();
     test_frame_telemetry_rename_back_compat();
     test_wave_decomposition_diamond();

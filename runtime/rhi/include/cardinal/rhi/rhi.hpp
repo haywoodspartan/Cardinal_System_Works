@@ -552,8 +552,224 @@ public:
     // Default no-op until backends implement the sampled-image path.
     virtual void bind_sampled_texture(u32 /*slot*/, Texture* /*tex*/) {}
 
+    // =====================================================================
+    // AEGIS Render Pipeline 2.0 surface — every entry below is declared
+    // with a default no-op implementation so existing Vulkan / D3D12
+    // backends continue to compile + run unchanged. Real implementations
+    // land per-feature as they're validated against real devices.
+    //
+    // graph::RhiBackend uses these declarations to dispatch the AEGIS
+    // graph's per-Pass work onto the device. When a method's default
+    // no-op is overridden by a backend, that feature comes online with
+    // no AEGIS-side or call-site changes.
+    // =====================================================================
+
+    // ---- Indirect dispatch / drawing (AEGIS Block 4 → DrawIndirectGen) --
+    //
+    // GPU-driven culling produces a compacted command buffer (an array of
+    // IndirectDrawCmd or IndirectDispatchCmd structs declared by the
+    // host) that the GPU consumes via these entries. No CPU roundtrip
+    // for the visibility → draw pipeline.
+    //
+    // Buffer layout matches the backend's expectation:
+    //   D3D12  : D3D12_DRAW_INDEXED_ARGUMENTS / D3D12_DISPATCH_ARGUMENTS
+    //            tightly packed at `args_offset`
+    //   Vulkan : VkDrawIndirectCommand / VkDispatchIndirectCommand
+    virtual void draw_indirect(Buffer* /*args*/, u32 /*args_offset*/,
+                               u32 /*draw_count*/, u32 /*stride*/) {}
+    virtual void draw_indexed_indirect(Buffer* /*args*/, u32 /*args_offset*/,
+                                        u32 /*draw_count*/, u32 /*stride*/) {}
+    virtual void dispatch_indirect(Buffer* /*args*/, u32 /*args_offset*/) {}
+
+    // ---- Mesh / Task shader dispatch (AEGIS Block 5) --------------------
+    //
+    // Modern geometry pipeline — replaces vertex+hull+domain+geom with a
+    // mesh shader that emits the meshlet directly. dispatch_mesh kicks off
+    // a workgroup grid; the mesh shader emits the triangles itself.
+    // Backends that don't have GpuCapabilities::mesh_shader set ignore
+    // the call (no-op).
+    virtual void dispatch_mesh(u32 /*gx*/, u32 /*gy*/ = 1, u32 /*gz*/ = 1) {}
+    virtual void dispatch_mesh_indirect(Buffer* /*args*/, u32 /*args_offset*/) {}
+
+    // ---- Ray tracing dispatch (AEGIS Block 7 → PathTracePass) -----------
+    //
+    // Inline ray-tracing (ray_query) calls live inside compute/mesh
+    // shaders; the bracket version below is for ray-tracing PIPELINES
+    // (raygen + miss + closesthit shader binding tables). Backends
+    // without GpuCapabilities::ray_tracing_pipeline ignore the call.
+    virtual void trace_rays(u32 /*width*/, u32 /*height*/, u32 /*depth*/ = 1) {}
+    virtual void trace_rays_indirect(Buffer* /*args*/, u32 /*args_offset*/) {}
+
+    // ---- Variable Rate Shading (AEGIS Block 12 — perf knob) -------------
+    //
+    // VRS lets the rasterizer shade fewer fragments in low-importance
+    // screen regions (motion blur, periphery, etc.). Two paths:
+    //   * Per-draw "all pixels at rate X" via set_shading_rate
+    //   * Per-tile via bind_shading_rate_image (small u8 texture mapping
+    //     screen tiles to VRS rates)
+    // Default no-ops when GpuCapabilities::variable_rate_shading is false.
+    enum class ShadingRate : u32 {
+        Rate_1x1 = 0,  // full shading (default)
+        Rate_1x2,
+        Rate_2x1,
+        Rate_2x2,
+        Rate_2x4,
+        Rate_4x2,
+        Rate_4x4,
+    };
+    virtual void set_shading_rate(ShadingRate /*rate*/) {}
+    virtual void bind_shading_rate_image(Texture* /*per_tile_rate_image*/) {}
+
+    // ---- Bindless descriptor heap (AEGIS Block 8 → Bindless Materials) --
+    //
+    // Binds a single large descriptor heap that contains 1000s of
+    // textures / buffers indexable by the shader via NonUniformResourceIndex
+    // (DX12) / VK_EXT_descriptor_indexing (Vulkan). One bind covers
+    // every shader for the rest of the frame.
+    virtual void bind_bindless_heap(Buffer* /*heap*/) {}
+
+    // ---- Resource barriers (graph::RhiBackend explicit barriers) --------
+    //
+    // The AEGIS graph framework infers RAW/WAW/WAR between passes; the
+    // RhiBackend uses these primitives to emit the matching pipeline
+    // barriers / resource transitions on the real device.
+    enum class ResourceState : u32 {
+        Common               = 0,
+        VertexBuffer,
+        IndexBuffer,
+        ConstantBuffer,
+        ShaderResource,      // SRV / sampled storage
+        UnorderedAccess,     // UAV / storage with writes
+        IndirectArgument,
+        CopySource,
+        CopyDest,
+        Present,
+        DepthRead,
+        DepthWrite,
+        RenderTarget,
+        ResolveSource,
+        ResolveDest,
+    };
+    virtual void transition_buffer_state(Buffer* /*b*/,
+                                          ResourceState /*before*/,
+                                          ResourceState /*after*/) {}
+    virtual void transition_texture_state(Texture* /*t*/,
+                                          ResourceState /*before*/,
+                                          ResourceState /*after*/) {}
+    // Single-call equivalent for "I just wrote to this UAV, now I want
+    // to read it" — emits a UAV-flush barrier without a state change.
+    virtual void uav_barrier(Buffer* /*b*/) {}
+    virtual void uav_barrier_texture(Texture* /*t*/) {}
+
+    // ---- Explicit copies (graph::RhiBackend Copy passes) ----------------
+    virtual void copy_buffer(Buffer* /*src*/, usize /*src_offset*/,
+                              Buffer* /*dst*/, usize /*dst_offset*/,
+                              usize /*size*/) {}
+    virtual void copy_texture(Texture* /*src*/, Texture* /*dst*/) {}
+
+    // ---- GPU timestamp queries (Block 13 → frame-pacing telemetry) ------
+    //
+    // Issue a timestamp into a query heap. The host reads the heap N
+    // frames later (after GPU completion) for per-stage µs cost.
+    virtual void write_timestamp(u32 /*query_heap_id*/, u32 /*index*/) {}
+
+    // ---- Debug markers / events (PIX, RenderDoc, Nsight) ----------------
+    //
+    // begin_event / end_event nest; insert_marker is a one-shot label.
+    // Default no-op — backends emit PIX events (D3D12 PIXBeginEvent /
+    // EndEvent) or Vulkan debug markers (vkCmdBeginDebugUtilsLabelEXT).
+    virtual void begin_event(const char* /*name*/) {}
+    virtual void end_event() {}
+    virtual void insert_marker(const char* /*name*/) {}
+
+    // ---- Predication / conditional rendering (Block 4 — late occlusion) -
+    //
+    // Predicate subsequent draws on a counter in a Buffer (e.g. visible-
+    // primitive count from Hi-Z occlusion). Drawn iff *(args_offset:u32)
+    // != 0 unless invert == true. D3D12 SetPredication / Vulkan
+    // VK_EXT_conditional_rendering.
+    virtual void set_predication(Buffer* /*args*/, u32 /*args_offset*/,
+                                  bool /*invert*/ = false) {}
+    virtual void clear_predication() {}
+
+    // ---- Multi-queue submission (AEGIS Block 10 → Async Compute) --------
+    //
+    // The host obtains an async compute queue via Device::async_compute_
+    // queue() (when GpuCapabilities::async_compute is true) and submits
+    // independent work that overlaps with the graphics queue. These are
+    // sync primitives the host uses to fence between queues.
+    virtual u64  signal_fence(class Fence* /*f*/) { return 0; }
+    virtual void wait_fence  (class Fence* /*f*/, u64 /*value*/) {}
+
 protected:
     Swapchain() = default;
+};
+
+// ---------------------------------------------------------------------------
+// Fence — explicit GPU sync object for multi-queue submission (AEGIS
+// async compute story). Created by Device::create_fence; signalled +
+// waited via Swapchain::signal_fence / wait_fence on either the
+// graphics queue or the async compute queue.
+// ---------------------------------------------------------------------------
+class Fence {
+public:
+    virtual ~Fence() = default;
+    Fence(const Fence&)            = delete;
+    Fence& operator=(const Fence&) = delete;
+
+    // Host-side wait for the fence to reach `value`. Returns the
+    // achieved value (>= `value`) or 0 on timeout.
+    virtual u64 wait_cpu(u64 /*value*/, u64 /*timeout_ns*/ = 1'000'000'000ull) { return 0; }
+    virtual u64 current_value() const noexcept { return 0; }
+
+protected:
+    Fence() = default;
+};
+
+// ---------------------------------------------------------------------------
+// QueryHeap — GPU timestamp / occlusion query container. Created via
+// Device::create_query_heap; entries written by Swapchain::write_timestamp.
+// ---------------------------------------------------------------------------
+enum class QueryKind : u32 { Timestamp = 0, Occlusion, PipelineStatistics };
+
+class QueryHeap {
+public:
+    virtual ~QueryHeap() = default;
+    QueryHeap(const QueryHeap&)            = delete;
+    QueryHeap& operator=(const QueryHeap&) = delete;
+
+    // Read back N consecutive query results into `out` (host pointer).
+    // For timestamps the unit is ticks; the host divides by
+    // GpuCapabilities::timestamp_ticks_per_second.
+    virtual void readback(u32 /*first*/, u32 /*count*/, u64* /*out*/) {}
+
+protected:
+    QueryHeap() = default;
+};
+
+// ---------------------------------------------------------------------------
+// ComputeQueue — async compute submission lane (AEGIS Block 10).
+// Owns its own command list pool; the host records work via the same
+// Swapchain-like recording interface and submits it independently of
+// the graphics queue.
+// ---------------------------------------------------------------------------
+class ComputeQueue {
+public:
+    virtual ~ComputeQueue() = default;
+    ComputeQueue(const ComputeQueue&)            = delete;
+    ComputeQueue& operator=(const ComputeQueue&) = delete;
+
+    // Record + submit one self-contained compute submission. The
+    // backend's implementation acquires a command list, calls
+    // `record(cmd)`, closes it, submits to the async queue, and
+    // signals `signal_fence` to `signal_value` on completion.
+    using RecordFn = void(*)(Swapchain* cmd_recorder, void* user) noexcept;
+    virtual u64 submit(RecordFn /*record*/, void* /*user*/,
+                       Fence* /*signal_fence*/ = nullptr,
+                       u64    /*signal_value*/ = 0) { return 0; }
+
+protected:
+    ComputeQueue() = default;
 };
 
 // ---------------------------------------------------------------------------
@@ -592,6 +808,36 @@ struct GpuCapabilities {
     bool nvidia_dlss_capable{false};      // RTX 20-series and newer (Tensor cores)
     bool nvidia_framegen_capable{false};  // RTX 40-series (Optical Flow Accelerator)
     bool amd_fsr3_capable{false};         // RX 6000+ for FSR 3 frame interpolation
+
+    // ---- AEGIS surface caps (graph::RhiBackend dispatch-target gates) ---
+    bool variable_rate_shading{false};    // VRS Tier 1+ (Block 12 perf)
+    bool variable_rate_image  {false};    // VRS Tier 2 (per-tile rates image)
+    bool async_compute        {false};    // separate compute queue (Block 10)
+    bool indirect_dispatch    {false};    // GPU-driven dispatch (Block 4)
+    bool indirect_draw_count  {false};    // ExecuteIndirect with count buffer (Block 4)
+    bool predication          {false};    // SetPredication / conditional rendering
+    bool bindless_resources   {false};    // 1M+ descriptors via heap indexing (Block 8)
+    bool sparse_tiled_resources{false};   // tiled / sparse for virtual texturing (Block 11)
+    bool sampler_feedback     {false};    // texture-usage feedback for streaming (Block 11)
+    bool multi_gpu_explicit   {false};    // explicit multi-adapter (NVLink / Crossfire)
+
+    // ---- Compute / RT power knobs ---------------------------------------
+    bool fp8_math             {false};    // Hopper / Ada / RDNA4 (math-division tier)
+    bool fp4_math             {false};    // Blackwell / RDNA5 (math-division tier)
+    bool tensor_cores         {false};    // NVIDIA Tensor cores (DLSS / ML)
+    bool optical_flow_accel   {false};    // DLSS 3 Frame Gen accelerator
+    bool dgc_compute          {false};    // device-generated commands for compute
+    bool ray_tracing_invocation_reorder{false};  // SER (RTX 40-series)
+    bool opacity_micromap     {false};    // RT alpha-test acceleration
+
+    // ---- Streaming / IO (Block 11) --------------------------------------
+    bool direct_storage_capable{false};   // DirectStorage / RTX IO present
+    bool gdeflate_decompress  {false};    // GPU GDEFLATE decode (RTX 40+ HW path)
+
+    // ---- Timestamp / profiling ------------------------------------------
+    u64  timestamp_ticks_per_second{0};   // divide timestamp delta by this for seconds
+    u32  max_async_compute_queues  {0};   // typically 1 on D3D12, 1-2 on Vulkan
+    u32  max_copy_queues           {0};
 
     // Identity
     char vendor_name[32]{};      // "NVIDIA Corporation", "AMD", "Intel"
@@ -708,6 +954,115 @@ public:
         ShaderStage stage,
         const char* hlsl_source,
         const char* entry_point) = 0;
+
+    // ====================================================================
+    // AEGIS surface — factory methods for the rest of the pipeline. Every
+    // factory defaults to nullptr so backends compile + run unchanged
+    // while individual features are wired. graph::RhiBackend gates each
+    // dispatch path on a non-null result.
+    // ====================================================================
+
+    // Fence — GPU sync object for multi-queue submission (AEGIS Block 10).
+    virtual cardinal::unique_ptr<Fence> create_fence(u64 /*initial_value*/ = 0) {
+        return {};
+    }
+
+    // QueryHeap — timestamp / occlusion / pipeline-statistics queries.
+    virtual cardinal::unique_ptr<QueryHeap> create_query_heap(
+        QueryKind /*kind*/, u32 /*count*/) { return {}; }
+
+    // Async compute queue (AEGIS Block 10 → Async Compute Scheduler).
+    // Returns nullptr if caps.async_compute is false. The host owns the
+    // returned queue for the lifetime of the device; multiple queues
+    // can be created up to caps.max_async_compute_queues.
+    virtual cardinal::unique_ptr<ComputeQueue> create_async_compute_queue() {
+        return {};
+    }
+
+    // ---- Mesh-shader pipeline (AEGIS Block 5) --------------------------
+    //
+    // Distinct PipelineDesc shape: mesh shader (no vertex/IA) +
+    // optional task shader + fragment shader. Backends without
+    // GpuCapabilities::mesh_shader return nullptr.
+    struct MeshPipelineDesc {
+        ShaderBlob   task_shader;     // optional; empty disables task stage
+        ShaderBlob   mesh_shader;
+        ShaderBlob   fragment_shader;
+        const char*  task_entry    {"TSMain"};
+        const char*  mesh_entry    {"MSMain"};
+        const char*  fragment_entry{"PSMain"};
+        Format       color_format  {Format::B8G8R8A8_UNORM};
+        Format       depth_format  {Format::Unknown};
+        bool         depth_test    {false};
+        bool         depth_write   {false};
+        u32          push_constant_size   {0};
+        u32          storage_buffer_slots {0};
+        u32          sampled_texture_slots{0};
+    };
+    virtual cardinal::unique_ptr<Pipeline> create_mesh_pipeline(
+        const MeshPipelineDesc& /*desc*/) { return {}; }
+
+    // ---- Ray-tracing pipeline (AEGIS Block 7 → PathTracePass) -----------
+    //
+    // raygen + miss + closest-hit + (optional) any-hit + intersection,
+    // wrapped in a shader binding table. Backends without caps.ray_
+    // tracing_pipeline return nullptr.
+    struct RayTracingPipelineDesc {
+        ShaderBlob   raygen;
+        ShaderBlob   miss;
+        ShaderBlob   closest_hit;
+        ShaderBlob   any_hit;          // optional
+        ShaderBlob   intersection;     // optional (procedural geom)
+        const char*  raygen_entry      {"RayGen"};
+        const char*  miss_entry        {"Miss"};
+        const char*  closest_hit_entry {"ClosestHit"};
+        const char*  any_hit_entry     {"AnyHit"};
+        const char*  intersection_entry{"Intersection"};
+        u32          max_recursion_depth {1};
+        u32          max_payload_bytes   {16};
+        u32          max_attribute_bytes {8};
+        u32          push_constant_size  {0};
+    };
+    virtual cardinal::unique_ptr<Pipeline> create_ray_tracing_pipeline(
+        const RayTracingPipelineDesc& /*desc*/) { return {}; }
+
+    // ---- Indirect-command signature (DX12 ExecuteIndirect, Vk
+    // VK_EXT_device_generated_commands) ---------------------------------
+    //
+    // The command signature describes the layout of an indirect-args
+    // buffer (draw vs dispatch vs draw-indexed vs custom root-constants
+    // prepended). Backends without caps.indirect_draw_count return
+    // nullptr.
+    enum class IndirectCommandType : u32 {
+        Draw          = 0,
+        DrawIndexed,
+        Dispatch,
+        DispatchMesh,
+        TraceRays,
+    };
+    virtual cardinal::unique_ptr<Pipeline> create_indirect_signature(
+        IndirectCommandType /*type*/, u32 /*stride_bytes*/) { return {}; }
+
+    // ---- Bindless descriptor heap (Block 8) -----------------------------
+    //
+    // Allocates a single large descriptor heap (~1M slots) that holds
+    // every shader-accessible resource. Shaders index via descriptor
+    // index from a constant buffer; one heap bind per frame. Backends
+    // without caps.bindless_resources return nullptr.
+    struct BindlessHeapDesc {
+        u32 srv_count {1u << 20};   // sampled textures + SRVs
+        u32 uav_count {65536};      // RW textures + UAVs
+        u32 cbv_count {65536};
+        u32 sampler_count {2048};
+    };
+    virtual cardinal::unique_ptr<Buffer> create_bindless_heap(
+        const BindlessHeapDesc& /*desc*/) { return {}; }
+    // Write a sampled-texture / UAV / CBV descriptor into a heap slot.
+    // Index space matches the heap layout above. Default no-ops; the
+    // backends override when the heap factory returns a real heap.
+    virtual void write_bindless_srv(Buffer* /*heap*/, u32 /*index*/, Texture* /*tex*/) {}
+    virtual void write_bindless_uav(Buffer* /*heap*/, u32 /*index*/, Buffer* /*buf*/) {}
+    virtual void write_bindless_cbv(Buffer* /*heap*/, u32 /*index*/, Buffer* /*buf*/) {}
 
     // ------------------------------------------------------------------
     // Live VRAM telemetry — drives the budget broker.
