@@ -19,7 +19,10 @@
 #include <cardinal/lighting/lighting.hpp>
 #include <cardinal/lighting/raytracer.hpp>
 #include <cardinal/lighting/bake.hpp>
+#include <cardinal/lighting/gpu_lighting.hpp>
+#include <cardinal/render/graph.hpp>
 #include <cardinal/core/log.hpp>
+#include <cardinal/core/utility.hpp>
 
 #include <limits>
 
@@ -914,6 +917,281 @@ void test_probe_volume_bake_end_to_end() {
     CHECK(plus_y_r > minus_y_r);             // sky brighter than floor
 }
 
+// ============================================================================
+// GPU-pass coverage: ForwardShadePass + PathTracePass (under CpuBackend).
+// ============================================================================
+namespace rg = cardinal::render::graph;
+namespace glx = cardinal::lighting::gpu;
+
+struct InitBlob { rg::ResourceHandle h; const void* src; cardinal::usize bytes; };
+void rec_init_blob(rg::ExecutionContext& ec, void* uctx) noexcept {
+    auto* c = static_cast<InitBlob*>(uctx);
+    void* dst = ec.map_buffer_write(c->h);
+    if (!dst) return;
+    auto* d = static_cast<cardinal::u8*>(dst);
+    auto* s = static_cast<const cardinal::u8*>(c->src);
+    for (cardinal::usize i = 0; i < c->bytes; ++i) d[i] = s[i];
+}
+void add_init_pass(rg::Graph& g, const char* name, rg::ResourceHandle h, InitBlob* blob) {
+    rg::PassDesc pd; pd.name = name; pd.kind = rg::PassKind::Compute;
+    pd.accesses.push_back(rg::ResourceAccess{h, rg::AccessMode::Write, 0});
+    pd.record = rec_init_blob; pd.user_ctx = blob;
+    g.add_pass(cardinal::move(pd));
+}
+
+void test_forward_shade_pass_directional() {
+    // Single white directional light, white diffuse fragments facing up,
+    // black ambient. Fragments are positioned below the camera (at origin)
+    // so view_dir = normalize(-pos) = +Y (aligned with the normal, NdotV > 0).
+    constexpr cardinal::u32 N = 4;
+    cardinal::vector<float> wp(N * 3u, 0.0f);
+    // Place fragments at (0, -1, 0) so view_dir from origin = +Y.
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        wp[1 * N + i] = -1.0f;
+    }
+    cardinal::vector<float> wn(N * 3u, 0.0f);
+    // Normals: all +Y
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        wn[1 * N + i] = 1.0f;
+    }
+    cardinal::vector<float> mt(N * 5u, 0.0f);
+    // base color = (1, 1, 1), metallic = 0, roughness = 1
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        mt[0 * N + i] = 1.0f;
+        mt[1 * N + i] = 1.0f;
+        mt[2 * N + i] = 1.0f;
+        mt[3 * N + i] = 0.0f;
+        mt[4 * N + i] = 1.0f;
+    }
+    glx::PackedLight light{};
+    light.kind = 0u;
+    light.direction[0] = 0; light.direction[1] = -1; light.direction[2] = 0;
+    light.color[0] = 1; light.color[1] = 1; light.color[2] = 1;
+    light.intensity = 1.0f;
+    light.range = 100.0f;
+    light.inner_cos = 0.95f;
+    light.outer_cos = 0.85f;
+    cardinal::vector<float> ambient = {0.0f, 0.0f, 0.0f};
+
+    auto g = rg::Graph::create();
+    auto h_wp = g->declare_buffer(rg::BufferDesc{"wp", wp.size() * sizeof(float), 0, true});
+    auto h_wn = g->declare_buffer(rg::BufferDesc{"wn", wn.size() * sizeof(float), 0, true});
+    auto h_mt = g->declare_buffer(rg::BufferDesc{"mt", mt.size() * sizeof(float), 0, true});
+    auto h_lt = g->declare_buffer(rg::BufferDesc{"lt", sizeof(glx::PackedLight), 0, true});
+    auto h_am = g->declare_buffer(rg::BufferDesc{"am", ambient.size() * sizeof(float), 0, true});
+    InitBlob b_wp{h_wp, wp.data(), wp.size() * sizeof(float)};
+    InitBlob b_wn{h_wn, wn.data(), wn.size() * sizeof(float)};
+    InitBlob b_mt{h_mt, mt.data(), mt.size() * sizeof(float)};
+    InitBlob b_lt{h_lt, &light,     sizeof(glx::PackedLight)};
+    InitBlob b_am{h_am, ambient.data(), ambient.size() * sizeof(float)};
+    add_init_pass(*g, "iwp", h_wp, &b_wp);
+    add_init_pass(*g, "iwn", h_wn, &b_wn);
+    add_init_pass(*g, "imt", h_mt, &b_mt);
+    add_init_pass(*g, "ilt", h_lt, &b_lt);
+    add_init_pass(*g, "iam", h_am, &b_am);
+
+    auto st = glx::ForwardShadePass::add_to_graph(*g, h_wp, h_wn, h_mt, h_lt, h_am, N, 1);
+    CHECK(g->compile());
+    auto backend = rg::CpuBackend::create();
+    backend->execute(*g);
+
+    auto out = backend->buffer_contents(st->out_shaded);
+    CHECK(out.size() == N * 3u * sizeof(float));
+    const float* of = reinterpret_cast<const float*>(out.data());
+    const float* outr = of + 0 * N;
+    const float* outg = of + 1 * N;
+    const float* outb = of + 2 * N;
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        CHECK(outr[i] > 0.0f);
+        CHECK(outg[i] > 0.0f);
+        CHECK(outb[i] > 0.0f);
+        // White light, white fragment → r ~ g ~ b
+        CHECK(ap(outr[i], outg[i], 1e-3f));
+        CHECK(ap(outr[i], outb[i], 1e-3f));
+    }
+    CHECK(st->fragments_lit == N);
+}
+
+void test_forward_shade_pass_back_facing_dark() {
+    // Single fragment with normal pointing AWAY from a directional light
+    // should receive ambient only.
+    constexpr cardinal::u32 N = 1;
+    cardinal::vector<float> wp(N * 3u, 0.0f);
+    // Place fragment at (0, +1, 0) so view_dir = -Y points along the (now -Y) normal.
+    wp[1 * N + 0] = 1.0f;
+    cardinal::vector<float> wn(N * 3u, 0.0f);
+    // Normal pointing -Y (away from a downward-shining +Y light)
+    wn[1 * N + 0] = -1.0f;
+    cardinal::vector<float> mt = {0.5f, 0.5f, 0.5f, 0.0f, 1.0f};
+
+    glx::PackedLight light{};
+    light.kind = 0u;
+    light.direction[0] = 0; light.direction[1] = -1; light.direction[2] = 0;
+    light.color[0] = 1; light.color[1] = 1; light.color[2] = 1;
+    light.intensity = 1.0f;
+    cardinal::vector<float> ambient = {0.1f, 0.1f, 0.1f};
+
+    auto g = rg::Graph::create();
+    auto h_wp = g->declare_buffer(rg::BufferDesc{"wp", wp.size() * sizeof(float), 0, true});
+    auto h_wn = g->declare_buffer(rg::BufferDesc{"wn", wn.size() * sizeof(float), 0, true});
+    auto h_mt = g->declare_buffer(rg::BufferDesc{"mt", mt.size() * sizeof(float), 0, true});
+    auto h_lt = g->declare_buffer(rg::BufferDesc{"lt", sizeof(glx::PackedLight), 0, true});
+    auto h_am = g->declare_buffer(rg::BufferDesc{"am", ambient.size() * sizeof(float), 0, true});
+    InitBlob b_wp{h_wp, wp.data(), wp.size() * sizeof(float)};
+    InitBlob b_wn{h_wn, wn.data(), wn.size() * sizeof(float)};
+    InitBlob b_mt{h_mt, mt.data(), mt.size() * sizeof(float)};
+    InitBlob b_lt{h_lt, &light,     sizeof(glx::PackedLight)};
+    InitBlob b_am{h_am, ambient.data(), ambient.size() * sizeof(float)};
+    add_init_pass(*g, "iwp", h_wp, &b_wp);
+    add_init_pass(*g, "iwn", h_wn, &b_wn);
+    add_init_pass(*g, "imt", h_mt, &b_mt);
+    add_init_pass(*g, "ilt", h_lt, &b_lt);
+    add_init_pass(*g, "iam", h_am, &b_am);
+
+    auto st = glx::ForwardShadePass::add_to_graph(*g, h_wp, h_wn, h_mt, h_lt, h_am, N, 1);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out = b->buffer_contents(st->out_shaded);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    // Only ambient * base_color contributes → 0.1 * 0.5 = 0.05
+    CHECK(ap(of[0], 0.05f, 1e-3f));   // r
+    CHECK(st->fragments_lit == 0u);   // back-facing → no light pass NdotL > 0
+}
+
+void test_forward_shade_pass_nan_safe() {
+    // NaN inputs anywhere must produce finite output.
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    constexpr cardinal::u32 N = 2;
+    cardinal::vector<float> wp(N * 3u, qnan);
+    cardinal::vector<float> wn(N * 3u, qnan);
+    cardinal::vector<float> mt(N * 5u, qnan);
+    glx::PackedLight light{};
+    light.kind = 0u;
+    light.direction[0] = qnan; light.direction[1] = qnan; light.direction[2] = qnan;
+    light.color[0] = qnan; light.color[1] = qnan; light.color[2] = qnan;
+    light.intensity = qnan;
+    cardinal::vector<float> ambient = {qnan, qnan, qnan};
+
+    auto g = rg::Graph::create();
+    auto h_wp = g->declare_buffer(rg::BufferDesc{"wp", wp.size() * sizeof(float), 0, true});
+    auto h_wn = g->declare_buffer(rg::BufferDesc{"wn", wn.size() * sizeof(float), 0, true});
+    auto h_mt = g->declare_buffer(rg::BufferDesc{"mt", mt.size() * sizeof(float), 0, true});
+    auto h_lt = g->declare_buffer(rg::BufferDesc{"lt", sizeof(glx::PackedLight), 0, true});
+    auto h_am = g->declare_buffer(rg::BufferDesc{"am", ambient.size() * sizeof(float), 0, true});
+    InitBlob b_wp{h_wp, wp.data(), wp.size() * sizeof(float)};
+    InitBlob b_wn{h_wn, wn.data(), wn.size() * sizeof(float)};
+    InitBlob b_mt{h_mt, mt.data(), mt.size() * sizeof(float)};
+    InitBlob b_lt{h_lt, &light,     sizeof(glx::PackedLight)};
+    InitBlob b_am{h_am, ambient.data(), ambient.size() * sizeof(float)};
+    add_init_pass(*g, "iwp", h_wp, &b_wp);
+    add_init_pass(*g, "iwn", h_wn, &b_wn);
+    add_init_pass(*g, "imt", h_mt, &b_mt);
+    add_init_pass(*g, "ilt", h_lt, &b_lt);
+    add_init_pass(*g, "iam", h_am, &b_am);
+
+    auto st = glx::ForwardShadePass::add_to_graph(*g, h_wp, h_wn, h_mt, h_lt, h_am, N, 1);
+    CHECK(g->compile());
+    rg::CpuBackend::create()->execute(*g);
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out = b->buffer_contents(st->out_shaded);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    for (cardinal::usize i = 0; i < N * 3; ++i) {
+        CHECK(of[i] == of[i]);
+        CHECK((of[i] - of[i]) == 0.0f);
+    }
+}
+
+void test_forward_shade_pass_hlsl_nonempty() {
+    const char* hlsl = glx::ForwardShadePass::hlsl_source();
+    CHECK(hlsl != nullptr);
+    CHECK(hlsl[0] != '\0');
+}
+
+// ----------------------------------------------------------------------------
+// PathTracePass — wraps the CPU PathTracer under a graph node.
+// ----------------------------------------------------------------------------
+void test_path_trace_pass_renders_finite_image() {
+    sc::LightSet lights;
+    sc::Light L; L.kind = sc::LightKind::Directional;
+    L.direction = sc::Vec3{0, -1, 0}; L.color = sc::Vec3{1, 1, 1}; L.intensity = 1.0f;
+    lights.add(L);
+    lx::Scene s = make_basic_scene(lights);
+
+    lx::PathTracerConfig pcfg;
+    pcfg.samples_per_pixel = 1;
+    pcfg.max_bounces       = 1;
+    auto tracer = lx::PathTracer::create(pcfg);
+
+    constexpr cardinal::u32 W = 4, H = 4;
+    auto g = rg::Graph::create();
+    auto st = glx::PathTracePass::add_to_graph(*g, tracer, s, W, H);
+    st->camera_pos = sc::Vec3{0, 1, -5};
+    st->forward    = sc::Vec3{0, 0, 1};
+    st->right      = sc::Vec3{1, 0, 0};
+    st->up         = sc::Vec3{0, 1, 0};
+    st->vfov_rad   = 45.0f * sc::kDegToRad;
+
+    CHECK(g->compile());
+    auto backend = rg::CpuBackend::create();
+    backend->execute(*g);
+    auto rad = backend->buffer_contents(st->out_radiance);
+    auto rgba= backend->buffer_contents(st->out_rgba);
+    CHECK(rad.size()  == W * H * 3 * sizeof(float));
+    CHECK(rgba.size() == W * H * 4);
+    const float* rf = reinterpret_cast<const float*>(rad.data());
+    for (cardinal::usize i = 0; i < W * H * 3; ++i) CHECK(fin(rf[i]));
+    // Every alpha must be 255 (the tracer always writes opaque).
+    for (cardinal::usize i = 0; i < W * H; ++i) CHECK(rgba[i * 4 + 3] == 255u);
+    // Rays counter > 0.
+    CHECK(st->rays_total > 0u);
+}
+
+void test_path_trace_pass_determinism() {
+    sc::LightSet lights;
+    sc::Light L; L.kind = sc::LightKind::Directional;
+    L.direction = sc::Vec3{0, -1, 0}; L.color = sc::Vec3{1, 1, 1}; L.intensity = 1.0f;
+    lights.add(L);
+    lx::Scene s = make_basic_scene(lights);
+
+    lx::PathTracerConfig pcfg;
+    pcfg.samples_per_pixel = 1;
+    pcfg.max_bounces       = 0;
+    pcfg.rng_seed          = 0xC0FFEE;
+    auto ta = lx::PathTracer::create(pcfg);
+    auto tb = lx::PathTracer::create(pcfg);
+
+    constexpr cardinal::u32 W = 4, H = 4;
+    auto ga = rg::Graph::create();
+    auto gb = rg::Graph::create();
+    auto sta = glx::PathTracePass::add_to_graph(*ga, ta, s, W, H);
+    auto stb = glx::PathTracePass::add_to_graph(*gb, tb, s, W, H);
+    for (auto* st : {sta.get(), stb.get()}) {
+        st->camera_pos = sc::Vec3{0, 1, -5};
+        st->forward = sc::Vec3{0, 0, 1};
+        st->right   = sc::Vec3{1, 0, 0};
+        st->up      = sc::Vec3{0, 1, 0};
+        st->vfov_rad = 45.0f * sc::kDegToRad;
+    }
+    CHECK(ga->compile());
+    CHECK(gb->compile());
+    auto ba = rg::CpuBackend::create();
+    auto bb = rg::CpuBackend::create();
+    ba->execute(*ga);
+    bb->execute(*gb);
+    auto ra = ba->buffer_contents(sta->out_radiance);
+    auto rb = bb->buffer_contents(stb->out_radiance);
+    CHECK(ra.size() == rb.size());
+    for (cardinal::usize i = 0; i < ra.size(); ++i) CHECK(ra[i] == rb[i]);
+}
+
+void test_path_trace_pass_hlsl_nonempty() {
+    const char* hlsl = glx::PathTracePass::hlsl_source();
+    CHECK(hlsl != nullptr);
+    CHECK(hlsl[0] != '\0');
+}
+
 void test_probe_volume_bake_determinism() {
     sc::LightSet lights;
     sc::Light L; L.kind = sc::LightKind::Directional;
@@ -994,6 +1272,15 @@ int main() {
     test_probe_sampler_empty_safe();
     test_probe_volume_bake_end_to_end();
     test_probe_volume_bake_determinism();
+
+    // ---- GPU passes (graph-hosted, CpuBackend-executed)
+    test_forward_shade_pass_directional();
+    test_forward_shade_pass_back_facing_dark();
+    test_forward_shade_pass_nan_safe();
+    test_forward_shade_pass_hlsl_nonempty();
+    test_path_trace_pass_renders_finite_image();
+    test_path_trace_pass_determinism();
+    test_path_trace_pass_hlsl_nonempty();
 
     if (g_fail == 0) {
         cardinal::log::infof("rtxtest", "OK  %d checks passed", g_checks);
