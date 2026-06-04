@@ -31,6 +31,13 @@
 
 namespace cardinal::render {
 
+// Forward declaration of the AEGIS bridge pipeline factory — defined in
+// aegis_pipeline_bridge.cpp at cardinal::render scope (external linkage).
+// Placed outside the anonymous namespace below so the linker picks up
+// the right symbol from the bridge TU.
+cardinal::unique_ptr<Pipeline> create_aegis_pipeline(rhi::Device& dev,
+                                                     rhi::Swapchain& sw);
+
 namespace {
 
 // Find a knob by id. Returns nullptr if missing.
@@ -676,6 +683,7 @@ public:
         pipelines_.push_back(cardinal::make_unique<ForwardBaseline>  (dev, sw));
         pipelines_.push_back(cardinal::make_unique<DebugVisualizer>  (dev, sw));
         pipelines_.push_back(cardinal::make_unique<ForwardClustered> (dev, sw));
+        pipelines_.push_back(create_aegis_pipeline                   (dev, sw));
         for (auto& p : pipelines_) p->on_caps(dev.capabilities());
         cardinal::log::infof("render",
             "Pipeline registry online — %zu pipelines, default '%s'",
