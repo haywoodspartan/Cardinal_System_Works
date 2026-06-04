@@ -202,7 +202,20 @@ void test_time() {
 
     Time later = epoch;
     later.add_seconds(3600);   // +1 hour
-    CHECK(later.hour() == 1u || later.year() == 2025u);   // sanity, exact value depends on tz
+    // mktime(local-tm) -> UTC seconds, +3600 UTC seconds -> localtime(),
+    // round-trip is timezone-invariant: any local 00:00:00 + 1 hour =
+    // local 01:00:00 on the same day (no DST transition at Jan 1).
+    CHECK(later.hour()  == 1u);
+    CHECK(later.day()   == 1u);
+    CHECK(later.month() == 1u);
+    CHECK(later.year()  == 2025u);
+
+    // 24 hours forward — same hour, next day.
+    Time next_day = epoch;
+    next_day.add_seconds(24u * 3600u);
+    CHECK(next_day.hour() == 0u);
+    CHECK(next_day.day()  == 2u);
+    CHECK(next_day.day_of_week() == DayOfWeek::Thursday);   // 2025-01-02 = Thu
 
     Time future;
     future.set(2025, 1, 1, 0, 0, 0);
@@ -232,18 +245,42 @@ void test_stopwatch() {
 }
 
 void test_repeatable_timer() {
+    // ---- Phase 1: two one-shot timers, separate fire windows. -----------
+    // Verifies the min-heap pops entries in chronological order and that a
+    // one-shot entry is not re-armed.
     RepeatableTimer<cardinal::u32> rt;
-    CHECK(rt.register_entry(/*id=*/1, /*delay_ms=*/20, /*interval_ms=*/0)  == 0);
-    CHECK(rt.register_entry(/*id=*/2, /*delay_ms=*/40, /*interval_ms=*/20) == 0);
-    CHECK(rt.register_entry(/*id=*/1, /*delay_ms=*/10, /*interval_ms=*/0)  == 183);   // duplicate
+    CHECK(rt.register_entry(/*id=*/1, /*delay_ms=*/30,  /*interval_ms=*/0) == 0);
+    CHECK(rt.register_entry(/*id=*/2, /*delay_ms=*/120, /*interval_ms=*/0) == 0);
+    CHECK(rt.register_entry(/*id=*/1, /*delay_ms=*/10,  /*interval_ms=*/0) == 183);   // duplicate
     rt.end_register();
 
+    // Wait past id=1 but well before id=2 — only id=1 should fire.
+    std::this_thread::sleep_for(std::chrono::milliseconds(70));
     cardinal::vector<cardinal::u32> fired;
-    // Wait long enough for #1 to fire (one-shot).
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    const cardinal::u32 next = rt.wait_milliseconds(fired);
-    CHECK(!fired.empty());
-    (void)next;
+    (void)rt.wait_milliseconds(fired);
+    CHECK(fired.size() == 1u);
+    if (fired.size() == 1u) CHECK(fired[0] == 1u);
+
+    // Wait past id=2.
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    cardinal::vector<cardinal::u32> fired2;
+    (void)rt.wait_milliseconds(fired2);
+    CHECK(fired2.size() == 1u);
+    if (fired2.size() == 1u) CHECK(fired2[0] == 2u);
+
+    // ---- Phase 2: interval timer re-arms correctly. ---------------------
+    // After ~120ms with delay=30 + interval=40, entry 9 should fire at
+    // 30, 70, 110 — i.e. 3 times. Use size >= 2 to tolerate Windows
+    // sleep_for jitter (15.6ms scheduler tick).
+    RepeatableTimer<cardinal::u32> rt2;
+    CHECK(rt2.register_entry(/*id=*/9, /*delay_ms=*/30, /*interval_ms=*/40) == 0);
+    rt2.end_register();
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    cardinal::vector<cardinal::u32> fired3;
+    (void)rt2.wait_milliseconds(fired3);
+    CHECK(fired3.size() >= 2u);
+    for (auto id : fired3) CHECK(id == 9u);
 }
 
 // ---------------------------------------------------------------------------
