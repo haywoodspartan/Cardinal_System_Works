@@ -1,7 +1,26 @@
 #pragma once
 
 // =============================================================================
-// Cardinal — FramePacer (AEGIS Block 13 → Frame Pacing).
+// Cardinal — FrameTelemetry (AEGIS Block 13 → Frame Pacing telemetry).
+//
+// Per-pipeline frame-timing analyzer + sleep budget. DISTINCT from
+// cardinal::core::FramePacer, which is the engine's multi-context FPS
+// quota manager (main loop + viewport panels each registered with a
+// PaceContextId, foreground/background-aware throttling). This class
+// is the per-pipeline jitter analyzer the AEGIS pipeline owns:
+//
+//   * begin_frame() / end_frame() at the pipeline's frame boundary
+//   * rolling 60-frame window → avg / min / max / jitter (stddev)
+//   * Locked / Capped / Uncapped sleep modes
+//   * inject_frame_ms() for deterministic tests (no wall-clock flakes)
+//
+// Hosts that just want "throttle the main loop to 60 FPS" continue to
+// use core::FramePacer via Engine::pacer(). Hosts that want pipeline-
+// level jitter telemetry for the AEGIS debug overlay use this.
+//
+// Class was previously named FramePacer; renamed to FrameTelemetry to
+// remove the collision with core::FramePacer per the engine-wide
+// "uniform to cardinal::*" cleanup directive.
 //
 // Frame-pacing controller for the AEGIS pipeline. The host calls
 // begin_frame() at the top of each render frame and end_frame() at the
@@ -41,16 +60,19 @@
 
 namespace cardinal::render {
 
-enum class FramePacerMode : cardinal::u32 {
+enum class FrameTelemetryMode : cardinal::u32 {
     Locked   = 0,   // sleep to exactly hit target_fps
     Capped   = 1,   // sleep only if running over budget
     Uncapped = 2,   // measure only; never sleep
 };
 
-class FramePacer {
+// Back-compat alias for the previous mode-enum name.
+using FramePacerMode [[deprecated("Use FrameTelemetryMode")]] = FrameTelemetryMode;
+
+class FrameTelemetry {
 public:
-    static cardinal::shared_ptr<FramePacer> create(cardinal::u32 target_fps = 60,
-                                                   FramePacerMode mode = FramePacerMode::Capped);
+    static cardinal::shared_ptr<FrameTelemetry> create(cardinal::u32 target_fps = 60,
+                                                       FrameTelemetryMode mode = FrameTelemetryMode::Capped);
 
     void begin_frame() noexcept;
     void end_frame()   noexcept;
@@ -66,12 +88,12 @@ public:
         float         achieved_fps      {0.0f};
         float         last_frame_ms     {0.0f};
         float         last_sleep_ms     {0.0f};
-        FramePacerMode mode             {FramePacerMode::Capped};
+        FrameTelemetryMode mode         {FrameTelemetryMode::Capped};
     };
     Stats stats() const noexcept;
 
     void set_target_fps(cardinal::u32 fps) noexcept;
-    void set_mode(FramePacerMode mode) noexcept;
+    void set_mode(FrameTelemetryMode mode) noexcept;
     void reset() noexcept;
 
     // Editor / test surface — inject a synthetic "frame just took ms ms"
@@ -80,10 +102,10 @@ public:
     void inject_frame_ms(float ms) noexcept;
 
 private:
-    FramePacer() = default;
+    FrameTelemetry() = default;
 
-    cardinal::u32     target_fps_  {60};
-    FramePacerMode    mode_        {FramePacerMode::Capped};
+    cardinal::u32       target_fps_  {60};
+    FrameTelemetryMode  mode_        {FrameTelemetryMode::Capped};
     cardinal::u64     begin_time_ns_ {0};  // high_resolution_clock counts since epoch
 
     // Rolling window (last 60 frames) — used for avg/min/max/jitter.
@@ -96,5 +118,8 @@ private:
     float         last_frame_ms_   {0.0f};
     float         last_sleep_ms_   {0.0f};
 };
+
+// Back-compat alias for the previous class name.
+using FramePacer [[deprecated("Use render::FrameTelemetry to disambiguate from core::FramePacer")]] = FrameTelemetry;
 
 }  // namespace cardinal::render

@@ -4243,7 +4243,7 @@ void test_threaded_backend_wave_stats_populated() {
 // ----------------------------------------------------------------------------
 void test_frame_pacer_basic_stats() {
     namespace rd = cardinal::render;
-    auto p = rd::FramePacer::create(60, rd::FramePacerMode::Uncapped);
+    auto p = rd::FrameTelemetry::create(60, rd::FrameTelemetryMode::Uncapped);
     // Inject 10 synthetic frames at 16.67 ms each (60 FPS).
     for (int i = 0; i < 10; ++i) p->inject_frame_ms(16.67f);
     auto s = p->stats();
@@ -4256,7 +4256,7 @@ void test_frame_pacer_basic_stats() {
 
 void test_frame_pacer_jitter_detection() {
     namespace rd = cardinal::render;
-    auto p = rd::FramePacer::create(60, rd::FramePacerMode::Uncapped);
+    auto p = rd::FrameTelemetry::create(60, rd::FrameTelemetryMode::Uncapped);
     // Alternate 10ms and 30ms frames → high jitter, avg = 20ms.
     for (int i = 0; i < 10; ++i) {
         p->inject_frame_ms((i % 2 == 0) ? 10.0f : 30.0f);
@@ -4270,7 +4270,7 @@ void test_frame_pacer_jitter_detection() {
 
 void test_frame_pacer_drop_count() {
     namespace rd = cardinal::render;
-    auto p = rd::FramePacer::create(60, rd::FramePacerMode::Uncapped);
+    auto p = rd::FrameTelemetry::create(60, rd::FrameTelemetryMode::Uncapped);
     // Target 60 FPS = 16.67ms. Drop threshold = 2× = 33.33ms.
     p->inject_frame_ms(10.0f);
     p->inject_frame_ms(20.0f);
@@ -4282,7 +4282,7 @@ void test_frame_pacer_drop_count() {
 
 void test_frame_pacer_set_target_clamps() {
     namespace rd = cardinal::render;
-    auto p = rd::FramePacer::create(60, rd::FramePacerMode::Uncapped);
+    auto p = rd::FrameTelemetry::create(60, rd::FrameTelemetryMode::Uncapped);
     p->set_target_fps(0);           // clamped to 1
     CHECK(p->stats().target_fps == 1u);
     p->set_target_fps(9999);        // clamped to 1000
@@ -4291,7 +4291,7 @@ void test_frame_pacer_set_target_clamps() {
 
 void test_frame_pacer_reset() {
     namespace rd = cardinal::render;
-    auto p = rd::FramePacer::create(60);
+    auto p = rd::FrameTelemetry::create(60);
     for (int i = 0; i < 5; ++i) p->inject_frame_ms(16.67f);
     CHECK(p->stats().frames_observed == 5u);
     p->reset();
@@ -4322,12 +4322,48 @@ void test_aegis_runner_threaded_mode_executes() {
 
 void test_pipeline_id_includes_aegis() {
     // Verify that the registry slot for the AEGIS pipeline exists in the
-    // PipelineId enum (forward-compat marker for the AegisRenderPipeline
-    // that registers alongside ForwardBaseline/DebugVisualizer/Clustered).
+    // PipelineId enum (now-active marker for AegisGraphPipeline registered
+    // alongside ForwardBaseline/DebugVisualizer/Clustered in pipelines.cpp).
     const cardinal::u32 baseline = static_cast<cardinal::u32>(cardinal::render::PipelineId::ForwardBaseline);
     const cardinal::u32 aegis    = static_cast<cardinal::u32>(cardinal::render::PipelineId::Aegis);
     CHECK(aegis > baseline);
     CHECK(aegis == 3u);
+}
+
+void test_engine_studio_aegis_path_contract() {
+    // Documentation test: pins the architectural contract that
+    //   Studio (UI panel) → Engine::pipelines() → render::Registry → AEGIS
+    // is reachable end-to-end.
+    //
+    // Constructing a real Registry needs an rhi::Device + rhi::Swapchain
+    // (headless environment doesn't have those), so this test pins the
+    // FOUR PipelineId slots the engine's Registry builds. The linker
+    // + build sweep provide the rest of the proof — Studio + StudioMin
+    // both link cardinal::render and resolve create_aegis_pipeline via
+    // aegis_pipeline_bridge.cpp, so the AEGIS slot is reachable from
+    // the engine path AND directly from the registry.
+    using PI = cardinal::render::PipelineId;
+    CHECK(static_cast<cardinal::u32>(PI::ForwardBaseline)  == 0u);
+    CHECK(static_cast<cardinal::u32>(PI::DebugVisualizer)  == 1u);
+    CHECK(static_cast<cardinal::u32>(PI::ForwardClustered) == 2u);
+    CHECK(static_cast<cardinal::u32>(PI::Aegis)            == 3u);
+    // Engine wiring (engine.cpp:128): pipelines_ = render::Registry::create(device, swapchain).
+    // RegistryImpl ctor (pipelines.cpp:680-684): pushes 4 pipelines in id order.
+    // Studio UI selector (studio.cpp:3253): iterates reg.all(), exposes
+    //   set_active(p->id()) per entry → AEGIS auto-appears in the dropdown.
+    // StudioMin engine path (studio_engine.cpp:337): e.pipelines().active() → AEGIS-aware.
+}
+
+void test_frame_telemetry_rename_back_compat() {
+    // Verify the FramePacer → FrameTelemetry rename (to avoid collision
+    // with core::FramePacer) still constructs + measures correctly via
+    // the new name. inject_frame_ms keeps the deterministic test path.
+    auto t = cardinal::render::FrameTelemetry::create(
+        60, cardinal::render::FrameTelemetryMode::Uncapped);
+    for (int i = 0; i < 5; ++i) t->inject_frame_ms(16.67f);
+    auto s = t->stats();
+    CHECK(s.frames_observed == 5u);
+    CHECK(s.target_fps == 60u);
 }
 
 void test_reset_clears_state() {
@@ -4496,6 +4532,8 @@ int main() {
     test_dof_far_pixels_get_blurred();
     test_dof_nan_safe();
     test_color_dof_hlsl_nonempty();
+    test_engine_studio_aegis_path_contract();
+    test_frame_telemetry_rename_back_compat();
     test_wave_decomposition_diamond();
     test_threaded_backend_produces_same_output_as_cpu();
     test_threaded_backend_wave_stats_populated();

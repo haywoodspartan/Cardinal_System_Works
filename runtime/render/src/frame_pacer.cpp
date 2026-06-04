@@ -23,20 +23,20 @@ inline float target_ms_for(cardinal::u32 fps) noexcept {
 
 }  // namespace
 
-cardinal::shared_ptr<FramePacer> FramePacer::create(cardinal::u32 fps, FramePacerMode mode) {
-    auto p = cardinal::shared_ptr<FramePacer>(new FramePacer());
+cardinal::shared_ptr<FrameTelemetry> FrameTelemetry::create(cardinal::u32 fps, FrameTelemetryMode mode) {
+    auto p = cardinal::shared_ptr<FrameTelemetry>(new FrameTelemetry());
     p->target_fps_ = cardinal::clamp(fps, 1u, 1000u);
     p->mode_       = mode;
     p->recent_ms_.assign(kWindowFrames, 0.0f);
     return p;
 }
 
-void FramePacer::set_target_fps(cardinal::u32 fps) noexcept {
+void FrameTelemetry::set_target_fps(cardinal::u32 fps) noexcept {
     target_fps_ = cardinal::clamp(fps, 1u, 1000u);
 }
-void FramePacer::set_mode(FramePacerMode mode) noexcept { mode_ = mode; }
+void FrameTelemetry::set_mode(FrameTelemetryMode mode) noexcept { mode_ = mode; }
 
-void FramePacer::reset() noexcept {
+void FrameTelemetry::reset() noexcept {
     frames_observed_ = 0;
     frames_dropped_  = 0;
     last_frame_ms_   = 0.0f;
@@ -45,25 +45,25 @@ void FramePacer::reset() noexcept {
     recent_ms_.assign(kWindowFrames, 0.0f);
 }
 
-void FramePacer::begin_frame() noexcept {
+void FrameTelemetry::begin_frame() noexcept {
     begin_time_ns_ = now_ns();
 }
 
-void FramePacer::end_frame() noexcept {
+void FrameTelemetry::end_frame() noexcept {
     const cardinal::u64 t1 = now_ns();
     const float work_ms = static_cast<float>(t1 - begin_time_ns_) / 1.0e6f;
     last_frame_ms_ = work_ms;
 
     // Sleep for the remaining budget (if any).
     float sleep_ms = 0.0f;
-    if (mode_ != FramePacerMode::Uncapped) {
+    if (mode_ != FrameTelemetryMode::Uncapped) {
         const float target = target_ms_for(target_fps_);
         if (work_ms < target) {
             sleep_ms = target - work_ms;
             // Locked + Capped both sleep when undershooting. Locked uses a
             // small safety margin so the OS schedule slop doesn't make
             // every frame overshoot.
-            const float margin = (mode_ == FramePacerMode::Locked) ? 0.1f : 0.0f;
+            const float margin = (mode_ == FrameTelemetryMode::Locked) ? 0.1f : 0.0f;
             const float to_sleep = sleep_ms - margin;
             if (to_sleep > 0.0f) {
                 std::this_thread::sleep_for(std::chrono::microseconds(
@@ -76,7 +76,7 @@ void FramePacer::end_frame() noexcept {
     inject_frame_ms(work_ms + sleep_ms);
 }
 
-void FramePacer::inject_frame_ms(float ms) noexcept {
+void FrameTelemetry::inject_frame_ms(float ms) noexcept {
     if (!cardinal::isfinite(ms) || ms < 0.0f) ms = 0.0f;
     recent_ms_[window_head_ % kWindowFrames] = ms;
     window_head_++;
@@ -85,7 +85,7 @@ void FramePacer::inject_frame_ms(float ms) noexcept {
     if (target > 0.0f && ms > 2.0f * target) frames_dropped_++;
 }
 
-FramePacer::Stats FramePacer::stats() const noexcept {
+FrameTelemetry::Stats FrameTelemetry::stats() const noexcept {
     Stats s;
     s.target_fps      = target_fps_;
     s.frames_observed = frames_observed_;
