@@ -1,4 +1,11 @@
 set(CARDINAL_CORE_HEADERS
+    # Engine-wide precompiled header. Any module can opt-in via:
+    #   target_precompile_headers(<target> PRIVATE
+    #       <cardinal/core/precompile.hpp>)
+    # Foundation rule still holds: std headers stay INSIDE cardinal::core,
+    # this header re-exports the foundation's container / utility / math /
+    # algorithm surface so downstream modules don't restate it per .cpp.
+    include/cardinal/core/precompile.hpp
     include/cardinal/core/types.hpp
     include/cardinal/core/platform.hpp
     include/cardinal/core/topology.hpp

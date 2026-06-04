@@ -13,3 +13,7 @@ target_link_libraries(cardinal_postfx
     PUBLIC  cardinal::core cardinal::render cardinal::compile_flags)
 
 set_target_properties(cardinal_postfx PROPERTIES FOLDER runtime)
+
+# Opt into the engine-wide precompile (cardinal::core::precompile.hpp).
+target_precompile_headers(cardinal_postfx PRIVATE
+    <cardinal/core/precompile.hpp>)

@@ -24,3 +24,7 @@ target_include_directories(cardinal_lighting PUBLIC
 target_link_libraries(cardinal_lighting
     PUBLIC  cardinal::core cardinal::scene cardinal::render cardinal::compile_flags)
 set_target_properties(cardinal_lighting PROPERTIES FOLDER runtime)
+
+# Opt into the engine-wide precompile (cardinal::core::precompile.hpp).
+target_precompile_headers(cardinal_lighting PRIVATE
+    <cardinal/core/precompile.hpp>)

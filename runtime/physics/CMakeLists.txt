@@ -14,3 +14,7 @@ target_link_libraries(cardinal_physics
     PUBLIC  cardinal::core cardinal::render cardinal::compile_flags)
 
 set_target_properties(cardinal_physics PROPERTIES FOLDER runtime)
+
+# Opt into the engine-wide precompile (cardinal::core::precompile.hpp).
+target_precompile_headers(cardinal_physics PRIVATE
+    <cardinal/core/precompile.hpp>)

@@ -10,3 +10,7 @@ target_link_libraries(cardinal_particles
     PUBLIC  cardinal::core cardinal::scene cardinal::compile_flags)
 
 set_target_properties(cardinal_particles PROPERTIES FOLDER runtime)
+
+# Opt into the engine-wide precompile (cardinal::core::precompile.hpp).
+target_precompile_headers(cardinal_particles PRIVATE
+    <cardinal/core/precompile.hpp>)

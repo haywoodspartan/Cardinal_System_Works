@@ -22,3 +22,7 @@ target_link_libraries(cardinal_scene
     PUBLIC  cardinal::core cardinal::rhi cardinal::vgeom cardinal::compile_flags)
 
 set_target_properties(cardinal_scene PROPERTIES FOLDER runtime)
+
+# Opt into the engine-wide precompile (cardinal::core::precompile.hpp).
+target_precompile_headers(cardinal_scene PRIVATE
+    <cardinal/core/precompile.hpp>)
