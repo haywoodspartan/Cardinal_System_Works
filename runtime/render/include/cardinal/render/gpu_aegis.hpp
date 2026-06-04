@@ -350,8 +350,8 @@ struct AegisConfig {
     cardinal::u32 material_count {0};
     cardinal::u32 light_count {0};
     float         exposure {1.0f};
-    GpuCapabilities caps;                  // FP32 / FP16 / FP8 / FP4 support
-    GeometryTier    max_tier {GeometryTier::Fp4};
+    PrecisionCaps caps;                    // FP32 / FP16 / FP8 / FP4 tier support
+    GeometryTier  max_tier {GeometryTier::Fp4};
 };
 
 struct AegisSceneInputs {

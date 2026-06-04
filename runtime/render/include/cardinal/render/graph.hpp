@@ -223,7 +223,25 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Backend interface. Plug-in point for the RHI (or any other executor).
+// Backend interface. Plug-in point for executors.
+//
+// Three concrete backends are planned:
+//   * CpuBackend  — virtual-GPU memory simulator. Runs every pass on the
+//                    host CPU using deterministic byte-level reads + writes
+//                    so the SAME graph that drives the GPU at runtime can
+//                    be validated bit-for-bit in a headless test.
+//   * NullBackend — records pass execution order + dispatch counts WITHOUT
+//                    allocating storage or invoking record(). Useful for
+//                    topology validation, frame-graph telemetry, and
+//                    smoke-testing that compile() produces a sane order.
+//   * RhiBackend  — translates the compiled graph to real
+//                    vkCmdDispatch / ID3D12GraphicsCommandList4::Dispatch
+//                    calls when the RHI's compute surface lands. Each
+//                    Pass's hlsl_source() string compiles via the RHI's
+//                    shader compiler at first execute(); subsequent
+//                    executes bind resources + dispatch the cached
+//                    pipeline. The Backend interface is the seam; the
+//                    graph + passes don't change.
 // ---------------------------------------------------------------------------
 class Backend {
 public:
@@ -277,6 +295,48 @@ private:
 
     cardinal::vector<cardinal::vector<u8>> storage_;   // index by resource id
     cardinal::vector<PassTrace>            trace_;
+};
+
+// ---------------------------------------------------------------------------
+// NullBackend — topology-only executor. Walks the graph's execution order
+// and records the trace WITHOUT allocating per-resource storage or
+// invoking each pass's record() function. Useful for:
+//   * Telemetry / frame-graph visualisation (the editor's "what passes
+//     ran this frame" panel can run NullBackend on a debug graph fork)
+//   * Regression-pinning the compile() output (execution order +
+//     dependency counts) independent of per-pass behaviour
+//   * Smoke-testing that a freshly-built AegisPipeline produces a
+//     well-ordered graph before the host commits to allocating buffers
+//     for the real execute()
+// Much cheaper than CpuBackend: zero allocation per resource, zero
+// record() invocations, deterministic.
+// ---------------------------------------------------------------------------
+class NullBackend : public Backend {
+public:
+    static cardinal::shared_ptr<NullBackend> create();
+
+    void execute(Graph& g) noexcept override;
+
+    struct PassEvent {
+        cardinal::string name;
+        PassKind         kind;
+        u32              dispatch_x {0}, dispatch_y{0}, dispatch_z{0};
+    };
+    const cardinal::vector<PassEvent>& events() const noexcept { return events_; }
+    void reset() noexcept { events_.clear(); }
+
+    // Aggregate stats over the last execute().
+    struct Stats {
+        u32 passes_executed {0};
+        u32 compute_passes  {0};
+        u32 raster_passes   {0};
+        u32 copy_passes     {0};
+    };
+    Stats stats() const noexcept;
+
+private:
+    NullBackend() = default;
+    cardinal::vector<PassEvent> events_;
 };
 
 }  // namespace cardinal::render::graph

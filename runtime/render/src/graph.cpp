@@ -361,4 +361,40 @@ cardinal::vector<u8> CpuBackend::buffer_contents(ResourceHandle h) const {
     return out;
 }
 
+// =============================================================================
+// NullBackend
+// =============================================================================
+cardinal::shared_ptr<NullBackend> NullBackend::create() {
+    return cardinal::shared_ptr<NullBackend>(new NullBackend());
+}
+
+void NullBackend::execute(Graph& g) noexcept {
+    events_.clear();
+    const auto& order = g.execution_order();
+    events_.reserve(order.size());
+    for (u32 pid : order) {
+        const PassDesc& pd = g.pass(pid);
+        PassEvent ev;
+        ev.name = pd.name;
+        ev.kind = pd.kind;
+        ev.dispatch_x = pd.dispatch_x;
+        ev.dispatch_y = pd.dispatch_y;
+        ev.dispatch_z = pd.dispatch_z;
+        events_.push_back(cardinal::move(ev));
+    }
+}
+
+NullBackend::Stats NullBackend::stats() const noexcept {
+    Stats s{};
+    s.passes_executed = static_cast<u32>(events_.size());
+    for (const auto& ev : events_) {
+        switch (ev.kind) {
+            case PassKind::Compute: ++s.compute_passes; break;
+            case PassKind::Raster:  ++s.raster_passes;  break;
+            case PassKind::Copy:    ++s.copy_passes;    break;
+        }
+    }
+    return s;
+}
+
 }  // namespace cardinal::render::graph

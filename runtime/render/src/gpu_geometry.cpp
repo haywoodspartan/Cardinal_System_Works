@@ -66,7 +66,7 @@ const char* tier_name(GeometryTier tier) noexcept {
     return properties_of(tier).name;
 }
 
-GeometryTier select_tier(const GpuCapabilities& caps,
+GeometryTier select_tier(const PrecisionCaps& caps,
                          GeometryTier max_tier) noexcept
 {
     // Walk down from FP4 → FP32 looking for the highest tier the device
@@ -224,7 +224,7 @@ cardinal::shared_ptr<AdaptiveGeometryPass::State> AdaptiveGeometryPass::add_to_g
     rg::Graph& g,
     rg::ResourceHandle in_triangles,
     cardinal::u32 input_triangle_count,
-    const GpuCapabilities& caps,
+    const PrecisionCaps& caps,
     GeometryTier max_tier)
 {
     auto st = cardinal::shared_ptr<State>(new State());

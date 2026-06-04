@@ -80,6 +80,11 @@ enum class PipelineId : u32 {
     ForwardBaseline = 0,
     DebugVisualizer,
     ForwardClustered,    // meshlet/cluster culling baseline (Phase 6)
+    Aegis,               // AEGIS Pipeline 2.0 — full graph-driven GPU
+                         // pipeline (Virtual Geometry → V-Buf → Resolve →
+                         // Tonemap → Composite). Registered slot reserved
+                         // for the AegisRenderPipeline that lands when
+                         // render::graph::RhiBackend is wired.
     // Future: ForwardPlus, Deferred, PathTraced …
 };
 

@@ -58,11 +58,19 @@
 namespace cardinal::render::gpu {
 
 // ---------------------------------------------------------------------------
-// GpuCapabilities — populated from rhi::Device caps (when the RHI compute
-// surface lands) OR synthesized by the host for testing. FP32 is always
-// available; the booleans escalate from there.
+// PrecisionCaps — precision-tier capability descriptor for the
+// math-division engine. Populated from rhi::Device caps (when the RHI
+// compute surface lands) OR synthesized by the host for testing. FP32
+// is always available; the booleans escalate from there.
+//
+// Named PrecisionCaps (not GpuCapabilities) so it doesn't collide with
+// rhi::GpuCapabilities — different concept (rhi caps describe device
+// features; PrecisionCaps describes which precision tiers the math-
+// division engine can dispatch at). The two compose: a host queries
+// rhi::Device::capabilities(), maps the relevant bits into a
+// PrecisionCaps, and hands the latter to AdaptiveGeometryPass.
 // ---------------------------------------------------------------------------
-struct GpuCapabilities {
+struct PrecisionCaps {
     bool fp16_supported {true};   // Shader 6.2 / Vulkan 1.2 — essentially universal
     bool fp8_supported  {false};  // Hopper, Ada Lovelace, RDNA4
     bool fp4_supported  {false};  // Blackwell, RDNA5
@@ -74,6 +82,11 @@ struct GpuCapabilities {
     // tier escalation.
     cardinal::u32 max_micro_triangles_per_input {8};
 };
+
+// Back-compat alias for code that pre-dates the rename. Will be removed
+// once the AegisRenderPipeline integration that pairs PrecisionCaps with
+// rhi::GpuCapabilities lands and every call site is updated.
+using GpuCapabilities [[deprecated("Use PrecisionCaps")]] = PrecisionCaps;
 
 // ---------------------------------------------------------------------------
 // GeometryTier — paired (precision, subdivision factor).
@@ -98,7 +111,7 @@ const char*    tier_name    (GeometryTier tier) noexcept;
 // Pick the highest tier the device supports, capped by `max_tier` AND by
 // caps.max_micro_triangles_per_input. Returns GeometryTier::Fp32 if
 // nothing else fits — FP32 is always available.
-GeometryTier select_tier(const GpuCapabilities& caps,
+GeometryTier select_tier(const PrecisionCaps& caps,
                          GeometryTier max_tier = GeometryTier::Fp4) noexcept;
 
 // ---------------------------------------------------------------------------
@@ -132,7 +145,7 @@ public:
         graph::Graph& g,
         graph::ResourceHandle in_triangles,
         cardinal::u32 input_triangle_count,
-        const GpuCapabilities& caps,
+        const PrecisionCaps& caps,
         GeometryTier max_tier = GeometryTier::Fp4);
 
     static const char* hlsl_source() noexcept;

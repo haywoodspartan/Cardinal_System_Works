@@ -182,10 +182,12 @@ public:
 //     visible    : u32  (1 = on-screen + in front of camera, 0 = cull),
 //     label_id   : u32 }  → 5 dwords / 20 bytes / record
 //
-// Optionally, when in_color is wired, the pass also stamps a small 3×3
-// anchor crosshair into the framebuffer so the user sees where the text
-// will land before the UI layer composes it on top (matches the editor's
-// "show me where the label anchors" debug mode in the reference image).
+// Optionally, when draw_anchors is on, the pass declares its own RGBA8
+// out_color framebuffer and stamps a small 3×3 anchor crosshair into it
+// at each visible projected anchor — the editor uses this to see where
+// the text will land before the UI layer composes it on top (matches
+// the "show me where the label anchors" debug mode in the reference
+// image). out_color is declared by the pass, NOT supplied by the host.
 // ---------------------------------------------------------------------------
 constexpr cardinal::u32 kWorldLabelRecordFloats = 5;   // sx, sy, depth, visible, label_id
 
