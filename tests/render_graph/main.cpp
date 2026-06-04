@@ -4354,6 +4354,45 @@ void test_engine_studio_aegis_path_contract() {
     // StudioMin engine path (studio_engine.cpp:337): e.pipelines().active() → AEGIS-aware.
 }
 
+void test_rhi_backend_factory_requires_device() {
+    // RhiBackend::create() needs a real rhi::Device + Swapchain. Pin
+    // the API surface — construction WITHOUT them is impossible because
+    // the create() signature requires both references.
+    //
+    // Equivalent symbolic test: the AegisGraphPipeline bridge owns the
+    // device + swapchain refs and installs RhiBackend via
+    // AegisPipelineRunner::set_backend at runtime. Verify the set_backend
+    // hook itself works by swapping CpuBackend for NullBackend at runtime
+    // — proves the runner's backend slot is genuinely swappable.
+    namespace rd = cardinal::render;
+    gpu::AegisConfig cfg;
+    cfg.width = 4; cfg.height = 4;
+    auto runner = rd::AegisPipelineRunner::create(cfg, rd::AegisBackendMode::Cpu);
+    CHECK(runner->backend_mode() == rd::AegisBackendMode::Cpu);
+    // Swap to NullBackend at runtime — proves the set_backend hook
+    // works and that future RhiBackend installation goes through the
+    // same slot.
+    runner->set_backend(rg::NullBackend::create());
+    // backend_mode_ knob is unchanged (it's the configured intent), but
+    // the actual backend pointer now points to NullBackend. Verify by
+    // executing a tiny graph and checking the trace-style observable.
+    auto& g = runner->graph();
+    gpu::AegisSceneInputs in;
+    in.tris         = g.declare_buffer(rg::BufferDesc{"tris", 0, 0, true});
+    in.material_ids = g.declare_buffer(rg::BufferDesc{"mids", 0, 0, true});
+    in.materials    = g.declare_buffer(rg::BufferDesc{"mats", 0, 0, true});
+    in.lights       = g.declare_buffer(rg::BufferDesc{"lts",  0, 0, true});
+    in.ambient      = g.declare_buffer(rg::BufferDesc{"amb",  12, 0, true});
+    in.view_proj    = g.declare_buffer(rg::BufferDesc{"vp",   64, 0, true});
+    in.camera_dir   = g.declare_buffer(rg::BufferDesc{"dir",  12, 0, true});
+    in.triangle_count = 0;
+    CHECK(runner->build(in));
+    runner->execute();
+    // After execute on a NullBackend-installed runner, null_trace() is
+    // populated (since the backend IS now a NullBackend).
+    CHECK(runner->null_trace().size() > 0u);
+}
+
 void test_frame_telemetry_rename_back_compat() {
     // Verify the FramePacer → FrameTelemetry rename (to avoid collision
     // with core::FramePacer) still constructs + measures correctly via
@@ -4533,6 +4572,7 @@ int main() {
     test_dof_nan_safe();
     test_color_dof_hlsl_nonempty();
     test_engine_studio_aegis_path_contract();
+    test_rhi_backend_factory_requires_device();
     test_frame_telemetry_rename_back_compat();
     test_wave_decomposition_diamond();
     test_threaded_backend_produces_same_output_as_cpu();

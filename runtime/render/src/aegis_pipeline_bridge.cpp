@@ -35,7 +35,9 @@ namespace {
 class AegisGraphPipeline final : public Pipeline {
 public:
     AegisGraphPipeline(rhi::Device& dev, rhi::Swapchain& sw)
-        : renderer_(scene::ForwardRenderer::create(dev, sw))
+        : dev_(&dev)
+        , sw_(&sw)
+        , renderer_(scene::ForwardRenderer::create(dev, sw))
     {
         gpu::AegisConfig cfg;
         cfg.width  = sw.width();
@@ -48,10 +50,43 @@ public:
         // Default to Null backend for the in-Studio preview: AEGIS topology
         // builds + executes (so the editor sees per-stage stats + wave
         // decomposition), but no buffers are allocated. ThreadedCpu /
-        // Cpu modes are user-selectable via the backend_mode Knob below.
+        // Cpu modes are user-selectable via the backend_mode Knob below;
+        // selecting Rhi mode swaps in a real graph::RhiBackend bound to
+        // the AegisGraphPipeline's device + swapchain.
         runner_ = AegisPipelineRunner::create(cfg, AegisBackendMode::Null);
 
         build_knobs();
+    }
+
+    // Read the backend_mode Knob value at the top of render() and swap
+    // the runner's backend if the user changed it in the editor.
+    void update_backend_from_knob() {
+        const Knob* k = nullptr;
+        for (auto& kn : knobs_) {
+            if (kn.id == "backend_mode") { k = &kn; break; }
+        }
+        if (!k || k->kind != KnobKind::Enum) return;
+        const auto desired = static_cast<AegisBackendMode>(k->e);
+        if (desired == current_mode_) return;
+        current_mode_ = desired;
+        switch (desired) {
+            case AegisBackendMode::Null:
+                runner_->set_backend(graph::NullBackend::create());
+                break;
+            case AegisBackendMode::Cpu:
+                runner_->set_backend(graph::CpuBackend::create());
+                break;
+            case AegisBackendMode::ThreadedCpu:
+                runner_->set_backend(graph::ThreadedCpuBackend::create());
+                break;
+            case AegisBackendMode::Rhi:
+                if (dev_ && sw_) {
+                    runner_->set_backend(graph::RhiBackend::create(*dev_, *sw_));
+                } else {
+                    runner_->set_backend(graph::NullBackend::create());
+                }
+                break;
+        }
     }
 
     PipelineId  id()          const noexcept override { return PipelineId::Aegis; }
@@ -80,6 +115,10 @@ public:
 
     void render(scene::Scene& scn, float aspect) override {
         if (!renderer_) return;
+
+        // Pick up any editor-driven backend change before this frame's
+        // build + execute.
+        update_backend_from_knob();
 
         // Run the AEGIS graph for telemetry. The runner manages its own
         // graph + backend; we just hand it minimal inputs each frame.
@@ -180,9 +219,12 @@ private:
         }
     }
 
+    rhi::Device*                                      dev_  {nullptr};
+    rhi::Swapchain*                                   sw_   {nullptr};
     cardinal::shared_ptr<scene::ForwardRenderer>      renderer_;
     cardinal::shared_ptr<AegisPipelineRunner>          runner_;
     cardinal::vector<Knob>                             knobs_;
+    AegisBackendMode                                   current_mode_ {AegisBackendMode::Null};
 };
 
 }  // namespace

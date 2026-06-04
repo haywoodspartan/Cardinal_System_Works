@@ -34,7 +34,16 @@ add_library(cardinal_render STATIC
     include/cardinal/render/gpu_restir.hpp
     include/cardinal/render/gpu_postvol.hpp
     include/cardinal/render/gpu_color.hpp
-    include/cardinal/render/frame_pacer.hpp)
+    include/cardinal/render/frame_pacer.hpp
+    include/cardinal/render/precompile.hpp)
+
+# Per-module precompiled header (CrimsonDesert / stdafx convention).
+# Every render/src/*.cpp picks up the foundation include set without
+# repeating it in every TU. Module rule: precompile.hpp covers only
+# the hot-path foundation (types, containers, utility, math); module-
+# specific headers stay in the consumers.
+target_precompile_headers(cardinal_render PRIVATE
+    include/cardinal/render/precompile.hpp)
 add_library(cardinal::render ALIAS cardinal_render)
 
 target_include_directories(cardinal_render PUBLIC

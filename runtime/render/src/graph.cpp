@@ -4,6 +4,7 @@
 #include <cardinal/core/cstring.hpp>        // cardinal::strcmp / strlen
 #include <cardinal/core/utility.hpp>        // cardinal::move
 #include <cardinal/core/async.hpp>          // cardinal::async::parallel_for_each
+#include <cardinal/rhi/rhi.hpp>             // rhi::Device + Swapchain (for RhiBackend)
 
 #include <chrono>
 
@@ -385,6 +386,83 @@ cardinal::vector<u8> CpuBackend::buffer_contents(ResourceHandle h) const {
     cardinal::vector<u8> out;
     out.assign(storage_[h.id].begin(), storage_[h.id].end());
     return out;
+}
+
+// =============================================================================
+// RhiBackend — real GPU compute dispatch via cardinal::rhi
+// =============================================================================
+cardinal::shared_ptr<RhiBackend> RhiBackend::create(cardinal::rhi::Device& dev,
+                                                   cardinal::rhi::Swapchain& sw) {
+    auto b = cardinal::shared_ptr<RhiBackend>(new RhiBackend());
+    b->dev_ = &dev;
+    b->sw_  = &sw;
+    return b;
+}
+
+void RhiBackend::reset() noexcept {
+    events_.clear();
+    pipeline_cache_.clear();
+    stats_ = Stats{};
+}
+
+void RhiBackend::execute(Graph& g) noexcept {
+    events_.clear();
+    if (!dev_ || !sw_) return;
+
+    // Lazy-grow the pipeline cache to cover every pass (id 1..N).
+    const usize need = g.pass_count() + 1;
+    if (pipeline_cache_.size() < need) pipeline_cache_.resize(need);
+
+    const auto& order = g.execution_order();
+    for (u32 pid : order) {
+        const PassDesc& pd = g.pass(pid);
+        PassEvent ev;
+        ev.name = pd.name;
+        ev.kind = pd.kind;
+        ev.dispatch_x = pd.dispatch_x;
+        ev.dispatch_y = pd.dispatch_y;
+        ev.dispatch_z = pd.dispatch_z;
+
+        // Lazy-compile this pass's compute pipeline (one-time cost; cached
+        // across executes). When the device doesn't yet implement
+        // create_compute_pipeline, the call returns nullptr and we fall
+        // through to the recording-only path that NullBackend uses.
+        if (pd.kind == PassKind::Compute && !pipeline_cache_[pid]) {
+            cardinal::rhi::ComputePipelineDesc cpd;
+            // HLSL source is captured in pd's metadata via the pass's
+            // hlsl_source() function — but PassDesc doesn't currently
+            // carry it through; future Graph::compile pass-info hook
+            // can populate cpd.compute_shader from pd.user_ctx.
+            // Today: empty ShaderBlob → device decides.
+            pipeline_cache_[pid] = dev_->create_compute_pipeline(cpd);
+            if (pipeline_cache_[pid]) ++stats_.pipelines_compiled;
+        }
+
+        // Bind + dispatch. When create_compute_pipeline returned null,
+        // bind_pipeline is a no-op AND dispatch defaults to a no-op
+        // (rhi.hpp default impls), so this loop is safe to run on any
+        // backend — it just records the intent for telemetry.
+        const bool has_real_pipe = (pd.kind == PassKind::Compute && pipeline_cache_[pid]);
+        if (has_real_pipe) {
+            sw_->bind_pipeline(pipeline_cache_[pid].get());
+
+            // Bind declared accesses as storage buffers / UAVs.
+            // (Per-slot Buffer* lookup needs a graph-resource → rhi::Buffer
+            // mapping the host supplies; deferred until the mapping
+            // protocol is wired. Today the binds are skipped.)
+
+            sw_->dispatch(pd.dispatch_x, pd.dispatch_y, pd.dispatch_z);
+            ev.real_dispatch = true;
+            ++stats_.passes_dispatched_real;
+        } else {
+            // Recording-only: same semantics as NullBackend for now, so
+            // hosts targeting RhiBackend mode get telemetry today and
+            // GPU dispatch automatically when the backend implements
+            // create_compute_pipeline + dispatch.
+            ++stats_.passes_dispatched_stub;
+        }
+        events_.push_back(cardinal::move(ev));
+    }
 }
 
 // =============================================================================

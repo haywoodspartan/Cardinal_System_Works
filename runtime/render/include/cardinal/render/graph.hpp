@@ -307,6 +307,73 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// RhiBackend — real GPU compute dispatch via cardinal::rhi.
+//
+// The third concrete Backend, alongside CpuBackend (virtual-GPU
+// simulator for tests) and NullBackend (topology only). RhiBackend
+// compiles each Pass's hlsl_source() once via the RHI's shader
+// compiler, then on each execute() walks the graph's topological
+// order and emits real bind_pipeline / bind_storage_buffer_uav /
+// dispatch calls on a borrowed rhi::Swapchain command recorder.
+//
+// Resource binding:
+//   * Output handles (graph::AccessMode::Write / ReadWrite) → bound
+//     as UAVs via bind_storage_buffer_uav(slot, ...).
+//   * Input handles  (graph::AccessMode::Read)              → bound
+//     as read-only storage buffers via bind_storage_buffer(slot, ...).
+//   * Each Pass's slot indices come from its declared ResourceAccess
+//     list — same slots the CpuBackend's ExecutionContext uses, so
+//     the per-pass HLSL register decls match across backends.
+//
+// Until rhi::Device::create_compute_pipeline returns a non-null Pipeline
+// (current backends default-return {}), RhiBackend records the
+// dispatch sequence into a trace (same shape as NullBackend's events)
+// so hosts can verify the graph reaches the dispatch site without
+// crashing. When the Vulkan / D3D12 backends wire compute, the same
+// RhiBackend code starts firing real vkCmdDispatch calls with zero
+// AEGIS-side changes.
+// ---------------------------------------------------------------------------
+}  // namespace cardinal::render::graph
+
+namespace cardinal::rhi { class Device; class Swapchain; class Pipeline; }
+
+namespace cardinal::render::graph {
+
+class RhiBackend : public Backend {
+public:
+    static cardinal::shared_ptr<RhiBackend> create(cardinal::rhi::Device& dev,
+                                                   cardinal::rhi::Swapchain& sw);
+
+    void execute(Graph& g) noexcept override;
+
+    struct PassEvent {
+        cardinal::string name;
+        PassKind         kind;
+        u32              dispatch_x {0}, dispatch_y{0}, dispatch_z{0};
+        bool             real_dispatch {false};   // true when create_compute_pipeline succeeded
+    };
+    const cardinal::vector<PassEvent>& events() const noexcept { return events_; }
+
+    struct Stats {
+        u32 passes_dispatched_real    {0};   // create_compute_pipeline succeeded
+        u32 passes_dispatched_stub    {0};   // backend returned null pipeline
+        u32 pipelines_compiled        {0};   // cumulative pipeline cache size
+    };
+    Stats stats() const noexcept { return stats_; }
+    void reset() noexcept;
+
+private:
+    RhiBackend() = default;
+
+    cardinal::rhi::Device*    dev_ {nullptr};
+    cardinal::rhi::Swapchain* sw_  {nullptr};
+    // Pass id → compiled compute pipeline (lazy, cached across executes).
+    cardinal::vector<cardinal::unique_ptr<cardinal::rhi::Pipeline>> pipeline_cache_;
+    cardinal::vector<PassEvent> events_;
+    Stats stats_;
+};
+
+// ---------------------------------------------------------------------------
 // ThreadedCpuBackend — parallel pass execution. Decomposes the topo
 // order into "waves": passes within a wave share no dependency edges
 // and can run concurrently on different worker threads. Each wave

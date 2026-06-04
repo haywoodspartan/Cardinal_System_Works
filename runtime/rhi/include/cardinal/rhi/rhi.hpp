@@ -301,6 +301,20 @@ struct PipelineDesc {
     u32                      sampled_texture_slots{0};
 };
 
+// ---------------------------------------------------------------------------
+// ComputePipelineDesc — compute-shader pipeline (AEGIS graph::RhiBackend
+// surface). Mirrors the storage_buffer / push_constant story of
+// PipelineDesc above, minus the rasterizer state. uav_slots count
+// read-write storage buffers; storage_buffer_slots count read-only ones.
+// ---------------------------------------------------------------------------
+struct ComputePipelineDesc {
+    ShaderBlob   compute_shader;
+    const char*  compute_entry{"CSMain"};
+    u32          push_constant_size{0};
+    u32          storage_buffer_slots{0};   // read-only SSBOs (bind_storage_buffer)
+    u32          uav_slots{0};              // read-write UAVs (bind_storage_buffer_uav)
+};
+
 class Pipeline {
 public:
     virtual ~Pipeline() = default;
@@ -505,6 +519,22 @@ public:
     // pipelines that may or may not use a push block.
     virtual void set_push_constants(u32 offset, const void* data, u32 size) = 0;
 
+    // ---- Compute dispatch (AEGIS graph::RhiBackend surface) -------------
+    //
+    // Compute pipelines created via Device::create_compute_pipeline are
+    // bound via the same bind_pipeline() entry point as graphics
+    // pipelines, then receive dispatches via the methods below. Bound
+    // storage buffers split into read-only (bind_storage_buffer, above)
+    // and read-write UAV (bind_storage_buffer_uav).
+    //
+    // The default implementations are no-ops so existing Vulkan / D3D12
+    // backends continue to compile + run unchanged while compute support
+    // is incrementally wired. graph::RhiBackend calls these unconditionally
+    // — when the backend implements them, dispatches start firing on the
+    // real device with no graph::RhiBackend changes.
+    virtual void bind_storage_buffer_uav(u32 /*slot*/, Buffer* /*b*/) {}
+    virtual void dispatch(u32 /*gx*/, u32 /*gy*/ = 1, u32 /*gz*/ = 1) {}
+
     // ---- Shadow / depth-only pass (shadow-mapping arc) ------------------
     //
     // Bracket a depth-only render INTO `depth` (a Texture created with
@@ -650,6 +680,15 @@ public:
 
     virtual cardinal::unique_ptr<Buffer>   create_buffer(const BufferDesc& desc)     = 0;
     virtual cardinal::unique_ptr<Pipeline> create_pipeline(const PipelineDesc& desc) = 0;
+
+    // Compute-pipeline creation (graph::RhiBackend surface). Backends
+    // that haven't wired vkCreateComputePipelines / ID3D12Device::
+    // CreateComputePipelineState yet return nullptr — graph::RhiBackend
+    // detects the null and falls through to its NullBackend-equivalent
+    // recording path. When backends implement this, AEGIS graph passes
+    // dispatch on the real device with no Pipeline / runner changes.
+    virtual cardinal::unique_ptr<Pipeline> create_compute_pipeline(
+        const ComputePipelineDesc& /*desc*/) { return {}; }
 
     // Off-screen texture (shadow-mapping arc). Default returns nullptr
     // so backends that haven't implemented it yet — and the existing

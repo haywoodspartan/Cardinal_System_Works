@@ -60,6 +60,13 @@ public:
     // (e.g. an editor adding a debug visualiser pass after composite).
     graph::Graph&               graph() noexcept;
 
+    // Replace the runner's Backend at runtime — used by the
+    // AegisGraphPipeline bridge to install a real graph::RhiBackend
+    // (which needs an rhi::Device + Swapchain in scope) over the
+    // default Cpu/Null one created in create(). Safe to call between
+    // execute() invocations; the previous backend is released.
+    void set_backend(cardinal::shared_ptr<graph::Backend> backend) noexcept;
+
     // Editor surface — graph stats from the most recent build().
     graph::CompileStats         compile_stats() const noexcept { return last_compile_; }
 
