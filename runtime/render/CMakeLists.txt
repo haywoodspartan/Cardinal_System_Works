@@ -4,12 +4,14 @@ add_library(cardinal_render STATIC
     src/geo.cpp
     src/algos.cpp
     src/precision.cpp
+    src/graph.cpp
     include/cardinal/render/pipeline.hpp
     include/cardinal/render/tex.hpp
     include/cardinal/render/tess.hpp
     include/cardinal/render/geo.hpp
     include/cardinal/render/algos.hpp
-    include/cardinal/render/precision.hpp)
+    include/cardinal/render/precision.hpp
+    include/cardinal/render/graph.hpp)
 add_library(cardinal::render ALIAS cardinal_render)
 
 target_include_directories(cardinal_render PUBLIC

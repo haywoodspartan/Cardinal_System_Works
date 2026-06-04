@@ -1,0 +1,282 @@
+#pragma once
+
+// =============================================================================
+// Cardinal — Render Graph.
+//
+// A declarative DAG of GPU passes. Every per-frame operation the engine
+// wants to move from CPU to GPU — frustum cull, vertex transform, draw,
+// postfx, tonemap — becomes a Pass node with explicit read/write resource
+// declarations. The Graph::compile() step topologically sorts the nodes,
+// validates the resource accesses, and emits the barrier list a real
+// driver would need; Backend::execute() runs the compiled graph.
+//
+// Two backends ship in-tree:
+//   * CpuBackend  — virtual-GPU memory simulator. Runs every pass on the
+//                    host CPU using deterministic byte-level reads + writes
+//                    so the SAME graph that drives the GPU at runtime can
+//                    be validated bit-for-bit in a headless test.
+//   * (later) RhiBackend — translates the graph to real vkCmdDispatch /
+//                    ID3D12GraphicsCommandList4::Dispatch calls when the
+//                    RHI's compute surface lands. The Backend interface
+//                    is the seam; the graph + passes don't change.
+//
+// Design rules (carried from the rest of the engine):
+//   * NaN-defensive at every public entrypoint (compile() rejects malformed
+//     passes; execute() never invokes a pass with a null context).
+//   * No per-frame allocation in the hot path — compile() reserves once;
+//     execute() walks pre-sorted indices.
+//   * Knob-introspectable settings for backend tunables stay in the host's
+//     Pipeline (the graph itself is a typed data structure, not a UI).
+//   * Deterministic — same graph + same backend + same inputs → same outputs.
+// =============================================================================
+
+#include <cardinal/core/types.hpp>
+#include <cardinal/core/containers.hpp>
+
+namespace cardinal::render::graph {
+
+// ---------------------------------------------------------------------------
+// Resource — typed handle to a GPU-side buffer or texture managed by the
+// graph. Created via Graph::declare_buffer / declare_texture; passes
+// receive these handles by value (id is stable across a graph's lifetime).
+// ---------------------------------------------------------------------------
+enum class ResourceKind : u32 {
+    Buffer = 0,
+    Texture,
+};
+
+enum class TextureFormat : u32 {
+    Unknown      = 0,
+    R8G8B8A8_UNORM,
+    R8G8B8A8_SRGB,
+    R32_Float,
+    R32G32B32A32_Float,
+    D32_Float,
+};
+
+struct BufferDesc {
+    cardinal::string name;
+    usize            size_bytes  {0};
+    u32              stride_bytes{0};   // 0 = raw buffer; >0 = structured (for compute)
+    bool             transient   {true};// true = managed by the graph
+};
+
+struct TextureDesc {
+    cardinal::string name;
+    u32              width  {0};
+    u32              height {0};
+    TextureFormat    format {TextureFormat::Unknown};
+    bool             transient {true};
+};
+
+// Stable opaque handle. id == 0 reserved for "invalid"; ids 1.. are
+// dense indices into the graph's internal resource table.
+struct ResourceHandle {
+    u32          id   {0};
+    ResourceKind kind {ResourceKind::Buffer};
+    bool is_valid() const noexcept { return id != 0; }
+};
+
+// ---------------------------------------------------------------------------
+// Pass — one node in the graph. Declares which resources it reads + writes
+// (so the compiler can topologically sort and insert barriers) and a
+// record() callback that performs the actual work when the backend runs it.
+// ---------------------------------------------------------------------------
+enum class PassKind : u32 {
+    Compute = 0,   // pure compute dispatch (CpuBackend runs the callback)
+    Raster,        // graphics draw (CpuBackend records only — no rasterizer)
+    Copy,          // buffer-to-buffer / texture-to-buffer copy
+};
+
+enum class AccessMode : u32 {
+    Read = 0,
+    Write,
+    ReadWrite,
+};
+
+struct ResourceAccess {
+    ResourceHandle handle;
+    AccessMode     mode  {AccessMode::Read};
+    u32            slot  {0};   // shader binding slot (informational for CpuBackend)
+};
+
+// Execution context handed to a pass's record() callback. Wraps the
+// virtual-GPU memory the CpuBackend allocated (or, eventually, the
+// real RHI command list). Resources mapped here are scoped to one pass
+// invocation — pointers are invalidated on return.
+class ExecutionContext {
+public:
+    virtual ~ExecutionContext() = default;
+    ExecutionContext(const ExecutionContext&) = delete;
+    ExecutionContext& operator=(const ExecutionContext&) = delete;
+
+    // Pointer to writable bytes for `h` (which must have been declared as
+    // Write or ReadWrite in this pass's access list). Returns nullptr if
+    // the handle isn't writeable or isn't declared on this pass.
+    virtual void*       map_buffer_write(ResourceHandle h) noexcept = 0;
+    // Pointer to read-only bytes for `h` (which must have been declared as
+    // Read or ReadWrite in this pass's access list).
+    virtual const void* map_buffer_read (ResourceHandle h) noexcept = 0;
+    virtual usize       buffer_size     (ResourceHandle h) const noexcept = 0;
+
+    // Compute dispatch primitive. CpuBackend treats this as informational
+    // (the record callback IS the compute kernel running once on the host);
+    // RhiBackend translates it to vkCmdDispatch. Calling dispatch() inside
+    // a Raster or Copy pass is a programming error and is silently ignored
+    // by both backends.
+    virtual void dispatch(u32 gx, u32 gy, u32 gz) noexcept = 0;
+
+    // Push-constant style scratch — small per-pass key/value strings the
+    // host can use to thread parameters down without globals.
+    virtual void        set_param_u32(const char* key, u32 v) noexcept = 0;
+    virtual u32         param_u32    (const char* key, u32 fallback) const noexcept = 0;
+
+protected:
+    ExecutionContext() = default;
+};
+
+// Record callback. user_ctx is opaque — the pass owns its meaning. The
+// graph never inspects it.
+using PassRecordFn = void (*)(ExecutionContext& ec, void* user_ctx) noexcept;
+
+struct PassDesc {
+    cardinal::string                 name;
+    PassKind                         kind   {PassKind::Compute};
+    cardinal::vector<ResourceAccess> accesses;
+
+    PassRecordFn record  {nullptr};
+    void*        user_ctx{nullptr};
+
+    // Default compute group counts. Hosts can override per-frame inside
+    // record() via ExecutionContext::dispatch.
+    u32 dispatch_x{1};
+    u32 dispatch_y{1};
+    u32 dispatch_z{1};
+};
+
+// ---------------------------------------------------------------------------
+// Graph — the builder + the compiled execution plan.
+// ---------------------------------------------------------------------------
+struct CompileStats {
+    u32 passes              {0};
+    u32 buffers             {0};
+    u32 textures            {0};
+    u32 read_after_write    {0};   // pure RAW dependencies (the barrier count)
+    u32 write_after_write   {0};   // WAW (also a barrier)
+    u32 write_after_read    {0};   // WAR (also a barrier)
+    bool cycle_detected     {false};
+};
+
+class Graph {
+public:
+    static cardinal::shared_ptr<Graph> create();
+
+    // ---- declaration phase (pre-compile) -------------------------------
+    ResourceHandle declare_buffer (BufferDesc desc);
+    ResourceHandle declare_texture(TextureDesc desc);
+
+    // Import an externally-owned resource (host owns lifetime; graph just
+    // tracks access). `bytes` is the host-side backing store the
+    // CpuBackend will map. Bytes pointer must outlive the graph.
+    ResourceHandle import_buffer (cardinal::string name, void* bytes, usize size,
+                                  u32 stride_bytes = 0);
+
+    u32 add_pass(PassDesc desc);     // returns pass id (1-based; 0 reserved)
+    void mark_output(ResourceHandle h);
+
+    // ---- compile -------------------------------------------------------
+    // Returns true on success; on failure stats().cycle_detected is set
+    // and execution_order() is left empty. Re-callable: clears prior
+    // compile output first.
+    bool compile() noexcept;
+    const cardinal::vector<u32>& execution_order() const noexcept { return order_; }
+    CompileStats stats() const noexcept { return stats_; }
+
+    // ---- read-only accessors after compile -----------------------------
+    // Sentinel at index 0 holds an invalid record so id 0 stays reserved
+    // for "no handle / no pass". Subtract it from the public count.
+    usize             pass_count()     const noexcept { return passes_.empty()    ? 0 : passes_.size()    - 1; }
+    usize             resource_count() const noexcept { return resources_.empty() ? 0 : resources_.size() - 1; }
+    const PassDesc&   pass(u32 id) const noexcept;
+    const BufferDesc& buffer (ResourceHandle h) const noexcept;
+    const TextureDesc&texture(ResourceHandle h) const noexcept;
+    bool              has_output() const noexcept { return output_.is_valid(); }
+    ResourceHandle    output() const noexcept { return output_; }
+
+private:
+    Graph() = default;
+
+    struct Resource {
+        ResourceKind kind  {ResourceKind::Buffer};
+        BufferDesc   bdesc;
+        TextureDesc  tdesc;
+        // Imported pointer (nullptr for transient — the CpuBackend
+        // allocates).
+        void*        imported_bytes {nullptr};
+    };
+
+    cardinal::vector<Resource> resources_;   // [0] is sentinel (id 0 = invalid)
+    cardinal::vector<PassDesc> passes_;      // [0] is sentinel
+    cardinal::vector<u32>      order_;       // pass ids in execution order
+    ResourceHandle             output_;
+    CompileStats               stats_;
+};
+
+// ---------------------------------------------------------------------------
+// Backend interface. Plug-in point for the RHI (or any other executor).
+// ---------------------------------------------------------------------------
+class Backend {
+public:
+    virtual ~Backend() = default;
+    Backend(const Backend&) = delete;
+    Backend& operator=(const Backend&) = delete;
+
+    // Execute the compiled graph. Pre: graph.compile() returned true.
+    // Post: every pass's record() has been called in topological order.
+    virtual void execute(Graph& g) noexcept = 0;
+
+protected:
+    Backend() = default;
+};
+
+// ---------------------------------------------------------------------------
+// CpuBackend — virtual-GPU memory simulator. Walks the graph's execution
+// order, allocates byte storage for every transient resource, hands a
+// real pointer to each pass's record() callback, and records a trace of
+// the operations for test inspection. Pure CPU; deterministic.
+// ---------------------------------------------------------------------------
+class CpuBackend : public Backend {
+public:
+    static cardinal::shared_ptr<CpuBackend> create();
+
+    void execute(Graph& g) noexcept override;
+
+    // ---- post-execute test surface -------------------------------------
+    // Read the contents of any buffer (transient or imported) after the
+    // last execute() call. Returns empty for unknown handles or for
+    // textures (textures aren't byte-readable in the simulator).
+    cardinal::vector<u8> buffer_contents(ResourceHandle h) const;
+
+    // Op trace — one entry per pass run in execution order.
+    struct PassTrace {
+        cardinal::string name;
+        PassKind         kind;
+        u32              dispatched_gx {0}, dispatched_gy{0}, dispatched_gz{0};
+        u32              bytes_written {0};
+        u32              bytes_read    {0};
+    };
+    const cardinal::vector<PassTrace>& trace() const noexcept { return trace_; }
+
+    // Wipes the trace + any retained allocations between executes. Called
+    // automatically at the top of execute(); exposed for tests that want
+    // to inspect intermediate state.
+    void reset() noexcept;
+
+private:
+    CpuBackend() = default;
+
+    cardinal::vector<cardinal::vector<u8>> storage_;   // index by resource id
+    cardinal::vector<PassTrace>            trace_;
+};
+
+}  // namespace cardinal::render::graph
