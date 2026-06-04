@@ -20,6 +20,7 @@
 #include <cardinal/render/gpu_aegis.hpp>
 #include <cardinal/render/gpu_restir.hpp>
 #include <cardinal/render/gpu_postvol.hpp>
+#include <cardinal/render/gpu_color.hpp>
 #include <cardinal/render/aegis_runner.hpp>
 #include <cardinal/render/pipeline.hpp>
 #include <cardinal/core/log.hpp>
@@ -3930,6 +3931,184 @@ void test_postvol_hlsl_nonempty() {
     CHECK(gpu::VolumetricFogPass::hlsl_source()[0]  != '\0');
 }
 
+// ----------------------------------------------------------------------------
+// ColorGradingPass — 3D LUT trilinear (AEGIS Block 12)
+// ----------------------------------------------------------------------------
+void test_color_grading_identity_lut_no_op() {
+    // Identity LUT: lut[r][g][b] = (r/Sm1, g/Sm1, b/Sm1). With trilinear
+    // interp this should give back the input colour exactly.
+    constexpr cardinal::u32 S = 8;
+    cardinal::vector<float> lut(static_cast<cardinal::usize>(S) * S * S * 3u, 0.0f);
+    const float Sm1 = static_cast<float>(S - 1);
+    for (cardinal::u32 bi = 0; bi < S; ++bi)
+    for (cardinal::u32 gi = 0; gi < S; ++gi)
+    for (cardinal::u32 ri = 0; ri < S; ++ri) {
+        const cardinal::usize off = ((bi * S + gi) * S + ri) * 3;
+        lut[off + 0] = static_cast<float>(ri) / Sm1;
+        lut[off + 1] = static_cast<float>(gi) / Sm1;
+        lut[off + 2] = static_cast<float>(bi) / Sm1;
+    }
+    constexpr cardinal::u32 W = 4, H = 4;
+    cardinal::vector<cardinal::u8> in_col(W * H * 4u);
+    for (cardinal::u32 i = 0; i < W * H; ++i) {
+        in_col[i * 4 + 0] = static_cast<cardinal::u8>((i * 17) & 0xFF);
+        in_col[i * 4 + 1] = static_cast<cardinal::u8>((i * 31) & 0xFF);
+        in_col[i * 4 + 2] = static_cast<cardinal::u8>((i * 43) & 0xFF);
+        in_col[i * 4 + 3] = 255;
+    }
+    auto g = rg::Graph::create();
+    auto h_c = g->declare_buffer(rg::BufferDesc{"col", in_col.size(), 0, true});
+    auto h_l = g->declare_buffer(rg::BufferDesc{"lut", lut.size() * sizeof(float), 0, true});
+    InitBlob bc{h_c, in_col.data(), in_col.size()};
+    InitBlob bl{h_l, lut.data(), lut.size() * sizeof(float)};
+    add_init_pass(*g, "iC", h_c, &bc);
+    add_init_pass(*g, "iL", h_l, &bl);
+    auto st = gpu::ColorGradingPass::add_to_graph(*g, h_c, h_l, W, H, S);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->pixels_graded == W * H);
+    auto out = b->buffer_contents(st->out_color);
+    // Identity LUT → output ≈ input (within 1 u8 of rounding noise).
+    for (cardinal::u32 i = 0; i < W * H; ++i) {
+        for (int c = 0; c < 3; ++c) {
+            const int diff = static_cast<int>(out[i * 4 + c]) - static_cast<int>(in_col[i * 4 + c]);
+            CHECK(diff >= -2 && diff <= 2);
+        }
+        // Alpha preserved exactly.
+        CHECK(out[i * 4 + 3] == in_col[i * 4 + 3]);
+    }
+}
+
+void test_color_grading_invert_lut_complements() {
+    // Invert LUT: lut[r][g][b] = ((Sm1 - r)/Sm1, (Sm1 - g)/Sm1, (Sm1 - b)/Sm1).
+    // Input 255 → output 0; input 0 → output 255.
+    constexpr cardinal::u32 S = 8;
+    cardinal::vector<float> lut(static_cast<cardinal::usize>(S) * S * S * 3u, 0.0f);
+    const float Sm1 = static_cast<float>(S - 1);
+    for (cardinal::u32 bi = 0; bi < S; ++bi)
+    for (cardinal::u32 gi = 0; gi < S; ++gi)
+    for (cardinal::u32 ri = 0; ri < S; ++ri) {
+        const cardinal::usize off = ((bi * S + gi) * S + ri) * 3;
+        lut[off + 0] = 1.0f - static_cast<float>(ri) / Sm1;
+        lut[off + 1] = 1.0f - static_cast<float>(gi) / Sm1;
+        lut[off + 2] = 1.0f - static_cast<float>(bi) / Sm1;
+    }
+    constexpr cardinal::u32 W = 2, H = 2;
+    cardinal::vector<cardinal::u8> in_col = {
+        255, 0,   0, 255,
+        0,   255, 0, 255,
+        0,   0, 255, 255,
+        128, 128, 128, 255,
+    };
+    auto g = rg::Graph::create();
+    auto h_c = g->declare_buffer(rg::BufferDesc{"col", in_col.size(), 0, true});
+    auto h_l = g->declare_buffer(rg::BufferDesc{"lut", lut.size() * sizeof(float), 0, true});
+    InitBlob bc{h_c, in_col.data(), in_col.size()};
+    InitBlob bl{h_l, lut.data(), lut.size() * sizeof(float)};
+    add_init_pass(*g, "iC", h_c, &bc);
+    add_init_pass(*g, "iL", h_l, &bl);
+    auto st = gpu::ColorGradingPass::add_to_graph(*g, h_c, h_l, W, H, S);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out = b->buffer_contents(st->out_color);
+    // Pixel 0: input (255, 0, 0) → output ~ (0, 255, 255).
+    CHECK(out[0]  <  3);
+    CHECK(out[1]  > 252);
+    CHECK(out[2]  > 252);
+    // Pixel 3: input (128, 128, 128) → output ~ (127, 127, 127).
+    CHECK(out[12] >= 125 && out[12] <= 130);
+    CHECK(out[13] >= 125 && out[13] <= 130);
+    CHECK(out[14] >= 125 && out[14] <= 130);
+}
+
+// ----------------------------------------------------------------------------
+// DepthOfFieldPass — CoC-weighted gather blur
+// ----------------------------------------------------------------------------
+void test_dof_focal_pixels_stay_sharp() {
+    // All pixels at the focal depth → all should be marked in-focus
+    // (unchanged from input).
+    constexpr cardinal::u32 W = 4, H = 4;
+    cardinal::vector<cardinal::u8> in_col(W * H * 4u);
+    for (cardinal::u32 i = 0; i < W * H; ++i) {
+        in_col[i * 4 + 0] = 100; in_col[i * 4 + 1] = 150; in_col[i * 4 + 2] = 200;
+        in_col[i * 4 + 3] = 255;
+    }
+    cardinal::vector<float> depth(W * H, 0.5f);   // = focal_z
+    auto g = rg::Graph::create();
+    auto h_c = g->declare_buffer(rg::BufferDesc{"col", in_col.size(), 0, true});
+    auto h_d = g->declare_buffer(rg::BufferDesc{"dep", depth.size() * sizeof(float), 0, true});
+    InitBlob bc{h_c, in_col.data(), in_col.size()};
+    InitBlob bd{h_d, depth.data(), depth.size() * sizeof(float)};
+    add_init_pass(*g, "iC", h_c, &bc);
+    add_init_pass(*g, "iD", h_d, &bd);
+    auto st = gpu::DepthOfFieldPass::add_to_graph(*g, h_c, h_d, W, H, 0.5f, 0.1f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->pixels_in_focus == W * H);
+    CHECK(st->pixels_blurred == 0u);
+    // Output = input.
+    auto out = b->buffer_contents(st->out_color);
+    for (cardinal::u32 i = 0; i < W * H; ++i) {
+        CHECK(out[i * 4 + 0] == 100);
+        CHECK(out[i * 4 + 1] == 150);
+        CHECK(out[i * 4 + 2] == 200);
+        CHECK(out[i * 4 + 3] == 255);
+    }
+}
+
+void test_dof_far_pixels_get_blurred() {
+    constexpr cardinal::u32 W = 16, H = 16;
+    cardinal::vector<cardinal::u8> in_col(W * H * 4u, 128);
+    for (cardinal::u32 i = 0; i < W * H; ++i) in_col[i * 4 + 3] = 255;
+    cardinal::vector<float> depth(W * H, 1.0f);   // far → big CoC
+    auto g = rg::Graph::create();
+    auto h_c = g->declare_buffer(rg::BufferDesc{"col", in_col.size(), 0, true});
+    auto h_d = g->declare_buffer(rg::BufferDesc{"dep", depth.size() * sizeof(float), 0, true});
+    InitBlob bc{h_c, in_col.data(), in_col.size()};
+    InitBlob bd{h_d, depth.data(), depth.size() * sizeof(float)};
+    add_init_pass(*g, "iC", h_c, &bc);
+    add_init_pass(*g, "iD", h_d, &bd);
+    auto st = gpu::DepthOfFieldPass::add_to_graph(*g, h_c, h_d, W, H, 0.3f, 0.05f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->pixels_blurred == W * H);
+    CHECK(st->pixels_in_focus == 0u);
+}
+
+void test_dof_nan_safe() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    constexpr cardinal::u32 W = 4, H = 4;
+    cardinal::vector<cardinal::u8> in_col(W * H * 4u, 200);
+    cardinal::vector<float> depth(W * H, qnan);
+    auto g = rg::Graph::create();
+    auto h_c = g->declare_buffer(rg::BufferDesc{"col", in_col.size(), 0, true});
+    auto h_d = g->declare_buffer(rg::BufferDesc{"dep", depth.size() * sizeof(float), 0, true});
+    InitBlob bc{h_c, in_col.data(), in_col.size()};
+    InitBlob bd{h_d, depth.data(), depth.size() * sizeof(float)};
+    add_init_pass(*g, "iC", h_c, &bc);
+    add_init_pass(*g, "iD", h_d, &bd);
+    auto st = gpu::DepthOfFieldPass::add_to_graph(*g, h_c, h_d, W, H, qnan, qnan);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out = b->buffer_contents(st->out_color);
+    for (cardinal::u32 i = 0; i < out.size(); ++i) {
+        // Output bytes must be finite (just check they're not garbage values
+        // — actually u8 is always finite. Real check: pass didn't crash).
+        (void)out[i];
+    }
+    CHECK(out.size() == W * H * 4u);
+}
+
+void test_color_dof_hlsl_nonempty() {
+    CHECK(gpu::ColorGradingPass::hlsl_source()[0] != '\0');
+    CHECK(gpu::DepthOfFieldPass::hlsl_source()[0] != '\0');
+}
+
 void test_pipeline_id_includes_aegis() {
     // Verify that the registry slot for the AEGIS pipeline exists in the
     // PipelineId enum (forward-compat marker for the AegisRenderPipeline
@@ -4100,6 +4279,12 @@ int main() {
     test_fog_zero_density_zero_fog();
     test_fog_nan_safe();
     test_postvol_hlsl_nonempty();
+    test_color_grading_identity_lut_no_op();
+    test_color_grading_invert_lut_complements();
+    test_dof_focal_pixels_stay_sharp();
+    test_dof_far_pixels_get_blurred();
+    test_dof_nan_safe();
+    test_color_dof_hlsl_nonempty();
     test_pipeline_id_includes_aegis();
 
     test_zero_size_buffer_safe();
