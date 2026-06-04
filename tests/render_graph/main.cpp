@@ -17,6 +17,7 @@
 #include <cardinal/render/gpu_geometry.hpp>
 #include <cardinal/render/gpu_primitives.hpp>
 #include <cardinal/render/gpu_visbuf.hpp>
+#include <cardinal/render/gpu_aegis.hpp>
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/utility.hpp>
 #include <cardinal/core/simd_math.hpp>
@@ -2640,6 +2641,274 @@ void test_visbuf_and_hiz_hlsl_nonempty() {
     CHECK(gpu::HiZOcclusionTestPass::hlsl_source()[0] != '\0');
 }
 
+// ============================================================================
+// AEGIS passes — spot tests per pass + the end-to-end orchestrator chain.
+// ============================================================================
+void test_geometry_classify_assigns_class() {
+    constexpr cardinal::u32 N = 4;
+    cardinal::vector<float> tris = {
+        // Tri 0 — large planar triangle (low curvature)
+        0,0,0,  1,0,0,  0,1,0,
+        // Tri 1 — moderate triangle
+        0,0,1,  1,0,1,  0,1,1,
+        // Tri 2 — moderate
+        0,0,2,  1,0,2,  0,1,2,
+        // Tri 3 — degenerate (zero area → Foliage)
+        0,0,3,  0,0,3,  0,0,3,
+    };
+    cardinal::vector<float> curv = { 0.0f, 0.3f, 0.6f, 0.0f };
+    auto g = rg::Graph::create();
+    auto h_t = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    auto h_c = g->declare_buffer(rg::BufferDesc{"curv", curv.size() * sizeof(float), 0, true});
+    InitBlob bt{h_t, tris.data(), tris.size() * sizeof(float)};
+    InitBlob bc{h_c, curv.data(), curv.size() * sizeof(float)};
+    add_init_pass(*g, "it", h_t, &bt);
+    add_init_pass(*g, "ic", h_c, &bc);
+    auto st = gpu::GeometryClassifyPass::add_to_graph(*g, h_t, h_c, N);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto cls = b->buffer_contents(st->out_class);
+    const cardinal::u32* cf = reinterpret_cast<const cardinal::u32*>(cls.data());
+    CHECK(cf[0] == static_cast<cardinal::u32>(gpu::GeometryClass::Planar));
+    CHECK(cf[1] == static_cast<cardinal::u32>(gpu::GeometryClass::Organic));
+    CHECK(cf[2] == static_cast<cardinal::u32>(gpu::GeometryClass::Displaced));
+    CHECK(cf[3] == static_cast<cardinal::u32>(gpu::GeometryClass::Foliage));
+    CHECK(st->class_counts[0] == 1u);   // 1 planar
+    CHECK(st->class_counts[2] == 1u);   // 1 organic
+    CHECK(st->class_counts[3] == 1u);   // 1 displaced
+    CHECK(st->class_counts[4] == 1u);   // 1 foliage
+}
+
+void test_meshlet_build_packs_into_meshlets() {
+    constexpr cardinal::u32 N = 130;   // straddles 64-tri boundary → 3 meshlets
+    cardinal::vector<float> tris(N * 9u, 0.0f);
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        tris[i * 9 + 0] = static_cast<float>(i);
+        tris[i * 9 + 3] = static_cast<float>(i) + 1;
+        tris[i * 9 + 7] = 1.0f;
+    }
+    auto g = rg::Graph::create();
+    auto h_t = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    InitBlob bt{h_t, tris.data(), tris.size() * sizeof(float)};
+    add_init_pass(*g, "it", h_t, &bt);
+    auto st = gpu::MeshletBuildPass::add_to_graph(*g, h_t, N);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->meshlet_count == 3u);
+    auto cnt = b->buffer_contents(st->out_meshlet_count);
+    CHECK(*reinterpret_cast<const cardinal::u32*>(cnt.data()) == 3u);
+}
+
+void test_indirect_gen_compacts_visibility() {
+    constexpr cardinal::u32 N = 4;
+    // Visibility = [1, 0, 1, 1] → 3 commands emitted.
+    cardinal::vector<cardinal::u8> vis = { 1, 0, 1, 1 };
+    cardinal::vector<float> meshlets(N * gpu::kMeshletRecordFloats, 0.0f);
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        *reinterpret_cast<cardinal::u32*>(&meshlets[i * gpu::kMeshletRecordFloats + 0]) = i * 10;
+        *reinterpret_cast<cardinal::u32*>(&meshlets[i * gpu::kMeshletRecordFloats + 1]) = 5;
+    }
+    auto g = rg::Graph::create();
+    auto h_v = g->declare_buffer(rg::BufferDesc{"vis", vis.size(), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"ml",  meshlets.size() * sizeof(float), 0, true});
+    InitBlob bv{h_v, vis.data(), vis.size()};
+    InitBlob bm{h_m, meshlets.data(), meshlets.size() * sizeof(float)};
+    add_init_pass(*g, "iv", h_v, &bv);
+    add_init_pass(*g, "im", h_m, &bm);
+    auto st = gpu::DrawIndirectGenPass::add_to_graph(*g, h_v, h_m, N);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->commands_emitted == 3u);
+    auto cmds = b->buffer_contents(st->out_commands);
+    const gpu::IndirectDrawCmd* cf = reinterpret_cast<const gpu::IndirectDrawCmd*>(cmds.data());
+    CHECK(cf[0].meshlet_id == 0u);
+    CHECK(cf[1].meshlet_id == 2u);
+    CHECK(cf[2].meshlet_id == 3u);
+}
+
+void test_tonemap_aces_pipes_through_hdr() {
+    constexpr cardinal::u32 W = 4, H = 4;
+    cardinal::vector<float> hdr(W * H * 3u, 0.0f);
+    // Half pixels at 0.5, half saturated way past 1.
+    for (cardinal::u32 i = 0; i < W * H; ++i) {
+        const float v = (i < (W * H) / 2) ? 0.5f : 50.0f;
+        hdr[i * 3 + 0] = v; hdr[i * 3 + 1] = v; hdr[i * 3 + 2] = v;
+    }
+    auto g = rg::Graph::create();
+    auto h_r = g->declare_buffer(rg::BufferDesc{"hdr", hdr.size() * sizeof(float), 0, true});
+    InitBlob br{h_r, hdr.data(), hdr.size() * sizeof(float)};
+    add_init_pass(*g, "ir", h_r, &br);
+    auto st = gpu::TonemapPass::add_to_graph(*g, h_r, W, H, 1.0f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out = b->buffer_contents(st->out_rgba);
+    // High-HDR pixels should saturate.
+    CHECK(st->pixels_clipped == (W * H) / 2);
+    // Alpha = 255 across the board.
+    for (cardinal::u32 i = 0; i < W * H; ++i) CHECK(out[i * 4 + 3] == 255);
+}
+
+void test_composite_alpha_test_overlays() {
+    constexpr cardinal::u32 W = 2, H = 2;
+    cardinal::vector<cardinal::u8> scene = {
+         50,  50,  50, 255,    50,  50,  50, 255,
+         50,  50,  50, 255,    50,  50,  50, 255,
+    };
+    cardinal::vector<cardinal::u8> ui = {
+        200, 0, 0, 255,    0, 0, 0, 0,
+          0, 0, 0,   0,    0, 0, 0, 0,
+    };
+    auto g = rg::Graph::create();
+    auto h_s = g->declare_buffer(rg::BufferDesc{"scene", scene.size(), 0, true});
+    auto h_u = g->declare_buffer(rg::BufferDesc{"ui",    ui.size(),    0, true});
+    InitBlob bs{h_s, scene.data(), scene.size()};
+    InitBlob bu{h_u, ui.data(),    ui.size()};
+    add_init_pass(*g, "is", h_s, &bs);
+    add_init_pass(*g, "iu", h_u, &bu);
+    rg::ResourceHandle no_giz;
+    auto st = gpu::CompositePresentPass::add_to_graph(*g, h_s, h_u, no_giz, W, H);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out = b->buffer_contents(st->out_presentation);
+    // Pixel 0: UI red (alpha=255) wins.
+    CHECK(out[0] == 200); CHECK(out[1] == 0); CHECK(out[2] == 0);
+    // Pixel 1: UI alpha 0 → scene grey wins.
+    CHECK(out[4] == 50); CHECK(out[5] == 50); CHECK(out[6] == 50);
+    CHECK(st->pixels_overdrawn == 1u);
+}
+
+// ----------------------------------------------------------------------------
+// AegisPipeline — end-to-end orchestrator wiring every AEGIS block.
+// ----------------------------------------------------------------------------
+void test_aegis_pipeline_end_to_end() {
+    gpu::AegisConfig cfg;
+    cfg.width = 32; cfg.height = 16;
+    cfg.material_count = 2;
+    cfg.light_count    = 1;
+    cfg.exposure       = 1.0f;
+    cfg.caps.fp16_supported = true;
+    cfg.caps.fp8_supported  = true;
+    cfg.caps.fp4_supported  = false;
+    cfg.max_tier = gpu::GeometryTier::Fp8;
+
+    // Scene: 2 triangles, 2 materials, 1 directional light.
+    constexpr cardinal::u32 M = 2;
+    cardinal::vector<float> tris = {
+        -0.5f, -0.5f, 0.5f,  0.5f, -0.5f, 0.5f,  0.0f,  0.5f, 0.5f,
+        -0.4f, -0.4f, 0.6f,  0.4f, -0.4f, 0.6f,  0.0f,  0.4f, 0.6f,
+    };
+    cardinal::vector<cardinal::u32> mat_ids = { 0u, 1u };
+    cardinal::vector<float> materials = {
+        // mat 0: base = (0.8, 0.1, 0.1) red diffuse
+        0.8f, 0.1f, 0.1f, 0, 0, 0, 0, 1.0f,
+        // mat 1: base = (0.1, 0.8, 0.1) green diffuse
+        0.1f, 0.8f, 0.1f, 0, 0, 0, 0, 1.0f,
+    };
+    cardinal::vector<float> lights(16, 0.0f);
+    lights[0] = 0;     // kind = 0 = Directional
+    lights[5] = 0; lights[6] = -1; lights[7] = 0;   // dir -Y
+    lights[8] = 1; lights[9] =  1; lights[10] = 1;  // color
+    lights[11] = 1.0f;                                  // intensity
+    cardinal::vector<float> ambient = { 0.1f, 0.1f, 0.1f };
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1,
+    };
+    cardinal::vector<float> cam_dir = { 0, 0, 1 };
+
+    auto g = rg::Graph::create();
+    auto h_t = g->declare_buffer(rg::BufferDesc{"tris",  tris.size() * sizeof(float), 0, true});
+    auto h_i = g->declare_buffer(rg::BufferDesc{"mids",  mat_ids.size() * sizeof(cardinal::u32), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mats",  materials.size() * sizeof(float), 0, true});
+    auto h_l = g->declare_buffer(rg::BufferDesc{"lts",   lights.size() * sizeof(float), 0, true});
+    auto h_a = g->declare_buffer(rg::BufferDesc{"amb",   ambient.size() * sizeof(float), 0, true});
+    auto h_v = g->declare_buffer(rg::BufferDesc{"vp",    mat.size() * sizeof(float), 0, true});
+    auto h_d = g->declare_buffer(rg::BufferDesc{"dir",   cam_dir.size() * sizeof(float), 0, true});
+    InitBlob bt{h_t, tris.data(), tris.size() * sizeof(float)};
+    InitBlob bi{h_i, mat_ids.data(), mat_ids.size() * sizeof(cardinal::u32)};
+    InitBlob bm{h_m, materials.data(), materials.size() * sizeof(float)};
+    InitBlob bl{h_l, lights.data(), lights.size() * sizeof(float)};
+    InitBlob ba{h_a, ambient.data(), ambient.size() * sizeof(float)};
+    InitBlob bv{h_v, mat.data(), mat.size() * sizeof(float)};
+    InitBlob bd{h_d, cam_dir.data(), cam_dir.size() * sizeof(float)};
+    add_init_pass(*g, "i_tris",   h_t, &bt);
+    add_init_pass(*g, "i_mids",   h_i, &bi);
+    add_init_pass(*g, "i_mats",   h_m, &bm);
+    add_init_pass(*g, "i_lights", h_l, &bl);
+    add_init_pass(*g, "i_amb",    h_a, &ba);
+    add_init_pass(*g, "i_vp",     h_v, &bv);
+    add_init_pass(*g, "i_dir",    h_d, &bd);
+
+    gpu::AegisSceneInputs in;
+    in.tris            = h_t;
+    in.material_ids    = h_i;
+    in.materials       = h_m;
+    in.lights          = h_l;
+    in.ambient         = h_a;
+    in.view_proj       = h_v;
+    in.camera_dir      = h_d;
+    in.triangle_count  = M;
+
+    auto pipeline = gpu::AegisPipeline::create(cfg);
+    gpu::AegisOutputs out;
+    gpu::AegisStageRefs stages;
+    pipeline->build(*g, in, out, stages);
+
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+
+    // Block 3 — Virtual Geometry
+    CHECK(stages.classify->triangle_count == M);
+    CHECK(stages.meshlets->meshlet_count == 1u);   // 2 tris fit in one meshlet
+    CHECK(stages.sse->meshlet_count == 1u);
+
+    // Block 5 — tier picked
+    CHECK(stages.adaptive->selected_tier == gpu::GeometryTier::Fp8);
+    CHECK(pipeline->selected_tier()      == gpu::GeometryTier::Fp8);
+
+    // Block 6 — V-Buf depth + prim ID present
+    auto vbuf_d = b->buffer_contents(out.vbuf_depth);
+    auto vbuf_p = b->buffer_contents(out.vbuf_prim);
+    CHECK(vbuf_d.size() == cfg.width * cfg.height * sizeof(float));
+    CHECK(vbuf_p.size() == cfg.width * cfg.height * sizeof(cardinal::u32));
+
+    // Block 7 — tile light cull + resolve happened
+    CHECK(stages.light_cull->total_light_assignments > 0u);
+    CHECK(stages.resolve->pixels_shaded + stages.resolve->pixels_sky ==
+          cfg.width * cfg.height);
+
+    // Block 12 — radiance + tonemap present
+    auto rad  = b->buffer_contents(out.radiance_hdr);
+    auto tone = b->buffer_contents(out.tonemapped);
+    CHECK(rad.size()  == cfg.width * cfg.height * 3 * sizeof(float));
+    CHECK(tone.size() == cfg.width * cfg.height * 4);
+
+    // Block 13 — final presentation buffer is present + opaque
+    auto pres = b->buffer_contents(out.presentation);
+    CHECK(pres.size() == cfg.width * cfg.height * 4);
+    for (cardinal::u32 i = 0; i < cfg.width * cfg.height; ++i) {
+        CHECK(pres[i * 4 + 3] == 255);
+    }
+}
+
+void test_aegis_hlsl_nonempty() {
+    CHECK(gpu::GeometryClassifyPass::hlsl_source()[0] != '\0');
+    CHECK(gpu::MeshletBuildPass::hlsl_source()[0] != '\0');
+    CHECK(gpu::MeshletCullPass::hlsl_source()[0] != '\0');
+    CHECK(gpu::ScreenSpaceErrorPass::hlsl_source()[0] != '\0');
+    CHECK(gpu::DrawIndirectGenPass::hlsl_source()[0] != '\0');
+    CHECK(gpu::TiledLightCullPass::hlsl_source()[0] != '\0');
+    CHECK(gpu::VBufResolvePass::hlsl_source()[0] != '\0');
+    CHECK(gpu::MotionVectorPass::hlsl_source()[0] != '\0');
+    CHECK(gpu::TonemapPass::hlsl_source()[0] != '\0');
+    CHECK(gpu::CompositePresentPass::hlsl_source()[0] != '\0');
+}
+
 void test_reset_clears_state() {
     auto g = rg::Graph::create();
     FillOp op{};
@@ -2759,6 +3028,14 @@ int main() {
     test_hiz_occlusion_visible_when_pyramid_is_far();
     test_hiz_occlusion_culls_when_aabb_behind_pyramid();
     test_visbuf_and_hiz_hlsl_nonempty();
+
+    test_geometry_classify_assigns_class();
+    test_meshlet_build_packs_into_meshlets();
+    test_indirect_gen_compacts_visibility();
+    test_tonemap_aces_pipes_through_hdr();
+    test_composite_alpha_test_overlays();
+    test_aegis_pipeline_end_to_end();
+    test_aegis_hlsl_nonempty();
 
     test_zero_size_buffer_safe();
     test_reset_clears_state();

@@ -10,6 +10,7 @@ add_library(cardinal_render STATIC
     src/gpu_geometry.cpp
     src/gpu_primitives.cpp
     src/gpu_visbuf.cpp
+    src/gpu_aegis.cpp
     include/cardinal/render/pipeline.hpp
     include/cardinal/render/tex.hpp
     include/cardinal/render/tess.hpp
@@ -21,7 +22,8 @@ add_library(cardinal_render STATIC
     include/cardinal/render/gpu_raster.hpp
     include/cardinal/render/gpu_geometry.hpp
     include/cardinal/render/gpu_primitives.hpp
-    include/cardinal/render/gpu_visbuf.hpp)
+    include/cardinal/render/gpu_visbuf.hpp
+    include/cardinal/render/gpu_aegis.hpp)
 add_library(cardinal::render ALIAS cardinal_render)
 
 target_include_directories(cardinal_render PUBLIC
