@@ -59,6 +59,11 @@ set(CARDINAL_CORE_HEADERS
     # BinarySet/BinaryMap (binary-search lookup on a flat array).
     include/cardinal/core/flat_set.hpp
     include/cardinal/core/flat_map.hpp
+    # Bump / pool allocators — per-frame scratch arena + fixed-size slab
+    # pool. The bread-and-butter allocators for hot transient paths
+    # (graph nodes, RHI command staging, particle pool, etc.). Header-only.
+    include/cardinal/core/linear_allocator.hpp
+    include/cardinal/core/pool_allocator.hpp
     # Pearl Abyss Pa* surface modernised onto C++20. Umbrella + per-component
     # sub-headers under cardinal/core/pa/ — used as the porting bridge when
     # bringing CrimsonDesert-style server / tooling code into cardinal::core.
