@@ -19,10 +19,31 @@
 #if defined(_WIN32) && !defined(CARDINAL_NO_D3D12)
 
 #include "internal.hpp"
+#include <cardinal/core/linear_allocator.hpp>
+#include <cardinal/core/arena_allocator.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
 
 namespace cardinal::rhi {
+
+namespace {
+
+// Per-thread transient arena used by D3D12Swapchain::end_frame() to back
+// the per-frame barrier staging vectors (to_srv + to_rt). Reset at the
+// top of each end_frame() — every push_back into the staging vectors
+// then goes through a single std::atomic fetch_add on the arena.
+//
+// Sized for worst-case 64 viewports × 2 barrier passes × 64 B/barrier
+// = 8 KB; round up to 16 KB for slack. Each rendering thread that calls
+// end_frame() gets its own arena lazily.
+constexpr cardinal::usize kEndFrameArenaBytes = 16u * 1024u;
+
+cardinal::core::LinearAllocator& end_frame_arena() noexcept {
+    thread_local cardinal::core::LinearAllocator arena(kEndFrameArenaBytes);
+    return arena;
+}
+
+}  // namespace
 
 // D3D12Swapchain implementation
 // -----------------------------------------------------------------------------
@@ -763,12 +784,20 @@ void D3D12Swapchain::end_frame() {
     Frame& f = frames_[frame_index_];
     ID3D12Resource* backbuf = back_buffers_[frame_index_].Get();
 
+    // Per-frame transient barrier staging — back the to_srv + to_rt
+    // arrays with the per-thread end_frame arena. Reset wipes everything
+    // from the prior frame in O(1); subsequent push_backs are
+    // lock-free atomic bumps. No heap traffic per frame.
+    auto& arena = end_frame_arena();
+    arena.reset();
+    using BarrierAlloc = cardinal::core::ArenaAllocator<D3D12_RESOURCE_BARRIER>;
+
     // Transition EVERY viewport that was rendered this frame to
     // PIXEL_SHADER_RESOURCE so the overlay (ImGui::Image inside each
     // Viewport panel) can sample them. Flipped back to RENDER_TARGET
     // below for next frame. We batch all transitions into one
     // ResourceBarrier call to minimise driver overhead.
-    cardinal::vector<D3D12_RESOURCE_BARRIER> to_srv;
+    cardinal::vector<D3D12_RESOURCE_BARRIER, BarrierAlloc> to_srv(BarrierAlloc{arena});
     to_srv.reserve(viewport_count_);
     for (u32 i = 0; i < viewport_count_; ++i) {
         auto& vp = viewports_[i];
@@ -807,8 +836,11 @@ void D3D12Swapchain::end_frame() {
     if (overlay_cb_) overlay_cb_(overlay_user_);
 
     // Restore each rendered-this-frame viewport image to RENDER_TARGET so
-    // next frame's set_active_viewport can clear + draw into it.
-    cardinal::vector<D3D12_RESOURCE_BARRIER> to_rt;
+    // next frame's set_active_viewport can clear + draw into it. Shares
+    // the same per-frame arena as to_srv (no reset between the two —
+    // both live until end of this function, then arena resets on next
+    // call to end_frame).
+    cardinal::vector<D3D12_RESOURCE_BARRIER, BarrierAlloc> to_rt(BarrierAlloc{arena});
     to_rt.reserve(to_srv.size());
     for (const auto& bar : to_srv) {
         D3D12_RESOURCE_BARRIER nb = bar;

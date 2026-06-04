@@ -2,6 +2,8 @@
 
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/platform.hpp>
+#include <cardinal/core/linear_allocator.hpp>
+#include <cardinal/core/arena_allocator.hpp>
 
 #include "modern.h"
 
@@ -53,6 +55,21 @@ class VulkanDevice;
 namespace {
 
 constexpr u32 frames_in_flight = 2;
+
+// Per-thread transient arena used by VulkanSwapchain::end_frame() to back
+// the per-frame barrier staging vector (VkImageMemoryBarrier2 batch for
+// viewport→SHADER_READ + swapchain UNDEFINED→COLOR_ATTACHMENT). Reset
+// at the top of each end_frame() — every push_back goes through a
+// single atomic fetch_add. Sized for worst-case 64 viewports + 1
+// swapchain barrier × ~100 B per VkImageMemoryBarrier2 = ~7 KB; 16 KB
+// for headroom. Each rendering thread that calls end_frame() lazily
+// allocates its own arena on first use.
+constexpr cardinal::usize kVkEndFrameArenaBytes = 16u * 1024u;
+
+cardinal::core::LinearAllocator& vk_end_frame_arena() noexcept {
+    thread_local cardinal::core::LinearAllocator arena(kVkEndFrameArenaBytes);
+    return arena;
+}
 
 // Convert a VkResult to its enum-name string. Tiny switch — we only name
 // the codes the swapchain / device init actually hands back. Everything
@@ -2906,7 +2923,12 @@ void VulkanSwapchain::end_frame() {
         // Multi-viewport + overlay: transition every rendered viewport to
         // SHADER_READ_ONLY so ImGui can sample them inside the overlay's
         // render pass. Batch all transitions into one vkCmdPipelineBarrier2.
-        cardinal::vector<VkImageMemoryBarrier2> barriers;
+        // Per-frame transient — back with the thread-local end-frame arena
+        // so push_back is a lock-free atomic bump, not a malloc.
+        auto& arena = vk_end_frame_arena();
+        arena.reset();
+        using BarrierAlloc = cardinal::core::ArenaAllocator<VkImageMemoryBarrier2>;
+        cardinal::vector<VkImageMemoryBarrier2, BarrierAlloc> barriers(BarrierAlloc{arena});
         barriers.reserve(viewport_count_ + 1);
         for (auto& vp : viewports_) {
             if (!vp.rendered_this_frame || vp.image == VK_NULL_HANDLE) continue;
