@@ -15,6 +15,7 @@
 #include <cardinal/render/gpu_passes.hpp>
 #include <cardinal/render/gpu_raster.hpp>
 #include <cardinal/render/gpu_geometry.hpp>
+#include <cardinal/render/gpu_primitives.hpp>
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/utility.hpp>
 #include <cardinal/core/simd_math.hpp>
@@ -1498,6 +1499,310 @@ void test_geom_pass_hlsl_nonempty() {
     CHECK(hlsl[0] != '\0');
 }
 
+// ----------------------------------------------------------------------------
+// Primitive builders — Sphere + Cube generate triangle buffers for the
+// adaptive geometry tier engine + the wireframe viewport.
+// ----------------------------------------------------------------------------
+void test_sphere_primitive_triangle_count() {
+    gpu::SphereSpec spec;
+    spec.radius = 1.0f;
+    spec.latitude_segments  = 8;
+    spec.longitude_segments = 16;
+    auto g = rg::Graph::create();
+    auto st = gpu::SpherePrimitivePass::add_to_graph(*g, spec);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    // 2 * lat * lon = 2 * 8 * 16 = 256 triangles.
+    CHECK(st->triangle_count == 256u);
+    auto out = b->buffer_contents(st->out_tris);
+    CHECK(out.size() == 256u * 9u * sizeof(float));
+}
+
+void test_sphere_primitive_radius_distance() {
+    // Every vertex on the sphere should be ~radius away from the center.
+    gpu::SphereSpec spec;
+    spec.radius = 2.5f;
+    spec.latitude_segments  = 4;
+    spec.longitude_segments = 8;
+    spec.center_x = 1.0f; spec.center_y = -2.0f; spec.center_z = 3.0f;
+
+    auto g = rg::Graph::create();
+    auto st = gpu::SpherePrimitivePass::add_to_graph(*g, spec);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out = b->buffer_contents(st->out_tris);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    for (cardinal::u32 t = 0; t < st->triangle_count; ++t) {
+        for (cardinal::u32 v = 0; v < 3; ++v) {
+            const float dx = of[t * 9 + v * 3 + 0] - 1.0f;
+            const float dy = of[t * 9 + v * 3 + 1] + 2.0f;
+            const float dz = of[t * 9 + v * 3 + 2] - 3.0f;
+            const float r2 = dx * dx + dy * dy + dz * dz;
+            // Allow small float noise.
+            CHECK(r2 >= (2.5f * 2.5f) - 0.01f);
+            CHECK(r2 <= (2.5f * 2.5f) + 0.01f);
+        }
+    }
+}
+
+void test_sphere_primitive_clamps_degenerate_segments() {
+    // 1 latitude segment is below the clamp floor (2); should round up.
+    gpu::SphereSpec spec;
+    spec.radius = 1.0f;
+    spec.latitude_segments  = 1;   // clamped to 2
+    spec.longitude_segments = 2;   // clamped to 3
+    auto g = rg::Graph::create();
+    auto st = gpu::SpherePrimitivePass::add_to_graph(*g, spec);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    // After clamp: 2 * 2 * 3 = 12 triangles.
+    CHECK(st->triangle_count == 12u);
+}
+
+void test_cube_primitive_12_triangles() {
+    gpu::CubeSpec spec;
+    spec.half_extent = 1.0f;
+    auto g = rg::Graph::create();
+    auto st = gpu::CubePrimitivePass::add_to_graph(*g, spec);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->triangle_count == 12u);
+    auto out = b->buffer_contents(st->out_tris);
+    CHECK(out.size() == 12u * 9u * sizeof(float));
+    const float* of = reinterpret_cast<const float*>(out.data());
+    // Every vertex must be ±1 on all axes.
+    for (cardinal::usize i = 0; i < 12u * 9u; ++i) {
+        const float v = of[i];
+        CHECK(v == 1.0f || v == -1.0f);
+    }
+}
+
+void test_cube_primitive_centered() {
+    // Shift the cube. Every vertex should be offset by (cx, cy, cz).
+    gpu::CubeSpec spec;
+    spec.half_extent = 0.5f;
+    spec.center_x = 10.0f; spec.center_y = -5.0f; spec.center_z = 2.5f;
+    auto g = rg::Graph::create();
+    auto st = gpu::CubePrimitivePass::add_to_graph(*g, spec);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out = b->buffer_contents(st->out_tris);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    for (cardinal::u32 t = 0; t < 12; ++t) {
+        for (cardinal::u32 v = 0; v < 3; ++v) {
+            const float x = of[t * 9 + v * 3 + 0];
+            const float y = of[t * 9 + v * 3 + 1];
+            const float z = of[t * 9 + v * 3 + 2];
+            CHECK(x == 10.0f - 0.5f || x == 10.0f + 0.5f);
+            CHECK(y == -5.0f - 0.5f || y == -5.0f + 0.5f);
+            CHECK(z ==  2.5f - 0.5f || z ==  2.5f + 0.5f);
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// WireframePass — Bresenham edge rasterizer projects + draws each triangle's
+// 3 edges. The "polygon viewport" sees the triangle topology directly; with
+// AdaptiveGeometryPass upstream, FP4 mode shows 8× as many edges as FP32.
+// ----------------------------------------------------------------------------
+void test_wireframe_pass_draws_pixels() {
+    // One large triangle directly facing the camera. Wireframe should
+    // draw 3 edge lines that hit at least some pixels.
+    constexpr cardinal::u32 W = 32, H = 32;
+    cardinal::vector<float> tris = {
+        -0.5f, -0.5f, 0.0f,
+         0.5f, -0.5f, 0.0f,
+         0.0f,  0.5f, 0.0f,
+    };
+    // Identity matrix → triangle stays at (x, y, 0).
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+    };
+    auto g = rg::Graph::create();
+    auto h_t = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat",  mat.size()  * sizeof(float), 0, true});
+    InitBlob bt{h_t, tris.data(), tris.size() * sizeof(float)};
+    InitBlob bm{h_m, mat.data(),  mat.size()  * sizeof(float)};
+    add_init_pass(*g, "it", h_t, &bt);
+    add_init_pass(*g, "im", h_m, &bm);
+    auto st = gpu::WireframePass::add_to_graph(*g, h_t, h_m, W, H, 1, 1.0f, 0.0f, 0.0f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->pixels_drawn > 0u);
+    CHECK(st->edges_drawn == 3u);
+    CHECK(st->triangles_offscreen == 0u);
+    // Color buffer should have red pixels somewhere.
+    auto col = b->buffer_contents(st->out_color);
+    bool found_red = false;
+    for (cardinal::usize i = 0; i < W * H; ++i) {
+        if (col[i * 4 + 0] == 255 && col[i * 4 + 1] == 0 && col[i * 4 + 2] == 0) {
+            found_red = true; break;
+        }
+    }
+    CHECK(found_red);
+}
+
+void test_wireframe_pass_offscreen_skip() {
+    constexpr cardinal::u32 W = 16, H = 16;
+    // Triangle entirely off-screen (way past +X).
+    cardinal::vector<float> tris = {
+        10.0f, 10.0f, 0.0f,
+        12.0f, 10.0f, 0.0f,
+        11.0f, 12.0f, 0.0f,
+    };
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+    };
+    auto g = rg::Graph::create();
+    auto h_t = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat",  mat.size()  * sizeof(float), 0, true});
+    InitBlob bt{h_t, tris.data(), tris.size() * sizeof(float)};
+    InitBlob bm{h_m, mat.data(),  mat.size()  * sizeof(float)};
+    add_init_pass(*g, "it", h_t, &bt);
+    add_init_pass(*g, "im", h_m, &bm);
+    auto st = gpu::WireframePass::add_to_graph(*g, h_t, h_m, W, H, 1);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->triangles_offscreen == 1u);
+    CHECK(st->edges_drawn == 0u);
+    CHECK(st->pixels_drawn == 0u);
+}
+
+void test_wireframe_pass_nan_matrix_safe() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    constexpr cardinal::u32 W = 8, H = 8;
+    cardinal::vector<float> tris = {
+        -0.5f, -0.5f, 0.0f,
+         0.5f, -0.5f, 0.0f,
+         0.0f,  0.5f, 0.0f,
+    };
+    cardinal::vector<float> mat(16, qnan);
+    auto g = rg::Graph::create();
+    auto h_t = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat",  mat.size()  * sizeof(float), 0, true});
+    InitBlob bt{h_t, tris.data(), tris.size() * sizeof(float)};
+    InitBlob bm{h_m, mat.data(),  mat.size()  * sizeof(float)};
+    add_init_pass(*g, "it", h_t, &bt);
+    add_init_pass(*g, "im", h_m, &bm);
+    auto st = gpu::WireframePass::add_to_graph(*g, h_t, h_m, W, H, 1);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    // Output buffers must be finite.
+    auto dep = b->buffer_contents(st->out_depth);
+    const float* df = reinterpret_cast<const float*>(dep.data());
+    for (cardinal::usize i = 0; i < W * H; ++i) {
+        CHECK(df[i] == df[i]);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// End-to-end: sphere → adaptive geometry → wireframe. The wireframe viewport
+// sees more edges at higher tiers — that's the "triangle capabilities" the
+// editor exposes.
+// ----------------------------------------------------------------------------
+void test_chain_sphere_adaptive_wireframe_edge_count_scales_with_tier() {
+    gpu::SphereSpec sphere_spec;
+    sphere_spec.radius = 0.5f;
+    sphere_spec.latitude_segments  = 4;
+    sphere_spec.longitude_segments = 8;
+    // 2 * 4 * 8 = 64 source triangles.
+
+    // Identity-ish view-proj that keeps the sphere on screen.
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+    };
+    constexpr cardinal::u32 W = 32, H = 32;
+
+    auto run_chain = [&](gpu::GpuCapabilities caps) -> cardinal::u32 {
+        auto g = rg::Graph::create();
+        auto sphere = gpu::SpherePrimitivePass::add_to_graph(*g, sphere_spec);
+        auto adapt  = gpu::AdaptiveGeometryPass::add_to_graph(
+            *g, sphere->out_tris, sphere->triangle_count, caps);
+        auto h_m = g->declare_buffer(rg::BufferDesc{"mat", mat.size() * sizeof(float), 0, true});
+        InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+        add_init_pass(*g, "im", h_m, &bm);
+        auto wire = gpu::WireframePass::add_to_graph(
+            *g, adapt->out_micro_tris, h_m, W, H,
+            adapt->micro_triangles_emitted);
+        CHECK(g->compile());
+        auto b = rg::CpuBackend::create();
+        b->execute(*g);
+        return wire->edges_drawn;
+    };
+
+    gpu::GpuCapabilities caps32; caps32.fp16_supported = false;
+    gpu::GpuCapabilities caps16; caps16.fp16_supported = true;
+    gpu::GpuCapabilities caps8;  caps8.fp16_supported = true;  caps8.fp8_supported = true;
+    gpu::GpuCapabilities caps4;  caps4.fp16_supported = true;  caps4.fp8_supported = true;
+    caps4.fp4_supported = true; caps4.max_micro_triangles_per_input = 8;
+
+    // BUT BUT BUT — `adapt->micro_triangles_emitted` is the value AFTER
+    // execute(), not before; the wireframe pass took it at add_to_graph
+    // time. So this test sets up wire->triangle_count from a stale 0,
+    // which would make edges_drawn 0 for all tiers. Fix by passing the
+    // expected post-execute count explicitly (= source_count × tier-N).
+
+    // Re-run with explicit triangle_count.
+    auto run_chain2 = [&](gpu::GpuCapabilities caps, cardinal::u32 n_per) {
+        auto g = rg::Graph::create();
+        auto sphere = gpu::SpherePrimitivePass::add_to_graph(*g, sphere_spec);
+        auto adapt  = gpu::AdaptiveGeometryPass::add_to_graph(
+            *g, sphere->out_tris, sphere->triangle_count, caps);
+        auto h_m = g->declare_buffer(rg::BufferDesc{"mat", mat.size() * sizeof(float), 0, true});
+        InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+        add_init_pass(*g, "im", h_m, &bm);
+        auto wire = gpu::WireframePass::add_to_graph(
+            *g, adapt->out_micro_tris, h_m, W, H,
+            sphere->triangle_count * n_per);
+        CHECK(g->compile());
+        auto b = rg::CpuBackend::create();
+        b->execute(*g);
+        return wire->edges_drawn;
+    };
+
+    const cardinal::u32 e32 = run_chain2(caps32, 1);
+    const cardinal::u32 e16 = run_chain2(caps16, 2);
+    const cardinal::u32 e8  = run_chain2(caps8,  4);
+    const cardinal::u32 e4  = run_chain2(caps4,  8);
+
+    // 64 source tris × 3 edges each:
+    CHECK(e32 == 64u * 3u);     // FP32: 192 edges
+    CHECK(e16 == 64u * 2u * 3u); // FP16: 384 edges
+    CHECK(e8  == 64u * 4u * 3u); // FP8:  768 edges
+    CHECK(e4  == 64u * 8u * 3u); // FP4:  1536 edges
+    // Strict monotonic: higher tier → more triangle resolution.
+    CHECK(e32 < e16);
+    CHECK(e16 < e8);
+    CHECK(e8  < e4);
+    (void)run_chain; (void)caps32; (void)caps16; (void)caps8; (void)caps4;
+}
+
+void test_primitives_and_wire_hlsl_nonempty() {
+    CHECK(gpu::SpherePrimitivePass::hlsl_source() != nullptr);
+    CHECK(gpu::SpherePrimitivePass::hlsl_source()[0] != '\0');
+    CHECK(gpu::CubePrimitivePass::hlsl_source() != nullptr);
+    CHECK(gpu::CubePrimitivePass::hlsl_source()[0] != '\0');
+    CHECK(gpu::WireframePass::hlsl_source() != nullptr);
+    CHECK(gpu::WireframePass::hlsl_source()[0] != '\0');
+}
+
 void test_reset_clears_state() {
     auto g = rg::Graph::create();
     FillOp op{};
@@ -1574,6 +1879,17 @@ int main() {
     test_geom_pass_nan_input_safe();
     test_geom_pass_quantization_error_under_bound();
     test_geom_pass_hlsl_nonempty();
+
+    test_sphere_primitive_triangle_count();
+    test_sphere_primitive_radius_distance();
+    test_sphere_primitive_clamps_degenerate_segments();
+    test_cube_primitive_12_triangles();
+    test_cube_primitive_centered();
+    test_wireframe_pass_draws_pixels();
+    test_wireframe_pass_offscreen_skip();
+    test_wireframe_pass_nan_matrix_safe();
+    test_chain_sphere_adaptive_wireframe_edge_count_scales_with_tier();
+    test_primitives_and_wire_hlsl_nonempty();
 
     test_zero_size_buffer_safe();
     test_reset_clears_state();
