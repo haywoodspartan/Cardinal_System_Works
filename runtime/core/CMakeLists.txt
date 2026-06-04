@@ -64,6 +64,10 @@ set(CARDINAL_CORE_HEADERS
     # (graph nodes, RHI command staging, particle pool, etc.). Header-only.
     include/cardinal/core/linear_allocator.hpp
     include/cardinal/core/pool_allocator.hpp
+    # STL-allocator adapter that forwards allocate() to a LinearAllocator
+    # — used to back std::vector / cardinal::vector with arena memory
+    # transparently. deallocate() is a no-op; reset the arena en masse.
+    include/cardinal/core/arena_allocator.hpp
     # Pearl Abyss Pa* surface modernised onto C++20. Umbrella + per-component
     # sub-headers under cardinal/core/pa/ — used as the porting bridge when
     # bringing CrimsonDesert-style server / tooling code into cardinal::core.

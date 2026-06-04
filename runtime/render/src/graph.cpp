@@ -4,6 +4,8 @@
 #include <cardinal/core/cstring.hpp>        // cardinal::strcmp / strlen
 #include <cardinal/core/utility.hpp>        // cardinal::move
 #include <cardinal/core/async.hpp>          // cardinal::async::parallel_for_each
+#include <cardinal/core/linear_allocator.hpp>   // per-compile transient arena
+#include <cardinal/core/arena_allocator.hpp>    // STL adapter for the arena
 #include <cardinal/rhi/rhi.hpp>             // rhi::Device + Swapchain (for RhiBackend)
 
 #include <chrono>
@@ -17,6 +19,27 @@ inline bool streq(const char* a, const char* b) noexcept {
     if (a == b) return true;
     if (!a || !b) return false;
     return cardinal::strcmp(a, b) == 0;
+}
+
+// Thread-local arena used by Graph::compile() for its transient state
+// (the resource-state table, the adjacency lists, the Kahn ready bucket,
+// the predecessor lists). Reset at the top of every compile() call.
+//
+// 256 KB sized for a graph with ~2k passes + ~2k resources + dense
+// adjacency — well above any realistic AEGIS workload. Allocation goes
+// into the arena via std::atomic fetch_add (lock-free); reset is a
+// single store. Compile() runs on a single thread, so the rewind step
+// at the start is safe.
+//
+// Why a function-static thread_local: the arena owns a 256 KB heap
+// buffer; making it a true global would heap-allocate at static-init
+// time on threads that never compile. function-local thread_local lazy-
+// allocates on first compile per thread.
+constexpr cardinal::usize kCompileArenaBytes = 256u * 1024u;
+
+cardinal::core::LinearAllocator& compile_arena() noexcept {
+    thread_local cardinal::core::LinearAllocator arena(kCompileArenaBytes);
+    return arena;
 }
 
 }  // namespace
@@ -97,17 +120,41 @@ bool Graph::compile() noexcept {
     //
     // Then Kahn's algorithm gives the execution order.
 
+    // ---- Per-compile transient arena ---------------------------------
+    // All the bookkeeping below — resource state, adjacency lists,
+    // indegree, Kahn ready bucket, predecessor lists — lives until the
+    // end of this function and is then thrown away. Backing them with
+    // a thread-local LinearAllocator turns hundreds of small
+    // operator-new calls per compile into a single arena reset.
+    auto& arena = compile_arena();
+    arena.reset();
+    using U32Alloc      = cardinal::core::ArenaAllocator<u32>;
+    using ArenaVecU32   = cardinal::vector<u32, U32Alloc>;
+
     // Resource state: track last writer + readers-since-last-write per
-    // resource (1-based ids).
+    // resource (1-based ids). The nested readers vector ALSO goes into
+    // the arena so the per-resource read history doesn't escape into
+    // the heap.
     struct ResState {
-        u32                       last_writer{0};
-        cardinal::vector<u32>     readers_since_last_write;
+        u32         last_writer{0};
+        ArenaVecU32 readers_since_last_write;
+
+        explicit ResState(U32Alloc alloc) noexcept
+            : readers_since_last_write(alloc) {}
     };
-    cardinal::vector<ResState> rs(static_cast<usize>(n_res + 1));
+    using ResStateAlloc = cardinal::core::ArenaAllocator<ResState>;
+    cardinal::vector<ResState, ResStateAlloc> rs(ResStateAlloc{arena});
+    rs.reserve(static_cast<usize>(n_res + 1));
+    for (u32 i = 0; i <= n_res; ++i) rs.emplace_back(U32Alloc{arena});
 
     // Adjacency list: edges[from_pass] = passes that depend on it.
-    cardinal::vector<cardinal::vector<u32>> edges(static_cast<usize>(n_passes + 1));
-    cardinal::vector<u32>                   indeg(static_cast<usize>(n_passes + 1), 0u);
+    using ArenaVecAlloc      = cardinal::core::ArenaAllocator<ArenaVecU32>;
+    cardinal::vector<ArenaVecU32, ArenaVecAlloc> edges(ArenaVecAlloc{arena});
+    edges.reserve(static_cast<usize>(n_passes + 1));
+    for (u32 i = 0; i <= n_passes; ++i) edges.emplace_back(U32Alloc{arena});
+
+    ArenaVecU32 indeg(U32Alloc{arena});
+    indeg.assign(static_cast<usize>(n_passes + 1), 0u);
 
     auto add_edge = [&](u32 from, u32 to) noexcept {
         if (from == 0 || to == 0 || from == to) return;
@@ -159,7 +206,7 @@ bool Graph::compile() noexcept {
     }
 
     // Kahn's algorithm. Stable-sorted by id so the order is deterministic.
-    cardinal::vector<u32> ready;
+    ArenaVecU32 ready(U32Alloc{arena});
     for (u32 p = 1; p <= n_passes; ++p) {
         if (indeg[p] == 0) ready.push_back(p);
     }
@@ -197,8 +244,11 @@ bool Graph::compile() noexcept {
     wave_count_ = 0;
     // Re-derive predecessor list from `edges`; we only have successor
     // adjacency above. Walk the topo order; for each pass, set wave
-    // from the max over its in-edges. Build a predecessor list now.
-    cardinal::vector<cardinal::vector<u32>> preds(static_cast<usize>(n_passes + 1));
+    // from the max over its in-edges. Build a predecessor list now —
+    // also in the per-compile arena.
+    cardinal::vector<ArenaVecU32, ArenaVecAlloc> preds(ArenaVecAlloc{arena});
+    preds.reserve(static_cast<usize>(n_passes + 1));
+    for (u32 i = 0; i <= n_passes; ++i) preds.emplace_back(U32Alloc{arena});
     for (u32 p = 1; p <= n_passes; ++p) {
         for (u32 succ : edges[p]) preds[succ].push_back(p);
     }
