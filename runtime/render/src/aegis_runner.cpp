@@ -17,6 +17,9 @@ cardinal::shared_ptr<AegisPipelineRunner> AegisPipelineRunner::create(
         case AegisBackendMode::Null:
             r->backend_ = graph::NullBackend::create();
             break;
+        case AegisBackendMode::ThreadedCpu:
+            r->backend_ = graph::ThreadedCpuBackend::create();
+            break;
         case AegisBackendMode::Rhi:
             // RhiBackend not yet implemented; fall through to NullBackend so
             // hosts targeting the future RHI path don't crash today.

@@ -3,6 +3,9 @@
 #include <cardinal/core/algorithm.hpp>      // cardinal::clamp
 #include <cardinal/core/cstring.hpp>        // cardinal::strcmp / strlen
 #include <cardinal/core/utility.hpp>        // cardinal::move
+#include <cardinal/core/async.hpp>          // cardinal::async::parallel_for_each
+
+#include <chrono>
 
 namespace cardinal::render::graph {
 
@@ -186,6 +189,29 @@ bool Graph::compile() noexcept {
         if (resources_[i].kind == ResourceKind::Buffer)  stats_.buffers++;
         else                                             stats_.textures++;
     }
+
+    // Wave decomposition: wave_of_[p] = 1 + max(wave_of_[predecessor]).
+    // Passes with no predecessors land in wave 0.
+    wave_of_.assign(static_cast<usize>(n_passes + 1), 0u);
+    wave_count_ = 0;
+    // Re-derive predecessor list from `edges`; we only have successor
+    // adjacency above. Walk the topo order; for each pass, set wave
+    // from the max over its in-edges. Build a predecessor list now.
+    cardinal::vector<cardinal::vector<u32>> preds(static_cast<usize>(n_passes + 1));
+    for (u32 p = 1; p <= n_passes; ++p) {
+        for (u32 succ : edges[p]) preds[succ].push_back(p);
+    }
+    for (u32 pid : order_) {
+        u32 max_pred_wave = 0;
+        bool has_pred = false;
+        for (u32 pred : preds[pid]) {
+            has_pred = true;
+            if (wave_of_[pred] > max_pred_wave) max_pred_wave = wave_of_[pred];
+        }
+        const u32 w = has_pred ? (max_pred_wave + 1) : 0u;
+        wave_of_[pid] = w;
+        if (w + 1 > wave_count_) wave_count_ = w + 1;
+    }
     return true;
 }
 
@@ -355,6 +381,104 @@ void CpuBackend::execute(Graph& g) noexcept {
 }
 
 cardinal::vector<u8> CpuBackend::buffer_contents(ResourceHandle h) const {
+    if (h.id == 0 || h.id >= storage_.size()) return {};
+    cardinal::vector<u8> out;
+    out.assign(storage_[h.id].begin(), storage_[h.id].end());
+    return out;
+}
+
+// =============================================================================
+// ThreadedCpuBackend — parallel pass execution within each wave
+// =============================================================================
+cardinal::shared_ptr<ThreadedCpuBackend> ThreadedCpuBackend::create() {
+    return cardinal::shared_ptr<ThreadedCpuBackend>(new ThreadedCpuBackend());
+}
+
+void ThreadedCpuBackend::reset() noexcept {
+    storage_.clear();
+    waves_.clear();
+    total_us_ = 0.0f;
+    serial_est_us_ = 0.0f;
+}
+
+float ThreadedCpuBackend::speedup() const noexcept {
+    // When the work is too short to measure (sub-µs passes) both
+    // accumulators round to 0 and the ratio is undefined; return 1.0
+    // (= no speedup, no slowdown) instead of 0 so downstream knobs
+    // can compare against >= 1 without special-casing tiny graphs.
+    if (total_us_ <= 0.0f || serial_est_us_ <= 0.0f) return 1.0f;
+    return serial_est_us_ / total_us_;
+}
+
+void ThreadedCpuBackend::execute(Graph& g) noexcept {
+    reset();
+    const auto& order = g.execution_order();
+    const auto& wave_of = g.wave_of_pass();
+    const u32   waves   = g.wave_count();
+    if (order.empty() || waves == 0) return;
+
+    // Allocate storage per resource.
+    storage_.resize(g.resource_count() + 1);
+    for (u32 rid = 1; rid <= g.resource_count(); ++rid) {
+        ResourceHandle bh{ rid, ResourceKind::Buffer };
+        const BufferDesc& bd = g.buffer(bh);
+        if (bd.size_bytes > 0) storage_[rid].assign(bd.size_bytes, 0u);
+    }
+
+    // Bucket passes by wave.
+    cardinal::vector<cardinal::vector<u32>> by_wave(static_cast<usize>(waves));
+    for (u32 pid : order) {
+        const u32 w = wave_of[pid];
+        by_wave[w].push_back(pid);
+    }
+
+    const auto t_start = std::chrono::high_resolution_clock::now();
+    float serial_acc_us = 0.0f;
+
+    for (u32 w = 0; w < waves; ++w) {
+        const auto& wave = by_wave[w];
+        if (wave.empty()) continue;
+        const auto t_wave0 = std::chrono::high_resolution_clock::now();
+
+        // Per-pass timing slot — indexed by position within the wave so
+        // each thread writes its own cell with no contention.
+        cardinal::vector<float> per_pass_us(wave.size(), 0.0f);
+
+        // Run all passes in this wave concurrently via index-based
+        // parallel_for. The graph guarantees passes within a wave share
+        // no resources by construction (wave decomposition), so the
+        // per-thread CpuExecutionContexts touch disjoint byte ranges.
+        cardinal::async::parallel_for(0u, static_cast<u32>(wave.size()),
+            [this, &g, &per_pass_us, &wave](u32 slot) {
+                const u32 pid = wave[slot];
+                const auto t0 = std::chrono::high_resolution_clock::now();
+                const PassDesc& pd = g.pass(pid);
+                if (pd.record) {
+                    CpuExecutionContext ec(g, storage_, pd);
+                    ec.dispatch(pd.dispatch_x, pd.dispatch_y, pd.dispatch_z);
+                    pd.record(ec, pd.user_ctx);
+                }
+                const auto t1 = std::chrono::high_resolution_clock::now();
+                per_pass_us[slot] = static_cast<float>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count());
+            });
+
+        const auto t_wave1 = std::chrono::high_resolution_clock::now();
+        WaveStats ws;
+        ws.wave_id    = w;
+        ws.pass_count = static_cast<u32>(wave.size());
+        ws.duration_us = static_cast<float>(
+            std::chrono::duration_cast<std::chrono::microseconds>(t_wave1 - t_wave0).count());
+        waves_.push_back(ws);
+        for (float v : per_pass_us) serial_acc_us += v;
+    }
+    const auto t_end = std::chrono::high_resolution_clock::now();
+    total_us_      = static_cast<float>(
+        std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count());
+    serial_est_us_ = serial_acc_us;
+}
+
+cardinal::vector<u8> ThreadedCpuBackend::buffer_contents(ResourceHandle h) const {
     if (h.id == 0 || h.id >= storage_.size()) return {};
     cardinal::vector<u8> out;
     out.assign(storage_[h.id].begin(), storage_[h.id].end());

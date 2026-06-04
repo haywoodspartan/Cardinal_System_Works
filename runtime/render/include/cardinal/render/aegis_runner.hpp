@@ -31,6 +31,7 @@ namespace cardinal::render {
 enum class AegisBackendMode : cardinal::u32 {
     Cpu  = 0,   // graph::CpuBackend — full reference execution, allocates buffers
     Null,       // graph::NullBackend — topology only, no buffers, no records
+    ThreadedCpu,// graph::ThreadedCpuBackend — parallel pass execution per wave
     Rhi,        // graph::RhiBackend — real compute dispatch (when RHI compute lands)
 };
 

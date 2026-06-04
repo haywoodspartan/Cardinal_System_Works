@@ -21,6 +21,7 @@
 #include <cardinal/render/gpu_restir.hpp>
 #include <cardinal/render/gpu_postvol.hpp>
 #include <cardinal/render/gpu_color.hpp>
+#include <cardinal/render/frame_pacer.hpp>
 #include <cardinal/render/aegis_runner.hpp>
 #include <cardinal/render/pipeline.hpp>
 #include <cardinal/core/log.hpp>
@@ -4109,6 +4110,216 @@ void test_color_dof_hlsl_nonempty() {
     CHECK(gpu::DepthOfFieldPass::hlsl_source()[0] != '\0');
 }
 
+// ----------------------------------------------------------------------------
+// ThreadedCpuBackend — wave decomposition + parallel pass execution
+// (DX12-style multi-threaded command recording at the graph level)
+// ----------------------------------------------------------------------------
+void test_wave_decomposition_diamond() {
+    // 4-node diamond A → {B, C} → D. Wave layout: A in wave 0, B + C
+    // in wave 1, D in wave 2 → 3 waves total.
+    auto g = rg::Graph::create();
+    auto a = declare_f32_buffer(*g, "a", 4);
+    auto b_buf = declare_f32_buffer(*g, "b", 4);
+    auto c_buf = declare_f32_buffer(*g, "c", 4);
+    auto d_buf = declare_f32_buffer(*g, "d", 4);
+    FillOp opA{a, 1.0f, 4};
+    CopyOp opB{a, b_buf, 1, 0, 4};
+    CopyOp opC{a, c_buf, 1, 0, 4};
+    AddOp  opD{b_buf, c_buf, d_buf, 4};
+    auto add = [&](const char* n, void (*r)(rg::ExecutionContext&, void*) noexcept,
+                   void* uctx, cardinal::vector<rg::ResourceAccess> ax) {
+        rg::PassDesc pd; pd.name = n; pd.kind = rg::PassKind::Compute;
+        pd.accesses = cardinal::move(ax); pd.record = r; pd.user_ctx = uctx;
+        return g->add_pass(cardinal::move(pd));
+    };
+    const cardinal::u32 id_a = add("A", fill_record, &opA, {
+        rg::ResourceAccess{a, rg::AccessMode::Write, 0}});
+    const cardinal::u32 id_b = add("B", copy_scale_record, &opB, {
+        rg::ResourceAccess{a, rg::AccessMode::Read, 0},
+        rg::ResourceAccess{b_buf, rg::AccessMode::Write, 1}});
+    const cardinal::u32 id_c = add("C", copy_scale_record, &opC, {
+        rg::ResourceAccess{a, rg::AccessMode::Read, 0},
+        rg::ResourceAccess{c_buf, rg::AccessMode::Write, 1}});
+    const cardinal::u32 id_d = add("D", add_record, &opD, {
+        rg::ResourceAccess{b_buf, rg::AccessMode::Read, 0},
+        rg::ResourceAccess{c_buf, rg::AccessMode::Read, 1},
+        rg::ResourceAccess{d_buf, rg::AccessMode::Write, 2}});
+    CHECK(g->compile());
+    CHECK(g->wave_count() == 3u);
+    const auto& wave_of = g->wave_of_pass();
+    CHECK(wave_of[id_a] == 0u);
+    CHECK(wave_of[id_b] == 1u);
+    CHECK(wave_of[id_c] == 1u);     // B and C share wave 1
+    CHECK(wave_of[id_d] == 2u);
+}
+
+void test_threaded_backend_produces_same_output_as_cpu() {
+    // Build a 4-pass diamond identical to CpuBackend's reference path
+    // and verify ThreadedCpuBackend produces byte-identical output.
+    auto build_graph = [](rg::Graph& g, FillOp* opA, CopyOp* opB, CopyOp* opC,
+                          AddOp* opD, rg::ResourceHandle& out_d) {
+        auto a = declare_f32_buffer(g, "a", 4);
+        auto b_buf = declare_f32_buffer(g, "b", 4);
+        auto c_buf = declare_f32_buffer(g, "c", 4);
+        out_d = declare_f32_buffer(g, "d", 4);
+        opA->out = a; opA->value = 5.0f; opA->count = 4;
+        opB->in = a; opB->out = b_buf; opB->scale = 2.0f; opB->bias = 0.0f; opB->count = 4;
+        opC->in = a; opC->out = c_buf; opC->scale = 3.0f; opC->bias = 0.0f; opC->count = 4;
+        opD->a = b_buf; opD->b = c_buf; opD->out = out_d; opD->count = 4;
+        auto add = [&](const char* n, void (*r)(rg::ExecutionContext&, void*) noexcept,
+                       void* uctx, cardinal::vector<rg::ResourceAccess> ax) {
+            rg::PassDesc pd; pd.name = n; pd.kind = rg::PassKind::Compute;
+            pd.accesses = cardinal::move(ax); pd.record = r; pd.user_ctx = uctx;
+            g.add_pass(cardinal::move(pd));
+        };
+        add("A", fill_record, opA, {rg::ResourceAccess{a, rg::AccessMode::Write, 0}});
+        add("B", copy_scale_record, opB, {
+            rg::ResourceAccess{a, rg::AccessMode::Read, 0},
+            rg::ResourceAccess{b_buf, rg::AccessMode::Write, 1}});
+        add("C", copy_scale_record, opC, {
+            rg::ResourceAccess{a, rg::AccessMode::Read, 0},
+            rg::ResourceAccess{c_buf, rg::AccessMode::Write, 1}});
+        add("D", add_record, opD, {
+            rg::ResourceAccess{b_buf, rg::AccessMode::Read, 0},
+            rg::ResourceAccess{c_buf, rg::AccessMode::Read, 1},
+            rg::ResourceAccess{out_d, rg::AccessMode::Write, 2}});
+    };
+    FillOp fA1{}, fA2{}; CopyOp fB1{}, fB2{}, fC1{}, fC2{}; AddOp fD1{}, fD2{};
+    auto g1 = rg::Graph::create(); auto g2 = rg::Graph::create();
+    rg::ResourceHandle d1, d2;
+    build_graph(*g1, &fA1, &fB1, &fC1, &fD1, d1);
+    build_graph(*g2, &fA2, &fB2, &fC2, &fD2, d2);
+    CHECK(g1->compile());
+    CHECK(g2->compile());
+
+    auto cpu = rg::CpuBackend::create();
+    auto thr = rg::ThreadedCpuBackend::create();
+    cpu->execute(*g1);
+    thr->execute(*g2);
+    auto cpu_d = cpu->buffer_contents(d1);
+    auto thr_d = thr->buffer_contents(d2);
+    CHECK(cpu_d.size() == thr_d.size());
+    for (cardinal::usize i = 0; i < cpu_d.size(); ++i) CHECK(cpu_d[i] == thr_d[i]);
+    // Expected: a = 5, b = 10, c = 15, d = 25.
+    const float* df = reinterpret_cast<const float*>(thr_d.data());
+    for (int i = 0; i < 4; ++i) CHECK(df[i] == 25.0f);
+}
+
+void test_threaded_backend_wave_stats_populated() {
+    auto g = rg::Graph::create();
+    auto a = declare_f32_buffer(*g, "a", 4);
+    auto b_buf = declare_f32_buffer(*g, "b", 4);
+    auto c_buf = declare_f32_buffer(*g, "c", 4);
+    FillOp opA{a, 1.0f, 4};
+    CopyOp opB{a, b_buf, 1, 0, 4};
+    CopyOp opC{a, c_buf, 1, 0, 4};
+    auto add = [&](const char* n, void (*r)(rg::ExecutionContext&, void*) noexcept,
+                   void* uctx, cardinal::vector<rg::ResourceAccess> ax) {
+        rg::PassDesc pd; pd.name = n; pd.kind = rg::PassKind::Compute;
+        pd.accesses = cardinal::move(ax); pd.record = r; pd.user_ctx = uctx;
+        g->add_pass(cardinal::move(pd));
+    };
+    add("A", fill_record, &opA, {rg::ResourceAccess{a, rg::AccessMode::Write, 0}});
+    add("B", copy_scale_record, &opB, {
+        rg::ResourceAccess{a, rg::AccessMode::Read, 0},
+        rg::ResourceAccess{b_buf, rg::AccessMode::Write, 1}});
+    add("C", copy_scale_record, &opC, {
+        rg::ResourceAccess{a, rg::AccessMode::Read, 0},
+        rg::ResourceAccess{c_buf, rg::AccessMode::Write, 1}});
+    CHECK(g->compile());
+    auto thr = rg::ThreadedCpuBackend::create();
+    thr->execute(*g);
+    // 2 waves (A in 0, B+C in 1).
+    CHECK(thr->waves().size() == sz(2));
+    CHECK(thr->waves()[0].pass_count == 1u);
+    CHECK(thr->waves()[1].pass_count == 2u);
+    // Speedup is well-defined (>= 0); without a real pool bound the
+    // parallel_for falls back to serial so total ≈ serial_est, speedup ≈ 1.
+    CHECK(thr->speedup() > 0.0f);
+}
+
+// ----------------------------------------------------------------------------
+// FramePacer — frame timing + target-FPS sleep budget (AEGIS Block 13)
+// ----------------------------------------------------------------------------
+void test_frame_pacer_basic_stats() {
+    namespace rd = cardinal::render;
+    auto p = rd::FramePacer::create(60, rd::FramePacerMode::Uncapped);
+    // Inject 10 synthetic frames at 16.67 ms each (60 FPS).
+    for (int i = 0; i < 10; ++i) p->inject_frame_ms(16.67f);
+    auto s = p->stats();
+    CHECK(s.frames_observed == 10u);
+    CHECK(s.frames_dropped == 0u);
+    CHECK(s.avg_frame_ms >= 16.6f && s.avg_frame_ms <= 16.7f);
+    CHECK(s.achieved_fps >= 59.0f && s.achieved_fps <= 61.0f);
+    CHECK(s.jitter_ms < 0.01f);    // identical frames → zero jitter
+}
+
+void test_frame_pacer_jitter_detection() {
+    namespace rd = cardinal::render;
+    auto p = rd::FramePacer::create(60, rd::FramePacerMode::Uncapped);
+    // Alternate 10ms and 30ms frames → high jitter, avg = 20ms.
+    for (int i = 0; i < 10; ++i) {
+        p->inject_frame_ms((i % 2 == 0) ? 10.0f : 30.0f);
+    }
+    auto s = p->stats();
+    CHECK(s.avg_frame_ms >= 19.9f && s.avg_frame_ms <= 20.1f);
+    CHECK(s.jitter_ms >= 9.9f && s.jitter_ms <= 10.1f);   // stddev of [10, 30] = 10
+    CHECK(s.min_frame_ms >= 9.99f && s.min_frame_ms <= 10.01f);
+    CHECK(s.max_frame_ms >= 29.99f && s.max_frame_ms <= 30.01f);
+}
+
+void test_frame_pacer_drop_count() {
+    namespace rd = cardinal::render;
+    auto p = rd::FramePacer::create(60, rd::FramePacerMode::Uncapped);
+    // Target 60 FPS = 16.67ms. Drop threshold = 2× = 33.33ms.
+    p->inject_frame_ms(10.0f);
+    p->inject_frame_ms(20.0f);
+    p->inject_frame_ms(40.0f);     // drop
+    p->inject_frame_ms(100.0f);    // drop
+    auto s = p->stats();
+    CHECK(s.frames_dropped == 2u);
+}
+
+void test_frame_pacer_set_target_clamps() {
+    namespace rd = cardinal::render;
+    auto p = rd::FramePacer::create(60, rd::FramePacerMode::Uncapped);
+    p->set_target_fps(0);           // clamped to 1
+    CHECK(p->stats().target_fps == 1u);
+    p->set_target_fps(9999);        // clamped to 1000
+    CHECK(p->stats().target_fps == 1000u);
+}
+
+void test_frame_pacer_reset() {
+    namespace rd = cardinal::render;
+    auto p = rd::FramePacer::create(60);
+    for (int i = 0; i < 5; ++i) p->inject_frame_ms(16.67f);
+    CHECK(p->stats().frames_observed == 5u);
+    p->reset();
+    CHECK(p->stats().frames_observed == 0u);
+}
+
+void test_aegis_runner_threaded_mode_executes() {
+    namespace rd = cardinal::render;
+    gpu::AegisConfig cfg;
+    cfg.width = 4; cfg.height = 4;
+    auto runner = rd::AegisPipelineRunner::create(cfg, rd::AegisBackendMode::ThreadedCpu);
+    CHECK(runner->backend_mode() == rd::AegisBackendMode::ThreadedCpu);
+    auto& g = runner->graph();
+    gpu::AegisSceneInputs in;
+    in.tris         = g.declare_buffer(rg::BufferDesc{"tris", 0, 0, true});
+    in.material_ids = g.declare_buffer(rg::BufferDesc{"mids", 0, 0, true});
+    in.materials    = g.declare_buffer(rg::BufferDesc{"mats", 0, 0, true});
+    in.lights       = g.declare_buffer(rg::BufferDesc{"lts",  16 * sizeof(float), 0, true});
+    in.ambient      = g.declare_buffer(rg::BufferDesc{"amb",  12, 0, true});
+    in.view_proj    = g.declare_buffer(rg::BufferDesc{"vp",   64, 0, true});
+    in.camera_dir   = g.declare_buffer(rg::BufferDesc{"dir",  12, 0, true});
+    in.triangle_count = 0;
+    CHECK(runner->build(in));
+    runner->execute();
+    // Compile stats reflect a real AEGIS graph (>= 10 passes).
+    CHECK(runner->compile_stats().passes > 10u);
+}
+
 void test_pipeline_id_includes_aegis() {
     // Verify that the registry slot for the AEGIS pipeline exists in the
     // PipelineId enum (forward-compat marker for the AegisRenderPipeline
@@ -4285,6 +4496,15 @@ int main() {
     test_dof_far_pixels_get_blurred();
     test_dof_nan_safe();
     test_color_dof_hlsl_nonempty();
+    test_wave_decomposition_diamond();
+    test_threaded_backend_produces_same_output_as_cpu();
+    test_threaded_backend_wave_stats_populated();
+    test_frame_pacer_basic_stats();
+    test_frame_pacer_jitter_detection();
+    test_frame_pacer_drop_count();
+    test_frame_pacer_set_target_clamps();
+    test_frame_pacer_reset();
+    test_aegis_runner_threaded_mode_executes();
     test_pipeline_id_includes_aegis();
 
     test_zero_size_buffer_safe();

@@ -192,6 +192,13 @@ public:
     const cardinal::vector<u32>& execution_order() const noexcept { return order_; }
     CompileStats stats() const noexcept { return stats_; }
 
+    // Wave decomposition for parallel execution (consumed by
+    // ThreadedCpuBackend). wave_of[pass_id] = max(wave_of[predecessor]) + 1.
+    // Passes in the same wave share no dependency edges → safe to run
+    // concurrently. Computed lazily inside compile() after the topo sort.
+    const cardinal::vector<u32>& wave_of_pass() const noexcept { return wave_of_; }
+    u32 wave_count() const noexcept { return wave_count_; }
+
     // ---- read-only accessors after compile -----------------------------
     // Sentinel at index 0 holds an invalid record so id 0 stays reserved
     // for "no handle / no pass". Subtract it from the public count.
@@ -218,6 +225,8 @@ private:
     cardinal::vector<Resource> resources_;   // [0] is sentinel (id 0 = invalid)
     cardinal::vector<PassDesc> passes_;      // [0] is sentinel
     cardinal::vector<u32>      order_;       // pass ids in execution order
+    cardinal::vector<u32>      wave_of_;     // wave_of_[pass_id] = topological depth
+    u32                        wave_count_   {0};
     ResourceHandle             output_;
     CompileStats               stats_;
 };
@@ -295,6 +304,56 @@ private:
 
     cardinal::vector<cardinal::vector<u8>> storage_;   // index by resource id
     cardinal::vector<PassTrace>            trace_;
+};
+
+// ---------------------------------------------------------------------------
+// ThreadedCpuBackend — parallel pass execution. Decomposes the topo
+// order into "waves": passes within a wave share no dependency edges
+// and can run concurrently on different worker threads. Each wave
+// dispatches via cardinal::async::parallel_for_each (falls back to
+// serial when no async pool is bound).
+//
+// This is the DX12/Vulkan "multi-threaded command recording" model
+// expressed at the graph level: every Pass becomes one work item, and
+// the wave decomposition guarantees no two concurrent passes share a
+// resource (RAW / WAW / WAR edges all force serialisation). For an
+// AEGIS frame with M=14 passes, typical waves are 1-3 passes wide
+// (mostly serial), but the cull/transform/light-cull/post chain has
+// 4-wide waves under realistic scene topology.
+//
+// Stats: wall-clock per wave, total threaded time, serial-equivalent
+// estimate (= sum of all pass times), and the achieved CPU speedup.
+// Hosts use the speedup metric to decide whether the cost of
+// std::thread synchronisation pays off vs CpuBackend's pure-serial
+// execution. Below ~3 passes per wave the speedup is typically < 1.0
+// and CpuBackend wins.
+// ---------------------------------------------------------------------------
+class ThreadedCpuBackend : public Backend {
+public:
+    static cardinal::shared_ptr<ThreadedCpuBackend> create();
+
+    void execute(Graph& g) noexcept override;
+
+    cardinal::vector<u8> buffer_contents(ResourceHandle h) const;
+
+    struct WaveStats {
+        u32   wave_id    {0};
+        u32   pass_count {0};
+        float duration_us {0.0f};
+    };
+    const cardinal::vector<WaveStats>& waves() const noexcept { return waves_; }
+    float total_us()      const noexcept { return total_us_; }
+    float serial_est_us() const noexcept { return serial_est_us_; }
+    // Speedup = serial_est / total. > 1 means parallel was faster.
+    float speedup()       const noexcept;
+    void reset() noexcept;
+
+private:
+    ThreadedCpuBackend() = default;
+    cardinal::vector<cardinal::vector<u8>> storage_;
+    cardinal::vector<WaveStats>            waves_;
+    float                                  total_us_      {0.0f};
+    float                                  serial_est_us_ {0.0f};
 };
 
 // ---------------------------------------------------------------------------
