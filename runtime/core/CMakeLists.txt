@@ -53,6 +53,12 @@ set(CARDINAL_CORE_HEADERS
     # empty no-op type on non-Windows so cross-platform code can hold it
     # unconditionally without #ifdef ladders at the use site.
     include/cardinal/core/kernel_object_attribute.hpp
+    # Flat (sorted-vector-backed) associative containers — cache-tight
+    # std::set / std::map drop-ins for build-once-read-many tables, small
+    # N, and iteration-heavy paths. Modernised port of Pearl Abyss
+    # BinarySet/BinaryMap (binary-search lookup on a flat array).
+    include/cardinal/core/flat_set.hpp
+    include/cardinal/core/flat_map.hpp
     # Pearl Abyss Pa* surface modernised onto C++20. Umbrella + per-component
     # sub-headers under cardinal/core/pa/ — used as the porting bridge when
     # bringing CrimsonDesert-style server / tooling code into cardinal::core.
