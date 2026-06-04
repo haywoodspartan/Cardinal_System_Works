@@ -71,6 +71,65 @@ void test_thread_lock() {
 }
 
 // ---------------------------------------------------------------------------
+// PaAccess — attach/detach gate with embedded lock + AccessGuard RAII.
+// ---------------------------------------------------------------------------
+void test_access() {
+    Access<ThreadLock> acc;
+    CHECK(acc.is_opened());
+    CHECK(acc.is_attachable());
+    CHECK(acc.attach_count() == 0);
+
+    // First attach — gate open, count goes 0 → 1, returns true.
+    CHECK(acc.attach());
+    CHECK(acc.attach_count() == 1);
+    // Second attach — still open, count 1 → 2, returns true.
+    CHECK(acc.attach());
+    CHECK(acc.attach_count() == 2);
+
+    // detach #1 — gate still open, so even though count drops the
+    // "you may now destroy" signal is false (others may attach again).
+    CHECK(acc.detach() == false);
+    CHECK(acc.attach_count() == 1);
+
+    // Producer begins shutdown: close the gate.
+    acc.set_attachable(false);
+    CHECK(!acc.is_attachable());
+
+    // A new attach attempt now fails — count stays at 1.
+    CHECK(acc.attach() == false);
+    CHECK(acc.attach_count() == 1);
+
+    // The remaining holder detaches. Gate is closed AND count reaches 0,
+    // so detach returns true — caller is the last holder and may destroy.
+    CHECK(acc.detach() == true);
+    CHECK(acc.attach_count() == 0);
+
+    // Recycle the access object back into use.
+    acc.set_attachable_and_reset_attach_count();
+    CHECK(acc.is_attachable());
+    CHECK(acc.attach_count() == 0);
+
+    // AccessGuard — RAII detach. Caller checks the attach() result before
+    // constructing the guard (PA convention).
+    {
+        const bool got = acc.attach();
+        CHECK(got);
+        AccessGuard<Access<ThreadLock>> g(acc);
+        CHECK(acc.attach_count() == 1);
+        // guard's dtor will fire detach
+    }
+    CHECK(acc.attach_count() == 0);
+
+    // NullLock specialisation — single-thread path, lock ops are no-ops
+    // but the gate + count semantics must still work.
+    Access<NullLock> single_thread;
+    CHECK(single_thread.attach());
+    CHECK(single_thread.attach_count() == 1);
+    single_thread.set_attachable(false);
+    CHECK(single_thread.detach() == true);
+}
+
+// ---------------------------------------------------------------------------
 // PaString
 // ---------------------------------------------------------------------------
 void test_string() {
@@ -451,6 +510,7 @@ int main() {
 
     test_interlock();
     test_thread_lock();
+    test_access();
     test_string();
     test_sync_queue();
     test_dedup_queue();

@@ -58,6 +58,7 @@ set(CARDINAL_CORE_HEADERS
     # bringing CrimsonDesert-style server / tooling code into cardinal::core.
     include/cardinal/core/pa.hpp
     include/cardinal/core/pa/lock.hpp
+    include/cardinal/core/pa/access.hpp
     include/cardinal/core/pa/string.hpp
     include/cardinal/core/pa/queue.hpp
     include/cardinal/core/pa/wall_time.hpp

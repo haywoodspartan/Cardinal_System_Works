@@ -11,6 +11,7 @@
 // =============================================================================
 
 #include <cardinal/core/pa/lock.hpp>
+#include <cardinal/core/pa/access.hpp>
 #include <cardinal/core/pa/string.hpp>
 #include <cardinal/core/pa/queue.hpp>
 #include <cardinal/core/pa/wall_time.hpp>
