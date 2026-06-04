@@ -48,6 +48,11 @@ set(CARDINAL_CORE_HEADERS
     # SIMD math — runtime-dispatched vector ops + std::vector aliases.
     include/cardinal/core/simd_math.hpp
     include/cardinal/core/typedefs.hpp
+    # Windows kernel-object attribute wrapper — RAII over OBJECT_ATTRIBUTES
+    # for NT API calls (NtCreateFile/Event/Mutant/Key, etc.). Builds as an
+    # empty no-op type on non-Windows so cross-platform code can hold it
+    # unconditionally without #ifdef ladders at the use site.
+    include/cardinal/core/kernel_object_attribute.hpp
 )
 
 set(CARDINAL_CORE_SOURCES
@@ -74,6 +79,10 @@ set(CARDINAL_CORE_SOURCES
     src/simd_math_avx2.cpp
     src/simd_math_avx512.cpp
     src/simd_math_dispatch.cpp
+    # KernelObjectAttribute — single TU with internal #if CARDINAL_PLATFORM_WINDOWS
+    # gate (Windows path = full impl over OBJECT_ATTRIBUTES; non-Windows path =
+    # no-op stubs so the symbol set is identical across platforms).
+    src/kernel_object_attribute.cpp
 )
 
 if(WIN32)
