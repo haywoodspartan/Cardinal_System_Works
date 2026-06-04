@@ -1,7 +1,7 @@
 #pragma once
 
 // =============================================================================
-// Cardinal core — pa::StringA<N> / pa::StringW<N> — modern C++20 port of
+// Cardinal core — StringA<N> / StringW<N> — modern C++20 port of
 // Pearl Abyss PaString.h's fixed-capacity stack strings.
 //
 // Design: stack-allocated N+1 buffers (room for NUL), no heap, never throws.
@@ -32,7 +32,7 @@
 #include <Windows.h>   // WideCharToMultiByte / MultiByteToWideChar
 #endif
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 // ---------------------------------------------------------------------------
 // detail — narrow ↔ wide conversion helpers, codepage UTF-8 on Win.
@@ -212,4 +212,4 @@ private:
     wchar_t buffer_[Capacity + 1u];
 };
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core

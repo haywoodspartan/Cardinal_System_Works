@@ -1,6 +1,6 @@
-# Cardinal — pa::* regression suite. Exercises every modernised port of the
+# Cardinal — * regression suite. Exercises every modernised port of the
 # Pearl Abyss PaLock / PaFile / PaDirectory / PaQueue / PaSeh / PaString /
-# PaThread / PaTime / PaTimer surfaces under cardinal::core::pa::*.
+# PaThread / PaTime / PaTimer surfaces under cardinal::core::*.
 add_executable(Cardinal_Test_Pa main.cpp)
 target_link_libraries(Cardinal_Test_Pa PRIVATE
     cardinal::core

@@ -9,7 +9,7 @@
 // dependency here, matches the existing cardinal::core::crash strategy.
 #endif
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 // ---------------------------------------------------------------------------
 // SehCallback default impls — no-op.
@@ -217,4 +217,4 @@ i32  SehManager::dump_mini(bool) noexcept { return ENOSYS; }
 
 #endif  // CARDINAL_PLATFORM_WINDOWS
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core

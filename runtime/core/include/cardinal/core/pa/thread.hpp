@@ -1,11 +1,11 @@
 #pragma once
 
 // =============================================================================
-// Cardinal core — pa::Thread / pa::ThreadManager — modern C++20 port of
+// Cardinal core — Thread / ThreadManager — modern C++20 port of
 // Pearl Abyss PaThread.h.
 //
 // Design:
-//   * pa::Thread is a "base class with virtual Run()" — the Pa pattern many
+//   * Thread is a "base class with virtual Run()" — the Pa pattern many
 //     CrimsonDesert subsystems are built on. Subclass overrides Run(), calls
 //     Start(stackSize), Stop() to cooperatively cancel.
 //   * Under the hood we own a cardinal::jthread (std::jthread): cooperative
@@ -25,18 +25,18 @@
 #include <cardinal/core/thread.hpp>      // cardinal::jthread, stop_token
 #include <cardinal/core/atomic.hpp>      // cardinal::atomic
 #include <cardinal/core/containers.hpp>  // cardinal::vector
-#include <cardinal/core/pa/lock.hpp>     // pa::ThreadLock
+#include <cardinal/core/pa/lock.hpp>     // ThreadLock
 
 #include <string>      // std::wstring for the thread name
 #include <unordered_set>
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 using TrGroupId = i32;
 using ThreadId  = u64;
 
 // ---------------------------------------------------------------------------
-// pa::Thread — virtual Run() base class with start/stop lifecycle.
+// Thread — virtual Run() base class with start/stop lifecycle.
 // ---------------------------------------------------------------------------
 class Thread {
 public:
@@ -99,7 +99,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// pa::ThreadManager — singleton registry of live pa::Thread instances.
+// ThreadManager — singleton registry of live Thread instances.
 // ---------------------------------------------------------------------------
 class ThreadManager {
 public:
@@ -125,4 +125,4 @@ private:
     bool                                  is_opened_;
 };
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core

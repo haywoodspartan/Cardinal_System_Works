@@ -7,7 +7,7 @@
 #include <Windows.h>
 #endif
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 namespace {
 
@@ -245,4 +245,4 @@ i32 CpuUsage::reset_and_calculate_busy_rate() noexcept {
     return (sample_count_ > 0) ? (sum / static_cast<i32>(sample_count_)) : 0;
 }
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core

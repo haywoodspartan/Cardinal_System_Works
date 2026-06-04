@@ -1,14 +1,14 @@
 #pragma once
 
 // =============================================================================
-// Cardinal core — pa::SyncQueue / pa::NonDuplicableUnorderedSyncQueue /
-// pa::WaitableQueue / pa::PriorityQueue / pa::StaticCircularQueue — modern
+// Cardinal core — SyncQueue / NonDuplicableUnorderedSyncQueue /
+// WaitableQueue / PriorityQueue / StaticCircularQueue — modern
 // C++20 port of Pearl Abyss PaQueue.h.
 //
 // Surface 1:1 with the original templates (so Pa-style queue users port
 // mechanically) but the synchronisation primitive is now any type that
-// satisfies the cardinal::core::pa::ThreadLock concept (shared/exclusive
-// + try variants) — defaults to pa::ThreadLock.
+// satisfies the cardinal::core::ThreadLock concept (shared/exclusive
+// + try variants) — defaults to ThreadLock.
 //
 // Key design choices:
 //   * Backing container is std::deque by default (matches Pa) — std::vector
@@ -35,7 +35,7 @@
 #include <condition_variable>
 #include <chrono>
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 // Result codes — match Win32 sym numbers Pa already uses.
 inline constexpr i32 kQueueOk    = 0;
@@ -294,4 +294,4 @@ private:
     value_type list_[Capacity + 1u];
 };
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core

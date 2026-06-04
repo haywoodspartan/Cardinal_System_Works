@@ -1,5 +1,5 @@
 // =============================================================================
-// Cardinal — pa::* regression suite. Exercises every modernised port of the
+// Cardinal — * regression suite. Exercises every modernised port of the
 // Pearl Abyss PaLock / PaFile / PaDirectory / PaQueue / PaSeh / PaString /
 // PaThread / PaTime / PaTimer surfaces. Exit 0 = all pass.
 // =============================================================================
@@ -25,7 +25,7 @@ void check_impl(bool ok, const char* expr, int line) {
 }
 #define CHECK(x) ::check_impl(static_cast<bool>(x), #x, __LINE__)
 
-using namespace cardinal::core::pa;
+using namespace cardinal::core;
 
 // ---------------------------------------------------------------------------
 // PaLock / InterLock / ThreadLock / NullLock / lock guards
@@ -506,7 +506,7 @@ void test_seh() {
 }  // namespace
 
 int main() {
-    cardinal::log::infof("pa", "pa::* regression suite");
+    cardinal::log::infof("pa", "* regression suite");
 
     test_interlock();
     test_thread_lock();

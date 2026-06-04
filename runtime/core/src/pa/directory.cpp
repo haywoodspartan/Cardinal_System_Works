@@ -5,7 +5,7 @@
 
 namespace fs = std::filesystem;
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 namespace {
 
@@ -215,4 +215,4 @@ i32 Directory::copy(const wchar_t* from, const wchar_t* to,
     return move_or_copy(from, to, skip_name, do_make, /*move=*/false);
 }
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core

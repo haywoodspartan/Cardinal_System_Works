@@ -1,7 +1,7 @@
 #pragma once
 
 // =============================================================================
-// Cardinal core — pa::Directory — modern C++20 port of Pearl Abyss
+// Cardinal core — Directory — modern C++20 port of Pearl Abyss
 // PaDirectory.h.
 //
 // Wraps std::filesystem::directory_iterator into the begin()/next()/end()/
@@ -22,7 +22,7 @@
 #include <filesystem>
 #include <string>      // std::wstring — small allocation per Directory instance
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 // ---------------------------------------------------------------------------
 // Entry — minimal stand-in for WIN32_FIND_DATAW (the fields PA call sites
@@ -75,4 +75,4 @@ private:
     bool                                is_begin_;
 };
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core

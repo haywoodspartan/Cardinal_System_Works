@@ -1,11 +1,11 @@
 #pragma once
 
 // =============================================================================
-// Cardinal core — pa::Access<TLock> + pa::AccessGuard<TAccess> — modern
+// Cardinal core — Access<TLock> + AccessGuard<TAccess> — modern
 // C++20 port of Pearl Abyss PaAccess.h.
 //
 // Why this exists:
-//   pa::Access is a "graceful-shutdown ref-count gate" that sits in front
+//   Access is a "graceful-shutdown ref-count gate" that sits in front
 //   of any resource a producer wants to publish to consumers, then later
 //   tear down safely. The producer registers the resource and flips the
 //   gate open via SetAttachable(true); consumers call attach() to bump
@@ -26,8 +26,8 @@
 //   * mIsAttachable is std::atomic<bool> — isAttachable / SetAttachable
 //     paths take the lock for ordering with attach/detach, but the
 //     gate-check inside attach() is a relaxed atomic load.
-//   * Templated on TLock so it composes with pa::ThreadLock (default),
-//     pa::NullLock (single-thread paths) or any cardinal::shared_mutex-
+//   * Templated on TLock so it composes with ThreadLock (default),
+//     NullLock (single-thread paths) or any cardinal::shared_mutex-
 //     compatible wrapper.
 //   * AccessGuard<TAccess> is the RAII pair — attach in ctor (asserted
 //     successful by the caller), detach in dtor.
@@ -43,10 +43,10 @@
 #include <cardinal/core/atomic.hpp>
 #include <cardinal/core/pa/lock.hpp>
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 // ---------------------------------------------------------------------------
-// pa::Access<TLock> — attach/detach gate with embedded lock.
+// Access<TLock> — attach/detach gate with embedded lock.
 // ---------------------------------------------------------------------------
 template <class TLock = ThreadLock>
 class Access {
@@ -146,7 +146,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// pa::AccessGuard<TAccess> — RAII attach/detach pair. Caller is responsible
+// AccessGuard<TAccess> — RAII attach/detach pair. Caller is responsible
 // for the initial attach() success check (PA convention — the guard
 // asserts you've already attached so the destructor's detach is balanced).
 // ---------------------------------------------------------------------------
@@ -163,4 +163,4 @@ private:
     TAccess& access_;
 };
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core

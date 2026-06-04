@@ -1,15 +1,15 @@
 #pragma once
 
 // =============================================================================
-// Cardinal core — pa::Stopwatch + pa::RepeatableTimer — modern C++20 port of
+// Cardinal core — Stopwatch + RepeatableTimer — modern C++20 port of
 // Pearl Abyss PaTimer.h.
 //
-// pa::Stopwatch — std::chrono::steady_clock-backed elapsed-time meter; the
+// Stopwatch — std::chrono::steady_clock-backed elapsed-time meter; the
 // minimal "QueryPerformanceCounter + diff" pattern most Pa call sites want.
 // Coexists with cardinal::core::time (the mono-clock surface backing
 // FrameScope / FramePacer).
 //
-// pa::RepeatableTimer<TimerId, Tick> — priority-queue interval timer; same
+// RepeatableTimer<TimerId, Tick> — priority-queue interval timer; same
 // semantics as the original: register N entries with (delay, interval),
 // end_register() seals start times, wait_milliseconds() returns the time
 // until the next event and pops any already-elapsed events into the caller's
@@ -25,10 +25,10 @@
 
 #include <chrono>      // std::chrono::steady_clock
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 // ---------------------------------------------------------------------------
-// pa::Stopwatch — elapsed-time counter (steady_clock).
+// Stopwatch — elapsed-time counter (steady_clock).
 // ---------------------------------------------------------------------------
 class Stopwatch {
 public:
@@ -55,7 +55,7 @@ private:
 
 // ---------------------------------------------------------------------------
 // Default tick functor — milliseconds since process start (steady_clock).
-// Templated so pa::RepeatableTimer can be re-targeted onto a virtual clock
+// Templated so RepeatableTimer can be re-targeted onto a virtual clock
 // (server simulation tick, replay-driven tick) by injecting a different
 // TickCountFunctor — matches the original Pa template knob.
 // ---------------------------------------------------------------------------
@@ -68,7 +68,7 @@ struct DefaultTickCountFunctor {
 };
 
 // ---------------------------------------------------------------------------
-// pa::RepeatableTimer — N-entry interval timer over a configurable clock.
+// RepeatableTimer — N-entry interval timer over a configurable clock.
 // Maintains a min-heap keyed by absolute timeout tick; wait_milliseconds()
 // is O(log N) amortised.
 // ---------------------------------------------------------------------------
@@ -156,4 +156,4 @@ private:
     bool                    is_register_end_;
 };
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core

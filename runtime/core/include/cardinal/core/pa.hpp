@@ -1,7 +1,7 @@
 #pragma once
 
 // =============================================================================
-// Cardinal core — pa umbrella. Pulls in every pa::* sub-header so a porting
+// Cardinal core — pa umbrella. Pulls in every * sub-header so a porting
 // site can write `#include <cardinal/core/pa.hpp>` and get the full
 // PaLock / PaFile / PaDirectory / PaQueue / PaSeh / PaString / PaThread /
 // PaTime / PaTimer surface modernised onto C++20.

@@ -1,7 +1,7 @@
 #pragma once
 
 // =============================================================================
-// Cardinal core — pa::File / pa::SyncReadFile / pa::SyncWriteFile — modern
+// Cardinal core — File / SyncReadFile / SyncWriteFile — modern
 // C++20 port of Pearl Abyss PaFile.h.
 //
 // Surface keeps the open/close/Read/Write/Seek vocabulary; under the hood
@@ -12,7 +12,7 @@
 // Static helpers: GetSize / GetTime / GetVersion (Win-only Version Resource
 // scan; non-Windows: returns ENOSYS-equivalent).
 //
-// NOTE: pa::AsyncWriteFile (PA's overlapped-IO write path) is intentionally
+// NOTE: AsyncWriteFile (PA's overlapped-IO write path) is intentionally
 // deferred — Cardinal already has cardinal::core::io for priority async I/O
 // and there's no Pa-shaped consumer yet. Add when a real call site needs it.
 // =============================================================================
@@ -23,7 +23,7 @@
 #include <cstdio>      // FILE*, fopen, fseek, fread, fwrite
 #include <cstring>     // memcpy
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 // Pa-style seek whence values — mirror FILE_BEGIN / FILE_CURRENT / FILE_END
 // so PA call sites that pass `FILE_BEGIN` keep working.
@@ -99,4 +99,4 @@ public:
     [[nodiscard]] i32 seek(i32 offset, SeekFrom whence) const noexcept;
 };
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core

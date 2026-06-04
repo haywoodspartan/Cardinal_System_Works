@@ -7,7 +7,7 @@
 #include <Windows.h>
 #endif
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 #if CARDINAL_PLATFORM_WINDOWS
 
@@ -72,4 +72,4 @@ bool ProcessLock::try_lock_exclusive() const noexcept { return true; }
 
 #endif  // CARDINAL_PLATFORM_WINDOWS
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core

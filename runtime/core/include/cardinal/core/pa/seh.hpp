@@ -1,12 +1,12 @@
 #pragma once
 
 // =============================================================================
-// Cardinal core — pa::SehCallback / pa::SehManager — modern C++20 port of
+// Cardinal core — SehCallback / SehManager — modern C++20 port of
 // Pearl Abyss PaSeh.h.
 //
 // Wraps Windows SEH (SetUnhandledExceptionFilter + MiniDumpWriteDump) into
 // the PA call-vocabulary. Coexists with cardinal::core::crash (which already
-// owns the engine's unhandled-exception filter); pa::SehManager is the
+// owns the engine's unhandled-exception filter); SehManager is the
 // alternate API surface PA-style code uses.
 //
 // Compiles to a stub on non-Windows (set_handler returns ENOSYS-equivalent;
@@ -18,7 +18,7 @@
 #include <cardinal/core/types.hpp>
 #include <cardinal/core/platform.hpp>
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 // ---------------------------------------------------------------------------
 // SehCallback — virtual base class. Subclass + register with SehManager to
@@ -88,4 +88,4 @@ private:
     Impl* impl_;
 };
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core

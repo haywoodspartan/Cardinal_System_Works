@@ -9,7 +9,7 @@
 #include <Windows.h>
 #endif
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 namespace {
 inline FILE*       as_file(void* h)       noexcept { return static_cast<FILE*>(h); }
@@ -220,4 +220,4 @@ i32 SyncWriteFile::write(const wchar_t* utf16) noexcept {
 i32 SyncWriteFile::flush() noexcept                          { return flush_impl(); }
 i32 SyncWriteFile::seek(i32 offset, SeekFrom whence) const noexcept { return seek_impl(offset, whence); }
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core

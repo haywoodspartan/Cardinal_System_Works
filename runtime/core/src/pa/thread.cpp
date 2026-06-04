@@ -11,7 +11,7 @@
 #include <sched.h>
 #endif
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 // ---------------------------------------------------------------------------
 // ThreadManager singleton.
@@ -195,4 +195,4 @@ TrGroupId Thread::current_group_id() noexcept {
     return 0;
 }
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core

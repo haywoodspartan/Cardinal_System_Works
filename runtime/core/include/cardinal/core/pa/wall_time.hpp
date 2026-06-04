@@ -1,23 +1,23 @@
 #pragma once
 
 // =============================================================================
-// Cardinal core — pa::Time / pa::CpuTime / pa::CpuUsage — modern C++20 port
+// Cardinal core — Time / CpuTime / CpuUsage — modern C++20 port
 // of Pearl Abyss PaTime.h's wall-clock + CPU-accounting surface.
 //
 // Mapping vs. original:
-//   * pa::Time wraps std::chrono::system_clock + the calendar fields the Pa
+//   * Time wraps std::chrono::system_clock + the calendar fields the Pa
 //     code base treats as the canonical local-time struct (Year/Month/Day/
 //     Hour/Minute/Second/MillSecond/DayOfWeek). Internally we keep two
 //     representations side-by-side: a system_clock::time_point for math and
 //     a SYSTEMTIME-equivalent broken-down struct for accessors. Conversion
 //     uses std::chrono::time_point + std::chrono::current_zone() (C++20).
-//   * pa::CpuTime + pa::CpuUsage wrap Win32 GetSystemTimes (Idle/Kernel/User
+//   * CpuTime + CpuUsage wrap Win32 GetSystemTimes (Idle/Kernel/User
 //     FILETIME triple) into a portable struct. Non-Windows: all zeros (the
 //     CPU-busy meter is a Win-only feature for now — Linux equivalent is
 //     /proc/stat parsing, deferred until needed).
 //
 // Coexists with cardinal::core::time (mono clock for engine timing).
-// pa::Time is wall-clock for date-stamped logs, cron-like schedules, mail
+// Time is wall-clock for date-stamped logs, cron-like schedules, mail
 // timestamps — everything that wants real calendar fields.
 // =============================================================================
 
@@ -28,7 +28,7 @@
 #include <Windows.h>   // SYSTEMTIME, FILETIME, GetSystemTimes
 #endif
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 // Day-of-week constants matching SYSTEMTIME::wDayOfWeek (Sunday = 0).
 enum class DayOfWeek : u16 {
@@ -37,14 +37,14 @@ enum class DayOfWeek : u16 {
 };
 
 // ---------------------------------------------------------------------------
-// Free clock helpers — Pa-style globals folded under cardinal::core::pa.
+// Free clock helpers — Pa-style globals folded under cardinal::core.
 // GetUtc32/64 return seconds since the Unix epoch (PA convention).
 // ---------------------------------------------------------------------------
 [[nodiscard]] u32 get_utc_32() noexcept;   // truncates to u32 (good until 2106)
 [[nodiscard]] u64 get_utc_64() noexcept;
 
 // ---------------------------------------------------------------------------
-// pa::Time — calendar-broken-down wall clock.
+// Time — calendar-broken-down wall clock.
 // ---------------------------------------------------------------------------
 class Time {
 public:
@@ -146,4 +146,4 @@ private:
     u32     sample_count_;
 };
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core

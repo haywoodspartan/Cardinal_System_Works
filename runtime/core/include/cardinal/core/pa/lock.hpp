@@ -1,17 +1,17 @@
 #pragma once
 
 // =============================================================================
-// Cardinal core — pa::lock vocabulary, modern C++20 port of Pearl Abyss
-// CrimsonDesert's PaLock.h (pa::InterLock + pa::ThreadLock + pa::ProcessLock +
-// pa::NullLock + Shared/Exclusive/TryShared/TryExclusive lock guards).
+// Cardinal core — lock vocabulary, modern C++20 port of Pearl Abyss
+// CrimsonDesert's PaLock.h (InterLock + ThreadLock + ProcessLock +
+// NullLock + Shared/Exclusive/TryShared/TryExclusive lock guards).
 //
 // Why the port:
 //   * Pa-style code expresses concurrency in a fixed vocabulary that is
 //     friendly to porting CrimsonDesert subsystems into Cardinal — keep the
 //     names, but back them with std::atomic / std::shared_mutex / std::scoped_lock
 //     so the implementation is portable, exception-safe and ABI-clean.
-//   * `cardinal::core::pa` lives alongside (not inside) the foundation
-//     vocabulary so a call site can pull `using namespace cardinal::core::pa;`
+//   * `cardinal::core` lives alongside (not inside) the foundation
+//     vocabulary so a call site can pull `using namespace cardinal::core;`
 //     without shadowing cardinal::mutex / cardinal::shared_mutex / cardinal::atomic.
 //
 // Modernisation notes vs. original PaLock.h:
@@ -33,7 +33,7 @@
 //     misuse (e.g. SharedLockGuard<int>) fails with a readable error.
 //
 // Coexistence: This does NOT replace cardinal::mutex / cardinal::shared_mutex
-// — those remain the canonical engine surface. pa::lock exists for the
+// — those remain the canonical engine surface. lock exists for the
 // CrimsonDesert porting bridge.
 // =============================================================================
 
@@ -43,11 +43,11 @@
 #include <cardinal/core/thread.hpp>     // cardinal::shared_mutex
 #include <cardinal/core/utility.hpp>
 
-namespace cardinal::core::pa {
+namespace cardinal::core {
 
 // ---------------------------------------------------------------------------
 // InterLock — atomic primitive helpers over caller-owned integers.
-// Mirrors PA's pa::InterLock static-method surface; uses std::atomic_ref so
+// Mirrors PA's InterLock static-method surface; uses std::atomic_ref so
 // the caller's int32/int64 stays a regular variable.
 // ---------------------------------------------------------------------------
 class InterLock {
@@ -253,4 +253,4 @@ private:
     bool         is_locked_;
 };
 
-}  // namespace cardinal::core::pa
+}  // namespace cardinal::core
