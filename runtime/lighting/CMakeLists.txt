@@ -12,10 +12,12 @@ add_library(cardinal_lighting STATIC
     src/raytracer.cpp
     src/bake.cpp
     src/gpu_lighting.cpp
+    src/gpu_radiance_cache.cpp
     include/cardinal/lighting/lighting.hpp
     include/cardinal/lighting/raytracer.hpp
     include/cardinal/lighting/bake.hpp
-    include/cardinal/lighting/gpu_lighting.hpp)
+    include/cardinal/lighting/gpu_lighting.hpp
+    include/cardinal/lighting/gpu_radiance_cache.hpp)
 add_library(cardinal::lighting ALIAS cardinal_lighting)
 target_include_directories(cardinal_lighting PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)

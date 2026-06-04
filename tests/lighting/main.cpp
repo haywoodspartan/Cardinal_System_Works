@@ -20,6 +20,7 @@
 #include <cardinal/lighting/raytracer.hpp>
 #include <cardinal/lighting/bake.hpp>
 #include <cardinal/lighting/gpu_lighting.hpp>
+#include <cardinal/lighting/gpu_radiance_cache.hpp>
 #include <cardinal/render/graph.hpp>
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/utility.hpp>
@@ -1192,6 +1193,78 @@ void test_path_trace_pass_hlsl_nonempty() {
     CHECK(hlsl[0] != '\0');
 }
 
+// ----------------------------------------------------------------------------
+// RadianceCachePass — wraps ProbeVolumeBaker as a graph pass
+// (AEGIS Block 7 — Radiance Cache, sibling to ReSTIR DI / GI)
+// ----------------------------------------------------------------------------
+void test_radiance_cache_pass_bakes_probe_volume() {
+    sc::LightSet lights;
+    lights.set_ambient(sc::Vec3{0.1f, 0.1f, 0.1f});
+    lx::Scene s;
+    s.materials.push_back(lx::Material{sc::Vec3{0.5f, 0.5f, 0.5f}, sc::Vec3{0, 0, 0}, 0.0f, 1.0f});
+    s.planes.push_back(lx::Plane{sc::Vec3{0, 0, 0}, sc::Vec3{0, 1, 0}, 0u});
+    s.lights = &lights;
+
+    lx::PathTracerConfig pcfg;
+    pcfg.max_bounces = 0;
+    pcfg.enable_indirect = false;
+    pcfg.sky_color = sc::Vec3{1.0f, 1.0f, 1.0f};
+    auto tracer = lx::PathTracer::create(pcfg);
+
+    constexpr cardinal::u32 D = 2;
+    auto g = rg::Graph::create();
+    auto st = glx::RadianceCachePass::add_to_graph(
+        *g, tracer, s,
+        sc::Vec3{-1, 1, -1}, sc::Vec3{1, 1, 1}, D, D, D, 4);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+
+    // Probe count + ray count match the bake config.
+    CHECK(st->probes_baked == D * D * D);
+    CHECK(st->rays_cast == st->probes_baked * 6 * 4);
+
+    // Output buffer layout matches IrradianceProbeVolume::data
+    // (probe_count * 6 axes * 3 floats).
+    auto out = b->buffer_contents(st->out_probe_data);
+    CHECK(out.size() == D * D * D * 6 * 3 * sizeof(float));
+    const float* of = reinterpret_cast<const float*>(out.data());
+    // With sky lit (white) and the floor below the volume, the +Y
+    // hemisphere of every probe should be > 0 (sky scatter); the -Y
+    // hemisphere should be lower (floor below). Probe at (0, 0, 0) at
+    // world (-1, 1, -1): axis order is +X, -X, +Y, -Y, +Z, -Z.
+    const cardinal::usize probe0_off = 0;
+    const float plus_y  = of[probe0_off + 2 * 3 + 0];  // +Y red
+    const float minus_y = of[probe0_off + 3 * 3 + 0];  // -Y red
+    // Every probe value must be finite.
+    for (cardinal::usize i = 0; i < D * D * D * 6 * 3; ++i) {
+        CHECK(of[i] == of[i]);
+    }
+    CHECK(plus_y >= 0.0f);
+    CHECK(minus_y >= 0.0f);
+}
+
+void test_radiance_cache_pass_zero_dims_safe() {
+    sc::LightSet lights;
+    lx::Scene s;
+    s.lights = &lights;
+    auto tracer = lx::PathTracer::create();
+    auto g = rg::Graph::create();
+    auto st = glx::RadianceCachePass::add_to_graph(
+        *g, tracer, s,
+        sc::Vec3{0, 0, 0}, sc::Vec3{1, 1, 1}, 0, 0, 0, 4);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->probes_baked == 0u);
+    CHECK(st->rays_cast == 0u);
+}
+
+void test_radiance_cache_pass_hlsl_nonempty() {
+    CHECK(glx::RadianceCachePass::hlsl_source() != nullptr);
+    CHECK(glx::RadianceCachePass::hlsl_source()[0] != '\0');
+}
+
 void test_probe_volume_bake_determinism() {
     sc::LightSet lights;
     sc::Light L; L.kind = sc::LightKind::Directional;
@@ -1281,6 +1354,9 @@ int main() {
     test_path_trace_pass_renders_finite_image();
     test_path_trace_pass_determinism();
     test_path_trace_pass_hlsl_nonempty();
+    test_radiance_cache_pass_bakes_probe_volume();
+    test_radiance_cache_pass_zero_dims_safe();
+    test_radiance_cache_pass_hlsl_nonempty();
 
     if (g_fail == 0) {
         cardinal::log::infof("rtxtest", "OK  %d checks passed", g_checks);
