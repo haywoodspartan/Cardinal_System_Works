@@ -159,14 +159,26 @@ void test_circular_queue() {
     q.push(1); q.push(2); q.push(3); q.push(4);
     CHECK(!q.empty());
     CHECK(q.front() == 1);
+    // rbegin() returns the index of the most-recently-pushed element.
+    // After pushing 1..4, push_index advanced to 4; rbegin should report
+    // the slot one before push_index, i.e. slot 3 holding value 4.
+    CHECK(q.get(q.rbegin()) == 4);
     CHECK(q.pop() == 1);
     CHECK(q.pop() == 2);
     // Queue now holds [3, 4]. Pushing 3 more drives the buffer to its
     // capacity (4 live) — the oldest (3) is overwritten on the 3rd push.
     // Final state: [4, 5, 6, 7].
     q.push(5); q.push(6); q.push(7);
+    // After the wrap, rbegin should still report the latest push (7).
+    CHECK(q.get(q.rbegin()) == 7);
     CHECK(q.pop() == 4);
     CHECK(q.pop() == 5);
+
+    // rbegin behavior when push_index wraps to 0: push 4 more so push_index
+    // lands at slot 0 (modulo 5), rbegin should be slot 4 (the last slot).
+    StaticCircularQueue<int, 4> w;
+    w.push(10); w.push(20); w.push(30); w.push(40); w.push(50);   // push_index = 0 after 5 pushes
+    CHECK(w.get(w.rbegin()) == 50);
 }
 
 void test_priority_queue() {
@@ -222,6 +234,44 @@ void test_time() {
     future.add_day_and_set_time(5, 12, 0, 0);
     CHECK(future.day() == 6u && future.month() == 1u);
     CHECK(future.hour() == 12u);
+
+    // Month-boundary rollover: Jan 30 + 5 days = Feb 4.
+    Time month_roll;
+    month_roll.set(2025, 1, 30, 0, 0, 0);
+    month_roll.add_day_and_set_time(5, 12, 0, 0);
+    CHECK(month_roll.month() == 2u && month_roll.day() == 4u);
+
+    // Year-boundary rollover: Dec 30 2024 + 5 days = Jan 4 2025.
+    Time year_roll;
+    year_roll.set(2024, 12, 30, 0, 0, 0);
+    year_roll.add_day_and_set_time(5, 0, 0, 0);
+    CHECK(year_roll.year() == 2025u && year_roll.month() == 1u && year_roll.day() == 4u);
+
+    // Leap-year boundary: 2024-02-28 + 1 day = 2024-02-29 (leap year).
+    Time leap_into;
+    leap_into.set(2024, 2, 28, 0, 0, 0);
+    leap_into.add_day_and_set_time(1, 12, 0, 0);
+    CHECK(leap_into.year() == 2024u && leap_into.month() == 2u && leap_into.day() == 29u);
+    CHECK(leap_into.hour() == 12u);
+    // And one more day rolls over to March.
+    leap_into.add_day_and_set_time(1, 0, 0, 0);
+    CHECK(leap_into.month() == 3u && leap_into.day() == 1u);
+
+    // Non-leap year: 2025-02-28 + 1 day jumps straight to March 1.
+    Time non_leap;
+    non_leap.set(2025, 2, 28, 0, 0, 0);
+    non_leap.add_day_and_set_time(1, 0, 0, 0);
+    CHECK(non_leap.month() == 3u && non_leap.day() == 1u);
+
+    // wait_milliseconds smoke test: target time 30 minutes from now should
+    // be > 0 and well under 24h * 3600 * 1000 (24 hours in ms).
+    Time now2;
+    const cardinal::u16 minute_now = now2.minute();
+    const cardinal::u16 minute_target = static_cast<cardinal::u16>((minute_now + 30u) % 60u);
+    const cardinal::u32 wait_ms = now2.wait_milliseconds(minute_target, 0u);
+    // 30 minutes is between 0 and ~24 hours regardless of which hour we're in.
+    CHECK(wait_ms > 0u);
+    CHECK(wait_ms <= 24u * 3600u * 1000u);
 
     CpuTime ct;
     CHECK(ct.reset() == 0);
