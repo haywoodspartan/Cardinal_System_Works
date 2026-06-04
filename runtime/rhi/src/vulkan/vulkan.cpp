@@ -3,7 +3,7 @@
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/platform.hpp>
 
-#include "rhi_vulkan_modern.h"
+#include "modern.h"
 
 // WSI platform selection — picked up by vulkan headers for the right
 // Vk*SurfaceCreateInfoKHR struct.

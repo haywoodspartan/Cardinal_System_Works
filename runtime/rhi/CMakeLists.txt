@@ -2,12 +2,22 @@ set(CARDINAL_RHI_HEADERS
     include/cardinal/rhi/rhi.hpp
 )
 
+# RHI source layout: per-backend subdirectories so incremental rebuilds
+# affect only one backend at a time, and the file tree mirrors the link
+# graph. Phase 1 (this layout) keeps each backend as a single large TU;
+# phase 2 will split vulkan.cpp / d3d12.cpp into per-class files
+# (device / swapchain / buffer / pipeline / texture / accel-structure)
+# for finer-grained parallel compile + smarter incremental rebuilds.
 set(CARDINAL_RHI_SOURCES
     src/rhi.cpp
-    src/rhi_vulkan.cpp
-    src/rhi_vulkan_alloc.cpp
-    src/rhi_vulkan_modern.cpp
-    src/rhi_d3d12.cpp
+    # ---- Vulkan backend (Linux + Windows) -----------------------------
+    src/vulkan/vulkan.cpp        # VulkanDevice + Swapchain + Buffer +
+                                 # Texture + Pipeline + AccelStructure
+    src/vulkan/alloc.cpp         # VMA glue
+    src/vulkan/modern.cpp        # NVIDIA SDK shims (DLSS/Reflex/Streamline/RTXMU)
+    # ---- D3D12 backend (Windows only) ---------------------------------
+    src/d3d12/d3d12.cpp          # D3D12Device + Swapchain + Buffer +
+                                 # Texture + Pipeline + AccelStructure
 )
 
 add_library(cardinal_rhi STATIC ${CARDINAL_RHI_SOURCES} ${CARDINAL_RHI_HEADERS})
