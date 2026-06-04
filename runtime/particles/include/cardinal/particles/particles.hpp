@@ -41,6 +41,29 @@ struct Particle {
 };
 
 // ---------------------------------------------------------------------------
+// Emitter shape — where new particles start. Default Point preserves the
+// original "spawn at origin" behaviour bit-for-bit; the other shapes
+// scatter the start position over a volume / surface centred on origin.
+// ---------------------------------------------------------------------------
+enum class EmitterShape : u32 {
+    Point  = 0,   // spawn at origin (default — back-compat with all existing call sites)
+    Sphere,       // uniform inside a ball of radius shape_extent.x
+    Box,          // uniform inside an AABB of half-extents shape_extent
+    Disk,         // uniform on a disk of radius shape_extent.x in XZ-plane
+    Cone,         // uniform inside a cone, axis +Y, height shape_extent.y, half-angle shape_angle_deg
+};
+
+// ---------------------------------------------------------------------------
+// Emitter mode — when new particles spawn. Continuous mirrors the original
+// `rate_per_second` accumulator. Burst fires `burst_count` particles at
+// every `burst_interval` second boundary; rate_per_second is ignored.
+// ---------------------------------------------------------------------------
+enum class EmitterMode : u32 {
+    Continuous = 0,   // emit at rate_per_second (default — back-compat)
+    Burst,            // emit burst_count particles every burst_interval seconds
+};
+
+// ---------------------------------------------------------------------------
 // EmitterDesc — authoring data. Ranges are sampled uniformly between
 // _min/_max each spawn; set min == max for a fixed value.
 // ---------------------------------------------------------------------------
@@ -68,6 +91,24 @@ struct EmitterDesc {
     u32  max_particles{1024};
     bool emitting{true};
     u32  rng_seed{1337};
+
+    // ---- Shape + mode (added in a follow-up commit; defaults match the
+    // original Point/Continuous behaviour so every existing call site
+    // keeps the same per-frame particle stream bit-for-bit).
+    EmitterShape shape           {EmitterShape::Point};
+    // Geometric extents driven by `shape`:
+    //   Sphere : x = radius
+    //   Box    : (x, y, z) = half-extents
+    //   Disk   : x = radius (xz-plane disk)
+    //   Cone   : y = height (axis up), x = base radius (= height * tan(angle))
+    //            (set shape_angle_deg below; shape_extent.x is recomputed
+    //             internally so authors only have to pick angle + height.)
+    cardinal::scene::Vec3 shape_extent{0.5f, 0.5f, 0.5f};
+    float                 shape_angle_deg{30.0f};   // Cone half-angle
+
+    EmitterMode mode            {EmitterMode::Continuous};
+    u32         burst_count     {32};    // particles per burst (Burst mode)
+    float       burst_interval  {1.0f};  // seconds between bursts (Burst mode)
 };
 
 // ---------------------------------------------------------------------------
@@ -94,6 +135,7 @@ private:
     EmitterDesc            desc_;
     cardinal::vector<Particle>  live_;
     float                  spawn_accum_{0.0f};
+    float                  burst_accum_{0.0f};  // Burst-mode interval accumulator
     u32                    rng_state_  {0};
     u64                    total_spawned_{0};
 };

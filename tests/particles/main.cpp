@@ -426,6 +426,271 @@ void test_nonfinite_dt() {
     }
 }
 
+// ---- shape sampling: every spawned particle must lie inside the
+//      authored shape volume / surface. Use a high spawn count + a
+//      zero-variance velocity so position == shape offset directly. ---
+void test_shape_point() {
+    // Point shape (the default) must spawn EXACTLY at origin — this is
+    // the back-compat invariant: every existing call site that uses
+    // default-constructed EmitterDesc gets the same per-frame state as
+    // before the shape extension landed.
+    pa::EmitterDesc d = fixed_desc();
+    d.rate_per_second = 200.0f;
+    d.shape = pa::EmitterShape::Point;   // explicit even though it's default
+    pa::Emitter e(d);
+    e.tick(0.5f);                        // spawn ~100
+    CHECK(e.live_count() > sz(50));
+    for (const pa::Particle& p : e.particles()) {
+        CHECK(p.position.x == 0.0f);
+        CHECK(p.position.y == 0.0f);
+        CHECK(p.position.z == 0.0f);
+    }
+}
+
+void test_shape_sphere() {
+    pa::EmitterDesc d = fixed_desc();
+    d.rate_per_second = 500.0f;
+    d.shape           = pa::EmitterShape::Sphere;
+    d.shape_extent    = cardinal::scene::Vec3{2.0f, 0.0f, 0.0f};  // radius 2
+    pa::Emitter e(d);
+    e.tick(1.0f);                        // spawn ~500
+    CHECK(e.live_count() > sz(200));
+    bool any_inside = false;
+    bool any_y_nonzero = false, any_x_nonzero = false;
+    for (const pa::Particle& p : e.particles()) {
+        const float r2 = p.position.x*p.position.x +
+                         p.position.y*p.position.y +
+                         p.position.z*p.position.z;
+        CHECK(r2 <= 4.0f + 1e-3f);       // inside r=2 ball
+        if (r2 > 0.0f) any_inside = true;
+        if (p.position.y != 0.0f) any_y_nonzero = true;
+        if (p.position.x != 0.0f) any_x_nonzero = true;
+    }
+    CHECK(any_inside);                   // distribution is non-degenerate
+    CHECK(any_y_nonzero);                // Sphere covers all 3 axes
+    CHECK(any_x_nonzero);
+}
+
+void test_shape_box() {
+    pa::EmitterDesc d = fixed_desc();
+    d.rate_per_second = 500.0f;
+    d.shape           = pa::EmitterShape::Box;
+    d.shape_extent    = cardinal::scene::Vec3{1.0f, 2.0f, 3.0f};  // half-extents
+    pa::Emitter e(d);
+    e.tick(1.0f);
+    CHECK(e.live_count() > sz(200));
+    bool y_range = false, z_range = false;
+    for (const pa::Particle& p : e.particles()) {
+        CHECK(p.position.x >= -1.0f - 1e-3f && p.position.x <= 1.0f + 1e-3f);
+        CHECK(p.position.y >= -2.0f - 1e-3f && p.position.y <= 2.0f + 1e-3f);
+        CHECK(p.position.z >= -3.0f - 1e-3f && p.position.z <= 3.0f + 1e-3f);
+        if (p.position.y > 1.0f || p.position.y < -1.0f) y_range = true;
+        if (p.position.z > 2.0f || p.position.z < -2.0f) z_range = true;
+    }
+    CHECK(y_range);                      // box actually uses its Y extent
+    CHECK(z_range);                      // and its Z extent
+}
+
+void test_shape_disk() {
+    pa::EmitterDesc d = fixed_desc();
+    d.rate_per_second = 500.0f;
+    d.shape           = pa::EmitterShape::Disk;
+    d.shape_extent    = cardinal::scene::Vec3{1.5f, 0.0f, 0.0f};  // radius 1.5
+    pa::Emitter e(d);
+    e.tick(1.0f);
+    CHECK(e.live_count() > sz(200));
+    for (const pa::Particle& p : e.particles()) {
+        CHECK(p.position.y == 0.0f);     // Disk is XZ-plane only
+        const float r2 = p.position.x*p.position.x + p.position.z*p.position.z;
+        CHECK(r2 <= 2.25f + 1e-3f);      // inside r=1.5 disk
+    }
+}
+
+void test_shape_cone() {
+    pa::EmitterDesc d = fixed_desc();
+    d.rate_per_second = 500.0f;
+    d.shape           = pa::EmitterShape::Cone;
+    d.shape_extent    = cardinal::scene::Vec3{0.0f, 4.0f, 0.0f};   // height 4
+    d.shape_angle_deg = 30.0f;           // half-angle 30° → max-base radius = 4*tan(30) ≈ 2.31
+    pa::Emitter e(d);
+    e.tick(1.0f);
+    CHECK(e.live_count() > sz(200));
+    for (const pa::Particle& p : e.particles()) {
+        // Apex at y=0, base at y=4. y must be in [0,4].
+        CHECK(p.position.y >= 0.0f - 1e-3f);
+        CHECK(p.position.y <= 4.0f + 1e-3f);
+        // Radius constraint: at height y, max radius = y * tan(30°).
+        const float max_r = p.position.y * 0.5774f + 1e-3f;
+        const float r     = (p.position.x*p.position.x + p.position.z*p.position.z);
+        CHECK(r <= max_r * max_r);
+    }
+}
+
+void test_shape_origin_offset() {
+    // Spawn at (10, 20, 30) with Sphere of radius 1 — every particle's
+    // distance from the origin offset must be ≤ 1.
+    pa::EmitterDesc d = fixed_desc();
+    d.rate_per_second = 200.0f;
+    d.origin          = cardinal::scene::Vec3{10.0f, 20.0f, 30.0f};
+    d.shape           = pa::EmitterShape::Sphere;
+    d.shape_extent    = cardinal::scene::Vec3{1.0f, 0.0f, 0.0f};
+    pa::Emitter e(d);
+    e.tick(0.5f);
+    CHECK(e.live_count() > sz(50));
+    for (const pa::Particle& p : e.particles()) {
+        const float dx = p.position.x - 10.0f;
+        const float dy = p.position.y - 20.0f;
+        const float dz = p.position.z - 30.0f;
+        CHECK(dx*dx + dy*dy + dz*dz <= 1.0f + 1e-3f);
+    }
+}
+
+void test_shape_nan_extent_safe() {
+    // Poisoned shape_extent / shape_angle: every spawned position must
+    // still be finite. The fz at every desc read site is what keeps the
+    // persistent particle state defined.
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    auto fin = [](float v) { return v == v && (v - v) == 0.0f; };
+    {
+        pa::EmitterDesc d = fixed_desc();
+        d.rate_per_second = 100.0f;
+        d.shape           = pa::EmitterShape::Sphere;
+        d.shape_extent    = cardinal::scene::Vec3{qnan, qnan, qnan};
+        pa::Emitter e(d);
+        e.tick(0.5f);
+        CHECK(e.live_count() >= sz(1));
+        for (const pa::Particle& p : e.particles()) {
+            CHECK(fin(p.position.x)); CHECK(fin(p.position.y)); CHECK(fin(p.position.z));
+        }
+    }
+    {
+        pa::EmitterDesc d = fixed_desc();
+        d.rate_per_second = 100.0f;
+        d.shape           = pa::EmitterShape::Cone;
+        d.shape_extent    = cardinal::scene::Vec3{0.0f, 4.0f, 0.0f};
+        d.shape_angle_deg = qnan;        // POISON
+        pa::Emitter e(d);
+        e.tick(0.5f);
+        CHECK(e.live_count() >= sz(1));
+        for (const pa::Particle& p : e.particles()) {
+            CHECK(fin(p.position.x)); CHECK(fin(p.position.y)); CHECK(fin(p.position.z));
+        }
+    }
+}
+
+// ---- burst mode: burst_count particles every burst_interval seconds,
+//      rate_per_second ignored. ----------------------------------------
+void test_burst_basic() {
+    pa::EmitterDesc d = fixed_desc();
+    d.rate_per_second = 1000.0f;          // must be IGNORED
+    d.mode            = pa::EmitterMode::Burst;
+    d.burst_count     = 10;
+    d.burst_interval  = 0.5f;
+    pa::Emitter e(d);
+    // First sub-interval tick: no burst yet (0.1 < 0.5).
+    e.tick(0.1f);
+    CHECK(e.live_count() == sz(0));
+    // Crossing the interval boundary: exactly one burst fires.
+    e.tick(0.5f);                         // accum = 0.6 → 1 burst → 10
+    CHECK(e.live_count() == sz(10));
+    // Another full interval → second burst.
+    e.tick(0.5f);                         // accum = 0.1 + 0.5 = 0.6 → 1 burst
+    CHECK(e.live_count() == sz(20));
+}
+
+void test_burst_multi_per_tick() {
+    // Long hitch crosses multiple intervals — every owed burst fires.
+    pa::EmitterDesc d = fixed_desc();
+    d.mode            = pa::EmitterMode::Burst;
+    d.burst_count     = 5;
+    d.burst_interval  = 0.1f;
+    pa::Emitter e(d);
+    e.tick(0.5f);                         // 5 intervals → 5 bursts = 25
+    CHECK(e.live_count() == sz(25));
+}
+
+void test_burst_count_zero() {
+    // Burst count of 0 is degenerate but defined — no particles spawn.
+    pa::EmitterDesc d = fixed_desc();
+    d.mode            = pa::EmitterMode::Burst;
+    d.burst_count     = 0;
+    d.burst_interval  = 0.1f;
+    pa::Emitter e(d);
+    for (int i = 0; i < 20; ++i) e.tick(0.1f);
+    CHECK(e.live_count() == sz(0));
+}
+
+void test_burst_nan_interval_safe() {
+    // Poisoned burst_interval must not produce non-finite burst_accum_
+    // or spawn an unbounded loop in one tick. The dt-fallback collapses
+    // a NaN/non-positive interval to "one burst per tick".
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    pa::EmitterDesc d = fixed_desc();
+    d.mode            = pa::EmitterMode::Burst;
+    d.burst_count     = 3;
+    d.burst_interval  = qnan;             // POISON
+    pa::Emitter e(d);
+    e.tick(0.1f);                         // expect exactly one burst → 3
+    CHECK(e.live_count() == sz(3));
+    e.tick(0.1f);                         // and another
+    CHECK(e.live_count() == sz(6));
+}
+
+void test_burst_not_emitting() {
+    // emitting=false halts bursts immediately; turning emitting back on
+    // doesn't fire a backlog (burst_accum is paused while emitting=false
+    // — except dt isn't accumulated either, so no surprise mega-burst).
+    pa::EmitterDesc d = fixed_desc();
+    d.mode            = pa::EmitterMode::Burst;
+    d.burst_count     = 4;
+    d.burst_interval  = 0.1f;
+    d.emitting        = false;
+    pa::Emitter e(d);
+    for (int i = 0; i < 10; ++i) e.tick(0.1f);
+    CHECK(e.live_count() == sz(0));
+    e.set_emitting(true);
+    e.tick(0.1f);                         // first burst after enabling
+    CHECK(e.live_count() == sz(4));
+}
+
+void test_burst_determinism() {
+    // Two emitters with same desc + same tick sequence must produce
+    // identical particles (Burst mode also bit-for-bit deterministic).
+    pa::EmitterDesc d = fixed_desc();
+    d.mode            = pa::EmitterMode::Burst;
+    d.burst_count     = 7;
+    d.burst_interval  = 0.2f;
+    d.shape           = pa::EmitterShape::Sphere;
+    d.shape_extent    = cardinal::scene::Vec3{1.0f, 0.0f, 0.0f};
+    pa::Emitter a(d);
+    pa::Emitter b(d);
+    for (int i = 0; i < 30; ++i) {
+        a.tick(0.05f);
+        b.tick(0.05f);
+    }
+    CHECK(a.live_count() == b.live_count());
+    CHECK(a.total_spawned() == b.total_spawned());
+    CHECK(a.live_count() > sz(0));
+    for (cardinal::usize i = 0; i < a.particles().size(); ++i) {
+        CHECK(peq(a.particles()[i], b.particles()[i]));
+    }
+}
+
+void test_burst_clear_resets_accum() {
+    // clear() must reset burst_accum_ too, otherwise the next tick
+    // after a clear can fire a partial-interval burst on the spot.
+    pa::EmitterDesc d = fixed_desc();
+    d.mode            = pa::EmitterMode::Burst;
+    d.burst_count     = 5;
+    d.burst_interval  = 1.0f;
+    pa::Emitter e(d);
+    e.tick(0.9f);                         // accum = 0.9 (no burst yet)
+    CHECK(e.live_count() == sz(0));
+    e.clear();                            // wipes accum to 0
+    e.tick(0.5f);                         // 0.5 < 1.0 → no burst
+    CHECK(e.live_count() == sz(0));
+}
+
 }  // namespace
 
 int main() {
@@ -438,6 +703,21 @@ int main() {
     test_system();
     test_clear_semantics();
     test_nonfinite_dt();
+    // ---- shape + mode extensions
+    test_shape_point();
+    test_shape_sphere();
+    test_shape_box();
+    test_shape_disk();
+    test_shape_cone();
+    test_shape_origin_offset();
+    test_shape_nan_extent_safe();
+    test_burst_basic();
+    test_burst_multi_per_tick();
+    test_burst_count_zero();
+    test_burst_nan_interval_safe();
+    test_burst_not_emitting();
+    test_burst_determinism();
+    test_burst_clear_resets_accum();
 
     if (g_fail == 0) {
         cardinal::log::infof("ptest", "OK  %d checks passed", g_checks);

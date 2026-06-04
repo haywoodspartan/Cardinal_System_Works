@@ -24,6 +24,79 @@ inline float rand_in(u32& s, float lo, float hi) noexcept {
     return lo + (hi - lo) * rand01(s);
 }
 
+// Sample a NaN-safe scalar from `v`, defaulting to 0 if non-finite.
+// All shape extents go through this so a poisoned EmitterDesc can't
+// produce a NaN position that becomes the particle's persistent state.
+inline float fz(float v) noexcept {
+    return cardinal::isfinite(v) ? v : 0.0f;
+}
+
+// Sample inside a unit sphere via rejection — three rand01() draws until
+// the sample lands inside. ~52% acceptance per try; we cap at 8 tries
+// (P(8 rejects) < 1e-5) and fall through to a deterministic point on
+// the unit Z axis so the spawn never stalls on a pathological RNG.
+inline cardinal::scene::Vec3 sample_unit_ball(u32& s) noexcept {
+    for (int i = 0; i < 8; ++i) {
+        const float x = rand01(s) * 2.0f - 1.0f;
+        const float y = rand01(s) * 2.0f - 1.0f;
+        const float z = rand01(s) * 2.0f - 1.0f;
+        if (x*x + y*y + z*z <= 1.0f) return {x, y, z};
+    }
+    return {0.0f, 0.0f, 1.0f};
+}
+
+// Sample inside a unit disk in the XZ plane via rejection.
+inline cardinal::scene::Vec3 sample_unit_disk_xz(u32& s) noexcept {
+    for (int i = 0; i < 8; ++i) {
+        const float x = rand01(s) * 2.0f - 1.0f;
+        const float z = rand01(s) * 2.0f - 1.0f;
+        if (x*x + z*z <= 1.0f) return {x, 0.0f, z};
+    }
+    return {0.0f, 0.0f, 1.0f};
+}
+
+// Compute the spawn offset for a given EmitterDesc — NaN-defensive at
+// every public-field read site (the desc has no setters, so a NaN
+// extent / angle reaches the persistent particle state otherwise).
+inline cardinal::scene::Vec3 sample_shape_offset(const EmitterDesc& d, u32& s) noexcept {
+    const float ex = fz(d.shape_extent.x);
+    const float ey = fz(d.shape_extent.y);
+    const float ez = fz(d.shape_extent.z);
+    switch (d.shape) {
+        case EmitterShape::Point:
+            return {0.0f, 0.0f, 0.0f};
+        case EmitterShape::Sphere: {
+            const auto p = sample_unit_ball(s);
+            return {p.x * ex, p.y * ex, p.z * ex};   // x = radius
+        }
+        case EmitterShape::Box: {
+            const float x = (rand01(s) * 2.0f - 1.0f) * ex;
+            const float y = (rand01(s) * 2.0f - 1.0f) * ey;
+            const float z = (rand01(s) * 2.0f - 1.0f) * ez;
+            return {x, y, z};
+        }
+        case EmitterShape::Disk: {
+            const auto p = sample_unit_disk_xz(s);
+            return {p.x * ex, 0.0f, p.z * ex};       // x = radius
+        }
+        case EmitterShape::Cone: {
+            // Cone with apex at origin, axis +Y, height ey.
+            // Uniform in a disk at random height fraction t∈[0,1];
+            // radius at that height = ey * tan(half_angle) * t.
+            const float angle_deg = fz(d.shape_angle_deg);
+            // Clamp angle to [0°, 89°] — tan(90°) = ∞ would poison radius.
+            const float clamped_deg = cardinal::clamp(angle_deg, 0.0f, 89.0f);
+            const float angle_rad   = clamped_deg * (3.14159265f / 180.0f);
+            const float t           = rand01(s);
+            const float y           = t * ey;
+            const float r_at_y      = ey * cardinal::tan(angle_rad) * t;
+            const auto  d_xz        = sample_unit_disk_xz(s);
+            return {d_xz.x * r_at_y, y, d_xz.z * r_at_y};
+        }
+    }
+    return {0.0f, 0.0f, 0.0f};   // unreachable; satisfies /W4 /WX
+}
+
 // Lerp two RGBA u32 colors at t∈[0,1], component-wise.
 inline u32 lerp_rgba(u32 a, u32 b, float t) noexcept {
     if (t <= 0.0f) return a;
@@ -71,10 +144,16 @@ void Emitter::spawn_one_() noexcept {
     auto fz = [](float v) noexcept {
         return cardinal::isfinite(v) ? v : 0.0f;
     };
+    // Shape-driven start position. Point shape returns {0,0,0} so this
+    // is bit-for-bit identical to the pre-shape behaviour for every
+    // existing call site (default desc has shape == Point). For other
+    // shapes the offset is sampled inside the shape's volume / surface,
+    // pre-sanitized for NaN at every extent / angle field.
+    const cardinal::scene::Vec3 shape_off = sample_shape_offset(desc_, rng_state_);
     Particle p{};
-    p.position.x   = fz(desc_.origin.x);
-    p.position.y   = fz(desc_.origin.y);
-    p.position.z   = fz(desc_.origin.z);
+    p.position.x   = fz(desc_.origin.x) + fz(shape_off.x);
+    p.position.y   = fz(desc_.origin.y) + fz(shape_off.y);
+    p.position.z   = fz(desc_.origin.z) + fz(shape_off.z);
     p.velocity.x   = rand_in(rng_state_, fz(desc_.velocity_min.x), fz(desc_.velocity_max.x));
     p.velocity.y   = rand_in(rng_state_, fz(desc_.velocity_min.y), fz(desc_.velocity_max.y));
     p.velocity.z   = rand_in(rng_state_, fz(desc_.velocity_min.z), fz(desc_.velocity_max.z));
@@ -99,13 +178,43 @@ void Emitter::tick(float dt) noexcept {
     // immortal NaN particles. This noexcept tick must no-op on such input.
     if (!(dt > 0.0f) || !cardinal::isfinite(dt)) return;
 
-    // 1) Spawn new particles using fractional accumulator (preserves rate
-    //    independent of frame rate).
-    if (desc_.emitting && desc_.rate_per_second > 0.0f) {
-        spawn_accum_ += dt * desc_.rate_per_second;
-        u32 to_spawn = static_cast<u32>(spawn_accum_);
-        spawn_accum_ -= static_cast<float>(to_spawn);
-        for (u32 i = 0; i < to_spawn; ++i) spawn_one_();
+    // 1) Spawn new particles. Two modes:
+    //    Continuous — fractional accumulator preserves rate independent
+    //                 of frame rate (the original / default path).
+    //    Burst      — fire `burst_count` particles every `burst_interval`
+    //                 seconds; rate_per_second is ignored. Multiple
+    //                 intervals per tick are supported (so a long-dt
+    //                 hitch doesn't lose bursts), capped at max_particles
+    //                 by the spawn_one_() head check.
+    if (desc_.emitting) {
+        if (desc_.mode == EmitterMode::Continuous) {
+            if (desc_.rate_per_second > 0.0f) {
+                spawn_accum_ += dt * desc_.rate_per_second;
+                u32 to_spawn = static_cast<u32>(spawn_accum_);
+                spawn_accum_ -= static_cast<float>(to_spawn);
+                for (u32 i = 0; i < to_spawn; ++i) spawn_one_();
+            }
+        } else {  // EmitterMode::Burst
+            // Sanitize burst_interval: non-finite / non-positive collapses
+            // to a single-frame interval (one burst per tick — predictable
+            // fallback that doesn't loop unboundedly).
+            const float interval = (cardinal::isfinite(desc_.burst_interval)
+                                    && desc_.burst_interval > 0.0f)
+                ? desc_.burst_interval : dt;
+            burst_accum_ += dt;
+            // Cap bursts-per-tick to 64 so a long hitch (or a tiny
+            // burst_interval) can't spawn an unbounded loop in one tick.
+            u32 bursts_this_tick = 0;
+            while (burst_accum_ >= interval && bursts_this_tick < 64u) {
+                burst_accum_ -= interval;
+                for (u32 i = 0; i < desc_.burst_count; ++i) spawn_one_();
+                ++bursts_this_tick;
+            }
+            // Defensive: if burst_accum_ went non-finite (NaN interval
+            // slipped past the guard somehow, or float drift over very
+            // long runs), reset so the next tick is well-defined.
+            if (!cardinal::isfinite(burst_accum_)) burst_accum_ = 0.0f;
+        }
     }
 
     // 2) Integrate live particles. Iterate index-style so we can swap-pop
@@ -156,6 +265,7 @@ void Emitter::tick(float dt) noexcept {
 void Emitter::clear() noexcept {
     live_.clear();
     spawn_accum_ = 0.0f;
+    burst_accum_ = 0.0f;
 }
 
 // ---------------------------------------------------------------------------
