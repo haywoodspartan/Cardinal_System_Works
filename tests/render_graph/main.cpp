@@ -14,6 +14,7 @@
 #include <cardinal/render/graph.hpp>
 #include <cardinal/render/gpu_passes.hpp>
 #include <cardinal/render/gpu_raster.hpp>
+#include <cardinal/render/gpu_geometry.hpp>
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/utility.hpp>
 #include <cardinal/core/simd_math.hpp>
@@ -1202,6 +1203,301 @@ void test_chain_clip_triangulate_raster() {
     CHECK(tri->triangles_produced == 2u);
 }
 
+// ----------------------------------------------------------------------------
+// AdaptiveGeometryPass — capability-driven tier selection + math-division
+// ----------------------------------------------------------------------------
+void test_tier_select_fp32_only_caps() {
+    gpu::GpuCapabilities caps;
+    caps.fp16_supported = false;
+    caps.fp8_supported  = false;
+    caps.fp4_supported  = false;
+    CHECK(gpu::select_tier(caps) == gpu::GeometryTier::Fp32);
+}
+
+void test_tier_select_fp16_caps() {
+    gpu::GpuCapabilities caps;
+    caps.fp16_supported = true;
+    caps.fp8_supported  = false;
+    caps.fp4_supported  = false;
+    CHECK(gpu::select_tier(caps) == gpu::GeometryTier::Fp16);
+}
+
+void test_tier_select_fp4_caps_picks_highest() {
+    gpu::GpuCapabilities caps;
+    caps.fp16_supported = true;
+    caps.fp8_supported  = true;
+    caps.fp4_supported  = true;
+    caps.max_micro_triangles_per_input = 8;
+    CHECK(gpu::select_tier(caps) == gpu::GeometryTier::Fp4);
+}
+
+void test_tier_select_capped_by_max_tier() {
+    gpu::GpuCapabilities caps;
+    caps.fp16_supported = true;
+    caps.fp8_supported  = true;
+    caps.fp4_supported  = true;
+    CHECK(gpu::select_tier(caps, gpu::GeometryTier::Fp8) == gpu::GeometryTier::Fp8);
+    CHECK(gpu::select_tier(caps, gpu::GeometryTier::Fp16) == gpu::GeometryTier::Fp16);
+}
+
+void test_tier_select_capped_by_budget() {
+    // Budget < 8 → can't pick FP4 (it needs 8 micro-tris per input).
+    gpu::GpuCapabilities caps;
+    caps.fp16_supported = true;
+    caps.fp8_supported  = true;
+    caps.fp4_supported  = true;
+    caps.max_micro_triangles_per_input = 4;
+    CHECK(gpu::select_tier(caps) == gpu::GeometryTier::Fp8);
+    caps.max_micro_triangles_per_input = 2;
+    CHECK(gpu::select_tier(caps) == gpu::GeometryTier::Fp16);
+    caps.max_micro_triangles_per_input = 1;
+    CHECK(gpu::select_tier(caps) == gpu::GeometryTier::Fp32);
+}
+
+void test_tier_properties() {
+    CHECK(gpu::properties_of(gpu::GeometryTier::Fp32).micro_triangles_per_input == 1u);
+    CHECK(gpu::properties_of(gpu::GeometryTier::Fp16).micro_triangles_per_input == 2u);
+    CHECK(gpu::properties_of(gpu::GeometryTier::Fp8 ).micro_triangles_per_input == 4u);
+    CHECK(gpu::properties_of(gpu::GeometryTier::Fp4 ).micro_triangles_per_input == 8u);
+    CHECK(gpu::properties_of(gpu::GeometryTier::Fp32).bits_per_component == 32u);
+    CHECK(gpu::properties_of(gpu::GeometryTier::Fp16).bits_per_component == 16u);
+    CHECK(gpu::properties_of(gpu::GeometryTier::Fp8 ).bits_per_component ==  8u);
+    CHECK(gpu::properties_of(gpu::GeometryTier::Fp4 ).bits_per_component ==  4u);
+    // Quantization error is monotonically increasing with lower precision.
+    const float e32 = gpu::properties_of(gpu::GeometryTier::Fp32).quantization_error_bound;
+    const float e16 = gpu::properties_of(gpu::GeometryTier::Fp16).quantization_error_bound;
+    const float e8  = gpu::properties_of(gpu::GeometryTier::Fp8 ).quantization_error_bound;
+    const float e4  = gpu::properties_of(gpu::GeometryTier::Fp4 ).quantization_error_bound;
+    CHECK(e32 <= e16);
+    CHECK(e16 <= e8);
+    CHECK(e8  <= e4);
+}
+
+cardinal::vector<float> build_tri_buffer(cardinal::u32 M) {
+    cardinal::vector<float> tris(M * 9u, 0.0f);
+    for (cardinal::u32 i = 0; i < M; ++i) {
+        // Source triangle: (0,0,0), (1,0,0), (0,1,0) — translated by i.
+        const float ox = static_cast<float>(i) * 0.25f;
+        tris[i * 9 + 0] = ox + 0.0f; tris[i * 9 + 1] = 0.0f; tris[i * 9 + 2] = 0.0f;
+        tris[i * 9 + 3] = ox + 1.0f; tris[i * 9 + 4] = 0.0f; tris[i * 9 + 5] = 0.0f;
+        tris[i * 9 + 6] = ox + 0.0f; tris[i * 9 + 7] = 1.0f; tris[i * 9 + 8] = 0.0f;
+    }
+    return tris;
+}
+
+void test_geom_pass_fp32_no_subdivision() {
+    constexpr cardinal::u32 M = 3;
+    auto tris = build_tri_buffer(M);
+    auto g = rg::Graph::create();
+    auto h = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    InitBlob blob{h, tris.data(), tris.size() * sizeof(float)};
+    add_init_pass(*g, "init", h, &blob);
+    gpu::GpuCapabilities caps;
+    caps.fp16_supported = false;   // force FP32
+    auto st = gpu::AdaptiveGeometryPass::add_to_graph(*g, h, M, caps);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+
+    CHECK(st->selected_tier == gpu::GeometryTier::Fp32);
+    CHECK(st->micro_triangles_per_input == 1u);
+    CHECK(st->micro_triangles_emitted == M);
+    CHECK(st->total_quantization_error == 0.0f);   // FP32 = no error
+
+    // Output should mirror input exactly.
+    auto out = b->buffer_contents(st->out_micro_tris);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    for (cardinal::u32 i = 0; i < M * 9; ++i) {
+        CHECK(of[i] == tris[i]);
+    }
+}
+
+void test_geom_pass_fp16_doubles_triangles() {
+    constexpr cardinal::u32 M = 5;
+    auto tris = build_tri_buffer(M);
+    auto g = rg::Graph::create();
+    auto h = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    InitBlob blob{h, tris.data(), tris.size() * sizeof(float)};
+    add_init_pass(*g, "init", h, &blob);
+    gpu::GpuCapabilities caps;
+    caps.fp16_supported = true;
+    caps.fp8_supported  = false;
+    caps.fp4_supported  = false;
+    auto st = gpu::AdaptiveGeometryPass::add_to_graph(*g, h, M, caps);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+
+    CHECK(st->selected_tier == gpu::GeometryTier::Fp16);
+    CHECK(st->micro_triangles_per_input == 2u);
+    CHECK(st->micro_triangles_emitted == M * 2u);
+    // FP16 round-trip on coords in [0, 1.25] has near-zero error.
+    CHECK(st->total_quantization_error < 0.01f);
+
+    // Output vert count check.
+    auto out = b->buffer_contents(st->out_micro_tris);
+    CHECK(out.size() == M * 2u * 9u * sizeof(float));
+}
+
+void test_geom_pass_fp8_quadruples() {
+    constexpr cardinal::u32 M = 2;
+    auto tris = build_tri_buffer(M);
+    auto g = rg::Graph::create();
+    auto h = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    InitBlob blob{h, tris.data(), tris.size() * sizeof(float)};
+    add_init_pass(*g, "init", h, &blob);
+    gpu::GpuCapabilities caps;
+    caps.fp16_supported = true;
+    caps.fp8_supported  = true;
+    caps.fp4_supported  = false;
+    auto st = gpu::AdaptiveGeometryPass::add_to_graph(*g, h, M, caps);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+
+    CHECK(st->selected_tier == gpu::GeometryTier::Fp8);
+    CHECK(st->micro_triangles_per_input == 4u);
+    CHECK(st->micro_triangles_emitted == M * 4u);
+}
+
+void test_geom_pass_fp4_octuples() {
+    constexpr cardinal::u32 M = 2;
+    auto tris = build_tri_buffer(M);
+    auto g = rg::Graph::create();
+    auto h = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    InitBlob blob{h, tris.data(), tris.size() * sizeof(float)};
+    add_init_pass(*g, "init", h, &blob);
+    gpu::GpuCapabilities caps;
+    caps.fp16_supported = true;
+    caps.fp8_supported  = true;
+    caps.fp4_supported  = true;
+    caps.max_micro_triangles_per_input = 8;
+    auto st = gpu::AdaptiveGeometryPass::add_to_graph(*g, h, M, caps);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+
+    CHECK(st->selected_tier == gpu::GeometryTier::Fp4);
+    CHECK(st->micro_triangles_per_input == 8u);
+    CHECK(st->micro_triangles_emitted == M * 8u);
+}
+
+void test_geom_pass_count_matches_buffer() {
+    constexpr cardinal::u32 M = 4;
+    auto tris = build_tri_buffer(M);
+    auto g = rg::Graph::create();
+    auto h = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    InitBlob blob{h, tris.data(), tris.size() * sizeof(float)};
+    add_init_pass(*g, "init", h, &blob);
+    gpu::GpuCapabilities caps;
+    caps.fp16_supported = true;
+    caps.fp8_supported  = true;
+    caps.fp4_supported  = false;
+    auto st = gpu::AdaptiveGeometryPass::add_to_graph(*g, h, M, caps);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto cnt = b->buffer_contents(st->out_count);
+    const cardinal::u32 c = *reinterpret_cast<const cardinal::u32*>(cnt.data());
+    CHECK(c == M * 4u);
+    CHECK(c == st->micro_triangles_emitted);
+}
+
+void test_geom_pass_determinism() {
+    constexpr cardinal::u32 M = 8;
+    auto tris = build_tri_buffer(M);
+    gpu::GpuCapabilities caps;
+    caps.fp16_supported = true;
+    caps.fp8_supported  = true;
+    caps.fp4_supported  = true;
+
+    auto run = [&](rg::ResourceHandle& out_h) {
+        auto g = rg::Graph::create();
+        auto h = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+        InitBlob blob{h, tris.data(), tris.size() * sizeof(float)};
+        add_init_pass(*g, "init", h, &blob);
+        auto st = gpu::AdaptiveGeometryPass::add_to_graph(*g, h, M, caps);
+        g->compile();
+        auto b = rg::CpuBackend::create();
+        b->execute(*g);
+        out_h = st->out_micro_tris;
+        return b;
+    };
+    rg::ResourceHandle ha, hb;
+    auto ba = run(ha);
+    auto bb = run(hb);
+    auto va = ba->buffer_contents(ha);
+    auto vb = bb->buffer_contents(hb);
+    CHECK(va.size() == vb.size());
+    for (cardinal::usize i = 0; i < va.size(); ++i) CHECK(va[i] == vb[i]);
+}
+
+void test_geom_pass_nan_input_safe() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    constexpr cardinal::u32 M = 1;
+    cardinal::vector<float> tris(M * 9u, qnan);
+    auto g = rg::Graph::create();
+    auto h = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    InitBlob blob{h, tris.data(), tris.size() * sizeof(float)};
+    add_init_pass(*g, "init", h, &blob);
+    gpu::GpuCapabilities caps;
+    caps.fp16_supported = true;
+    caps.fp8_supported  = true;
+    caps.fp4_supported  = true;
+    auto st = gpu::AdaptiveGeometryPass::add_to_graph(*g, h, M, caps);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto out = b->buffer_contents(st->out_micro_tris);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    // FP4 has 8 micro-tris × 9 floats = 72 outputs; every one must be finite.
+    for (cardinal::usize i = 0; i < out.size() / sizeof(float); ++i) {
+        CHECK(of[i] == of[i]);
+        CHECK((of[i] - of[i]) == 0.0f);
+    }
+}
+
+void test_geom_pass_quantization_error_under_bound() {
+    // FP4 has a tier error bound of 0.5 per component on [-1, 1].
+    // A 5-triangle batch with components in [0, 1.25] should stay well
+    // within total_error <= M * 9 * 0.5 = 22.5 across all 9 components.
+    constexpr cardinal::u32 M = 3;
+    auto tris = build_tri_buffer(M);
+    auto g = rg::Graph::create();
+    auto h = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    InitBlob blob{h, tris.data(), tris.size() * sizeof(float)};
+    add_init_pass(*g, "init", h, &blob);
+    gpu::GpuCapabilities caps;
+    caps.fp16_supported = true;
+    caps.fp8_supported  = true;
+    caps.fp4_supported  = true;
+    auto st = gpu::AdaptiveGeometryPass::add_to_graph(*g, h, M, caps);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    // Each output micro-triangle has 9 components; 8 micro × 3 inputs = 24 tris.
+    // Worst-case L1 error <= 24 * 9 * 0.5 = 108.
+    CHECK(st->total_quantization_error >= 0.0f);
+    CHECK(st->total_quantization_error <= 108.0f);
+    // FP32 case must always report zero error.
+    gpu::GpuCapabilities caps32;
+    caps32.fp16_supported = false;
+    auto g2 = rg::Graph::create();
+    auto h2 = g2->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+    InitBlob blob2{h2, tris.data(), tris.size() * sizeof(float)};
+    add_init_pass(*g2, "init", h2, &blob2);
+    auto st2 = gpu::AdaptiveGeometryPass::add_to_graph(*g2, h2, M, caps32);
+    CHECK(g2->compile());
+    rg::CpuBackend::create()->execute(*g2);
+    CHECK(st2->total_quantization_error == 0.0f);
+}
+
+void test_geom_pass_hlsl_nonempty() {
+    const char* hlsl = gpu::AdaptiveGeometryPass::hlsl_source();
+    CHECK(hlsl != nullptr);
+    CHECK(hlsl[0] != '\0');
+}
+
 void test_reset_clears_state() {
     auto g = rg::Graph::create();
     FillOp op{};
@@ -1262,6 +1558,22 @@ int main() {
     test_triangulate_quad();
     test_triangulate_below_three_is_empty();
     test_chain_clip_triangulate_raster();
+
+    test_tier_select_fp32_only_caps();
+    test_tier_select_fp16_caps();
+    test_tier_select_fp4_caps_picks_highest();
+    test_tier_select_capped_by_max_tier();
+    test_tier_select_capped_by_budget();
+    test_tier_properties();
+    test_geom_pass_fp32_no_subdivision();
+    test_geom_pass_fp16_doubles_triangles();
+    test_geom_pass_fp8_quadruples();
+    test_geom_pass_fp4_octuples();
+    test_geom_pass_count_matches_buffer();
+    test_geom_pass_determinism();
+    test_geom_pass_nan_input_safe();
+    test_geom_pass_quantization_error_under_bound();
+    test_geom_pass_hlsl_nonempty();
 
     test_zero_size_buffer_safe();
     test_reset_clears_state();
