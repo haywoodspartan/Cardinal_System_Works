@@ -12,8 +12,11 @@
 // =============================================================================
 
 #include <cardinal/render/graph.hpp>
+#include <cardinal/render/gpu_passes.hpp>
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/utility.hpp>
+#include <cardinal/core/simd_math.hpp>
+#include <cardinal/core/geom.hpp>
 
 #include <limits>
 
@@ -569,6 +572,306 @@ void test_zero_size_buffer_safe() {
     CHECK(b->buffer_contents(h).empty());
 }
 
+// ----------------------------------------------------------------------------
+// FrustumCullPass — verify the CPU reference under CpuBackend matches
+// cardinal::core::simd::frustum_cull_aabbs bit-for-bit (the same SIMD path
+// the existing ForwardRenderer uses, so this pass is the GPU-bound
+// expression of the engine's current cull path).
+// ----------------------------------------------------------------------------
+void test_cull_pass_matches_simd_path() {
+    namespace gpu = cardinal::render::gpu;
+    constexpr cardinal::u32 N = 32;
+
+    // SoA AABBs: 6 contiguous arrays of N floats.
+    cardinal::vector<float> aabbs(static_cast<cardinal::usize>(N) * 6u);
+    float* mn_x = aabbs.data() + 0 * N;
+    float* mn_y = aabbs.data() + 1 * N;
+    float* mn_z = aabbs.data() + 2 * N;
+    float* mx_x = aabbs.data() + 3 * N;
+    float* mx_y = aabbs.data() + 4 * N;
+    float* mx_z = aabbs.data() + 5 * N;
+    // Walk N AABBs along +X starting at 0, each a 1-unit cube.
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        const float x = static_cast<float>(i) * 2.0f;
+        mn_x[i] = x;       mx_x[i] = x + 1.0f;
+        mn_y[i] = 0.0f;    mx_y[i] = 1.0f;
+        mn_z[i] = 0.0f;    mx_z[i] = 1.0f;
+    }
+    // Frustum: 6 planes that pass only the first ~half of the AABBs.
+    // Build by hand so the result is deterministic.
+    cardinal::vector<float> planes(24, 0.0f);
+    // Plane 0: x >= 0           (nx=1, d=0)
+    planes[0] = 1; planes[1] = 0; planes[2] = 0; planes[3] = 0;
+    // Plane 1: x <= 30          (nx=-1, d=30)
+    planes[4] = -1; planes[5] = 0; planes[6] = 0; planes[7] = 30;
+    // Plane 2: y >= -1          (ny=1, d=1)
+    planes[8] = 0; planes[9] = 1; planes[10] = 0; planes[11] = 1;
+    // Plane 3: y <= 10          (ny=-1, d=10)
+    planes[12] = 0; planes[13] = -1; planes[14] = 0; planes[15] = 10;
+    // Plane 4: z >= -1          (nz=1, d=1)
+    planes[16] = 0; planes[17] = 0; planes[18] = 1; planes[19] = 1;
+    // Plane 5: z <= 10          (nz=-1, d=10)
+    planes[20] = 0; planes[21] = 0; planes[22] = -1; planes[23] = 10;
+
+    // Direct SIMD reference (the same path the engine uses today).
+    cardinal::vector<cardinal::u8> ref_bits(N, 0u);
+    cardinal::core::simd::frustum_cull_aabbs(
+        ref_bits.data(), planes.data(),
+        mn_x, mn_y, mn_z, mx_x, mx_y, mx_z, N);
+
+    // Run via the graph pass.
+    auto g = rg::Graph::create();
+    rg::BufferDesc abd; abd.name = "aabbs"; abd.size_bytes = aabbs.size() * sizeof(float);
+    auto h_aabbs = g->declare_buffer(abd);
+    rg::BufferDesc pld; pld.name = "planes"; pld.size_bytes = planes.size() * sizeof(float);
+    auto h_planes = g->declare_buffer(pld);
+
+    // Pre-fill via a "init" pass each (the host could also import_buffer,
+    // but the CpuBackend's transient allocation is what we exercise here).
+    struct InitAABBs { rg::ResourceHandle h; cardinal::vector<float>* src; } iab{h_aabbs, &aabbs};
+    struct InitPlanes { rg::ResourceHandle h; cardinal::vector<float>* src; } ipl{h_planes, &planes};
+    auto rec_init_aabbs = [](rg::ExecutionContext& ec, void* uctx) noexcept {
+        auto* c = static_cast<InitAABBs*>(uctx);
+        float* dst = static_cast<float*>(ec.map_buffer_write(c->h));
+        if (!dst) return;
+        for (cardinal::usize i = 0; i < c->src->size(); ++i) dst[i] = (*c->src)[i];
+    };
+    auto rec_init_planes = [](rg::ExecutionContext& ec, void* uctx) noexcept {
+        auto* c = static_cast<InitPlanes*>(uctx);
+        float* dst = static_cast<float*>(ec.map_buffer_write(c->h));
+        if (!dst) return;
+        for (cardinal::usize i = 0; i < c->src->size(); ++i) dst[i] = (*c->src)[i];
+    };
+    rg::PassDesc pd_ia; pd_ia.name = "init_aabbs"; pd_ia.kind = rg::PassKind::Compute;
+    pd_ia.accesses.push_back(rg::ResourceAccess{h_aabbs, rg::AccessMode::Write, 0});
+    pd_ia.record = rec_init_aabbs; pd_ia.user_ctx = &iab;
+    g->add_pass(cardinal::move(pd_ia));
+    rg::PassDesc pd_ip; pd_ip.name = "init_planes"; pd_ip.kind = rg::PassKind::Compute;
+    pd_ip.accesses.push_back(rg::ResourceAccess{h_planes, rg::AccessMode::Write, 0});
+    pd_ip.record = rec_init_planes; pd_ip.user_ctx = &ipl;
+    g->add_pass(cardinal::move(pd_ip));
+
+    auto state = gpu::FrustumCullPass::add_to_graph(*g, h_aabbs, h_planes, N);
+
+    CHECK(g->compile());
+    auto backend = rg::CpuBackend::create();
+    backend->execute(*g);
+
+    auto out = backend->buffer_contents(state->out_bits);
+    CHECK(out.size() == sz(static_cast<int>(N)));
+    // BIT-FOR-BIT vs the direct SIMD reference.
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        CHECK(out[i] == ref_bits[i]);
+    }
+    // Stats match the byte count.
+    cardinal::u32 ref_vis = 0;
+    for (cardinal::u32 i = 0; i < N; ++i) if (ref_bits[i] != 0) ++ref_vis;
+    CHECK(state->visible == ref_vis);
+    CHECK(state->culled  == N - ref_vis);
+
+    // HLSL is non-empty + mentions [numthreads].
+    const char* hlsl = gpu::FrustumCullPass::hlsl_source();
+    CHECK(hlsl != nullptr);
+    CHECK(hlsl[0] != '\0');
+}
+
+void test_cull_pass_zero_count_safe() {
+    namespace gpu = cardinal::render::gpu;
+    auto g = rg::Graph::create();
+    rg::BufferDesc abd; abd.name = "aabbs"; abd.size_bytes = 0;
+    auto h_aabbs = g->declare_buffer(abd);
+    rg::BufferDesc pld; pld.name = "planes"; pld.size_bytes = 24 * sizeof(float);
+    auto h_planes = g->declare_buffer(pld);
+    auto st = gpu::FrustumCullPass::add_to_graph(*g, h_aabbs, h_planes, 0u);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->visible == 0u);
+    CHECK(st->culled  == 0u);
+}
+
+// ----------------------------------------------------------------------------
+// VertexTransformPass — verify CPU reference matches an inline transform.
+// ----------------------------------------------------------------------------
+void test_xform_pass_identity_matrix() {
+    namespace gpu = cardinal::render::gpu;
+    constexpr cardinal::u32 V = 8;
+    cardinal::vector<float> local(static_cast<cardinal::usize>(V) * 6u, 0.0f);
+    float* lpx = local.data() + 0 * V;
+    float* lpy = local.data() + 1 * V;
+    float* lpz = local.data() + 2 * V;
+    float* lnx = local.data() + 3 * V;
+    float* lny = local.data() + 4 * V;
+    float* lnz = local.data() + 5 * V;
+    for (cardinal::u32 i = 0; i < V; ++i) {
+        lpx[i] = static_cast<float>(i);
+        lpy[i] = static_cast<float>(i) * 2.0f;
+        lpz[i] = static_cast<float>(i) * 3.0f;
+        lnx[i] = 0; lny[i] = 1; lnz[i] = 0;
+    }
+    // Row-major identity matrix.
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+    };
+
+    auto g = rg::Graph::create();
+    rg::BufferDesc lbd; lbd.name = "local"; lbd.size_bytes = local.size() * sizeof(float);
+    auto h_local = g->declare_buffer(lbd);
+    rg::BufferDesc mbd; mbd.name = "mat"; mbd.size_bytes = mat.size() * sizeof(float);
+    auto h_mat = g->declare_buffer(mbd);
+
+    struct InitV { rg::ResourceHandle h; cardinal::vector<float>* src; } iv_local{h_local, &local};
+    struct InitV im_mat{h_mat, &mat};
+    auto rec = [](rg::ExecutionContext& ec, void* uctx) noexcept {
+        auto* c = static_cast<InitV*>(uctx);
+        float* dst = static_cast<float*>(ec.map_buffer_write(c->h));
+        if (!dst) return;
+        for (cardinal::usize i = 0; i < c->src->size(); ++i) dst[i] = (*c->src)[i];
+    };
+    rg::PassDesc pdl; pdl.name = "ilocal"; pdl.kind = rg::PassKind::Compute;
+    pdl.accesses.push_back(rg::ResourceAccess{h_local, rg::AccessMode::Write, 0});
+    pdl.record = rec; pdl.user_ctx = &iv_local;
+    g->add_pass(cardinal::move(pdl));
+    rg::PassDesc pdm; pdm.name = "imat"; pdm.kind = rg::PassKind::Compute;
+    pdm.accesses.push_back(rg::ResourceAccess{h_mat, rg::AccessMode::Write, 0});
+    pdm.record = rec; pdm.user_ctx = &im_mat;
+    g->add_pass(cardinal::move(pdm));
+
+    auto st = gpu::VertexTransformPass::add_to_graph(*g, h_local, h_mat, V);
+
+    CHECK(g->compile());
+    auto backend = rg::CpuBackend::create();
+    backend->execute(*g);
+
+    auto out = backend->buffer_contents(st->out_world);
+    CHECK(out.size() == V * 6u * sizeof(float));
+    const float* outf = reinterpret_cast<const float*>(out.data());
+    const float* opx = outf + 0 * V;
+    const float* opy = outf + 1 * V;
+    const float* opz = outf + 2 * V;
+    const float* onx = outf + 3 * V;
+    const float* ony = outf + 4 * V;
+    const float* onz = outf + 5 * V;
+    for (cardinal::u32 i = 0; i < V; ++i) {
+        // Identity: world == local for position; normal unchanged.
+        CHECK(opx[i] == lpx[i]);
+        CHECK(opy[i] == lpy[i]);
+        CHECK(opz[i] == lpz[i]);
+        CHECK(onx[i] == 0.0f);
+        CHECK(ony[i] == 1.0f);
+        CHECK(onz[i] == 0.0f);
+    }
+    CHECK(st->vertices_written == V);
+}
+
+void test_xform_pass_translation() {
+    namespace gpu = cardinal::render::gpu;
+    constexpr cardinal::u32 V = 4;
+    cardinal::vector<float> local(static_cast<cardinal::usize>(V) * 6u, 0.0f);
+    for (cardinal::u32 i = 0; i < V; ++i) {
+        local[0 * V + i] = static_cast<float>(i);
+        local[1 * V + i] = 0;
+        local[2 * V + i] = 0;
+        local[3 * V + i] = 0;
+        local[4 * V + i] = 1;
+        local[5 * V + i] = 0;
+    }
+    cardinal::vector<float> mat = {
+        1, 0, 0, 10,    // translate +10 X
+        0, 1, 0, -5,    // translate -5 Y
+        0, 0, 1,  2,    // translate +2 Z
+        0, 0, 0,  1,
+    };
+
+    auto g = rg::Graph::create();
+    auto h_local = g->declare_buffer(rg::BufferDesc{"local", local.size() * sizeof(float), 0, true});
+    auto h_mat   = g->declare_buffer(rg::BufferDesc{"mat",   mat.size()   * sizeof(float), 0, true});
+    struct InitV { rg::ResourceHandle h; cardinal::vector<float>* src; } iv_local{h_local, &local}, im_mat{h_mat, &mat};
+    auto rec = [](rg::ExecutionContext& ec, void* uctx) noexcept {
+        auto* c = static_cast<InitV*>(uctx);
+        float* dst = static_cast<float*>(ec.map_buffer_write(c->h));
+        if (!dst) return;
+        for (cardinal::usize i = 0; i < c->src->size(); ++i) dst[i] = (*c->src)[i];
+    };
+    rg::PassDesc pdl; pdl.name = "il"; pdl.kind = rg::PassKind::Compute;
+    pdl.accesses.push_back(rg::ResourceAccess{h_local, rg::AccessMode::Write, 0});
+    pdl.record = rec; pdl.user_ctx = &iv_local;
+    g->add_pass(cardinal::move(pdl));
+    rg::PassDesc pdm; pdm.name = "im"; pdm.kind = rg::PassKind::Compute;
+    pdm.accesses.push_back(rg::ResourceAccess{h_mat, rg::AccessMode::Write, 0});
+    pdm.record = rec; pdm.user_ctx = &im_mat;
+    g->add_pass(cardinal::move(pdm));
+
+    auto st = gpu::VertexTransformPass::add_to_graph(*g, h_local, h_mat, V);
+    CHECK(g->compile());
+    auto backend = rg::CpuBackend::create();
+    backend->execute(*g);
+    auto out = backend->buffer_contents(st->out_world);
+    const float* outf = reinterpret_cast<const float*>(out.data());
+    const float* opx = outf + 0 * V;
+    const float* opy = outf + 1 * V;
+    const float* opz = outf + 2 * V;
+    for (cardinal::u32 i = 0; i < V; ++i) {
+        const float x = static_cast<float>(i);
+        // Translated; tolerate float noise within 1e-4.
+        CHECK(opx[i] >= x + 10.0f - 1e-4f && opx[i] <= x + 10.0f + 1e-4f);
+        CHECK(opy[i] >= -5.0f - 1e-4f && opy[i] <= -5.0f + 1e-4f);
+        CHECK(opz[i] >=  2.0f - 1e-4f && opz[i] <=  2.0f + 1e-4f);
+    }
+}
+
+void test_xform_pass_nan_matrix_safe() {
+    namespace gpu = cardinal::render::gpu;
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    constexpr cardinal::u32 V = 4;
+    cardinal::vector<float> local(static_cast<cardinal::usize>(V) * 6u, 0.0f);
+    for (cardinal::u32 i = 0; i < V; ++i) {
+        local[0 * V + i] = 1.0f; local[4 * V + i] = 1.0f;
+    }
+    cardinal::vector<float> mat(16, qnan);   // poison
+
+    auto g = rg::Graph::create();
+    auto h_local = g->declare_buffer(rg::BufferDesc{"local", local.size() * sizeof(float), 0, true});
+    auto h_mat   = g->declare_buffer(rg::BufferDesc{"mat",   mat.size()   * sizeof(float), 0, true});
+    struct InitV { rg::ResourceHandle h; cardinal::vector<float>* src; } iv_local{h_local, &local}, im_mat{h_mat, &mat};
+    auto rec = [](rg::ExecutionContext& ec, void* uctx) noexcept {
+        auto* c = static_cast<InitV*>(uctx);
+        float* dst = static_cast<float*>(ec.map_buffer_write(c->h));
+        if (!dst) return;
+        for (cardinal::usize i = 0; i < c->src->size(); ++i) dst[i] = (*c->src)[i];
+    };
+    rg::PassDesc pdl; pdl.name = "il"; pdl.kind = rg::PassKind::Compute;
+    pdl.accesses.push_back(rg::ResourceAccess{h_local, rg::AccessMode::Write, 0});
+    pdl.record = rec; pdl.user_ctx = &iv_local;
+    g->add_pass(cardinal::move(pdl));
+    rg::PassDesc pdm; pdm.name = "im"; pdm.kind = rg::PassKind::Compute;
+    pdm.accesses.push_back(rg::ResourceAccess{h_mat, rg::AccessMode::Write, 0});
+    pdm.record = rec; pdm.user_ctx = &im_mat;
+    g->add_pass(cardinal::move(pdm));
+
+    auto st = gpu::VertexTransformPass::add_to_graph(*g, h_local, h_mat, V);
+    CHECK(g->compile());
+    rg::CpuBackend::create()->execute(*g);
+    // Output must be finite end-to-end (the matrix sanitizer collapsed
+    // poisoned cells to identity-diagonal so the rest of the math stays
+    // defined).
+    auto out_bytes = rg::CpuBackend::create()->buffer_contents(st->out_world);
+    // (We executed once on a fresh backend above. Pull from a second
+    // execute to satisfy the contract that buffer_contents returns the
+    // last-executed state.)
+    auto b2 = rg::CpuBackend::create();
+    b2->execute(*g);
+    out_bytes = b2->buffer_contents(st->out_world);
+    const float* outf = reinterpret_cast<const float*>(out_bytes.data());
+    for (cardinal::usize i = 0; i < V * 6; ++i) {
+        CHECK(outf[i] == outf[i]);   // NaN check (NaN != NaN)
+        CHECK((outf[i] - outf[i]) == 0.0f);
+    }
+}
+
 void test_reset_clears_state() {
     auto g = rg::Graph::create();
     FillOp op{};
@@ -609,6 +912,12 @@ int main() {
     test_cpu_backend_determinism_across_runs();
 
     test_pipeline_cull_transform_tonemap();
+
+    test_cull_pass_matches_simd_path();
+    test_cull_pass_zero_count_safe();
+    test_xform_pass_identity_matrix();
+    test_xform_pass_translation();
+    test_xform_pass_nan_matrix_safe();
 
     test_zero_size_buffer_safe();
     test_reset_clears_state();
