@@ -929,6 +929,390 @@ void main(uint3 tid : SV_DispatchThreadID) {
 )";
 }
 
+// =============================================================================
+// WorldLabelPass — projects world anchors → screen-space records
+// =============================================================================
+namespace {
+
+void world_label_record(rg::ExecutionContext& ec, void* uctx) noexcept {
+    if (!uctx) return;
+    auto* st = static_cast<WorldLabelPass::State*>(uctx);
+    const cardinal::u32 N = st->label_count;
+    const cardinal::u32 W = st->width;
+    const cardinal::u32 H = st->height;
+
+    const float* pts  = static_cast<const float*>(ec.map_buffer_read (st->in_world_points));
+    const cardinal::u32* ids = static_cast<const cardinal::u32*>(
+        ec.map_buffer_read(st->in_label_ids));
+    const float* mat  = static_cast<const float*>(ec.map_buffer_read (st->in_matrix));
+    float*       out  = static_cast<float*>      (ec.map_buffer_write(st->out_records));
+    cardinal::u8* color = nullptr;
+    if (st->draw_anchors && st->out_color.is_valid()) {
+        color = static_cast<cardinal::u8*>(ec.map_buffer_write(st->out_color));
+    }
+
+    if (N == 0 || !pts || !ids || !mat || !out) {
+        ec.dispatch(0, 1, 1);
+        return;
+    }
+
+    // NaN-defended matrix.
+    float m[16];
+    for (int i = 0; i < 16; ++i) m[i] = fzf(mat[i], (i % 5 == 0) ? 1.0f : 0.0f);
+
+    const float hw = 0.5f * static_cast<float>(W);
+    const float hh = 0.5f * static_cast<float>(H);
+
+    const float* px = pts + 0 * N;
+    const float* py = pts + 1 * N;
+    const float* pz = pts + 2 * N;
+
+    const cardinal::u8 ar = to_u8(st->anchor_r);
+    const cardinal::u8 ag = to_u8(st->anchor_g);
+    const cardinal::u8 ab = to_u8(st->anchor_b);
+
+    cardinal::u32 visible = 0, culled = 0;
+
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        const float x = fzf(px[i], 0.0f);
+        const float y = fzf(py[i], 0.0f);
+        const float z = fzf(pz[i], 0.0f);
+        const float cx = m[0]  * x + m[1]  * y + m[2]  * z + m[3];
+        const float cy = m[4]  * x + m[5]  * y + m[6]  * z + m[7];
+        const float cz = m[8]  * x + m[9]  * y + m[10] * z + m[11];
+        const float cw = m[12] * x + m[13] * y + m[14] * z + m[15];
+
+        float sx = 0, sy = 0, sd = 1.0e30f;
+        bool vis = false;
+        if (cardinal::abs(cw) > 1.0e-8f && isf(cw) && cw > 0.0f) {
+            const float ndc_x = cx / cw;
+            const float ndc_y = cy / cw;
+            const float ndc_z = cz / cw;
+            sx = ndc_x * hw + hw;
+            sy = hh - ndc_y * hh;
+            sd = 0.5f * (ndc_z + 1.0f);
+            vis = (ndc_x >= -1.0f && ndc_x <= 1.0f &&
+                   ndc_y >= -1.0f && ndc_y <= 1.0f &&
+                   isf(sd) && sd >= 0.0f && sd <= 1.0f);
+        }
+
+        // Record layout: sx, sy, depth, visible (as float bits of u32), label_id
+        const cardinal::usize base = i * kWorldLabelRecordFloats;
+        out[base + 0] = sx;
+        out[base + 1] = sy;
+        out[base + 2] = sd;
+        const cardinal::u32 visu = vis ? 1u : 0u;
+        out[base + 3] = *reinterpret_cast<const float*>(&visu);
+        const cardinal::u32 id  = ids[i];
+        out[base + 4] = *reinterpret_cast<const float*>(&id);
+
+        if (vis) {
+            ++visible;
+            // Optional anchor marker: small 3×3 cross at (px, py).
+            if (color && W > 0 && H > 0) {
+                const int ix = static_cast<int>(sx);
+                const int iy = static_cast<int>(sy);
+                auto stamp = [&](int x_, int y_) {
+                    if (x_ < 0 || y_ < 0 ||
+                        static_cast<cardinal::u32>(x_) >= W ||
+                        static_cast<cardinal::u32>(y_) >= H) return;
+                    const cardinal::usize pix = static_cast<cardinal::usize>(y_) * W +
+                                                static_cast<cardinal::usize>(x_);
+                    color[pix * 4 + 0] = ar;
+                    color[pix * 4 + 1] = ag;
+                    color[pix * 4 + 2] = ab;
+                    color[pix * 4 + 3] = 255;
+                };
+                stamp(ix,     iy);
+                stamp(ix - 1, iy);
+                stamp(ix + 1, iy);
+                stamp(ix, iy - 1);
+                stamp(ix, iy + 1);
+            }
+        } else {
+            ++culled;
+        }
+    }
+    st->visible_count = visible;
+    st->culled_count  = culled;
+
+    ec.dispatch((N + 63) / 64, 1, 1);
+}
+
+}  // namespace
+
+cardinal::shared_ptr<WorldLabelPass::State> WorldLabelPass::add_to_graph(
+    rg::Graph& g,
+    rg::ResourceHandle in_world_points,
+    rg::ResourceHandle in_label_ids,
+    rg::ResourceHandle in_matrix,
+    cardinal::u32 label_count,
+    cardinal::u32 width, cardinal::u32 height,
+    bool draw_anchors)
+{
+    auto st = cardinal::shared_ptr<State>(new State());
+    st->in_world_points = in_world_points;
+    st->in_label_ids    = in_label_ids;
+    st->in_matrix       = in_matrix;
+    st->label_count     = label_count;
+    st->width           = width;
+    st->height          = height;
+    st->draw_anchors    = draw_anchors;
+
+    rg::BufferDesc rd;
+    rd.name         = "label.records";
+    rd.size_bytes   = static_cast<cardinal::usize>(label_count) * kWorldLabelRecordFloats * sizeof(float);
+    rd.stride_bytes = sizeof(float);
+    st->out_records = g.declare_buffer(rd);
+
+    rg::PassDesc pd;
+    pd.name = "WorldLabelPass";
+    pd.kind = rg::PassKind::Compute;
+    pd.accesses.push_back(rg::ResourceAccess{in_world_points, rg::AccessMode::Read,  0});
+    pd.accesses.push_back(rg::ResourceAccess{in_label_ids,    rg::AccessMode::Read,  1});
+    pd.accesses.push_back(rg::ResourceAccess{in_matrix,       rg::AccessMode::Read,  2});
+    pd.accesses.push_back(rg::ResourceAccess{st->out_records, rg::AccessMode::Write, 3});
+
+    if (draw_anchors && width > 0 && height > 0) {
+        rg::BufferDesc cd_;
+        cd_.name         = "label.color";
+        cd_.size_bytes   = static_cast<cardinal::usize>(width) * height * 4u;
+        cd_.stride_bytes = 4;
+        st->out_color = g.declare_buffer(cd_);
+        pd.accesses.push_back(rg::ResourceAccess{st->out_color, rg::AccessMode::ReadWrite, 4});
+    }
+    pd.record   = world_label_record;
+    pd.user_ctx = st.get();
+    pd.dispatch_x = (label_count + 63) / 64;
+    pd.dispatch_y = 1; pd.dispatch_z = 1;
+    g.add_pass(cardinal::move(pd));
+    return st;
+}
+
+const char* WorldLabelPass::hlsl_source() noexcept {
+    return R"(// Cardinal — WorldLabelPass.hlsl
+//
+// One thread per label anchor. Project, visibility-test, write one
+// LabelRecord. Optional 3×3 anchor stamp via atomic byte writes.
+ByteAddressBuffer  in_pts    : register(t0);
+ByteAddressBuffer  in_ids    : register(t1);
+ByteAddressBuffer  in_matrix : register(t2);
+RWByteAddressBuffer out_rec  : register(u0);
+RWByteAddressBuffer out_col  : register(u1);  // optional
+cbuffer Params : register(b0) {
+    uint N, width, height, draw_anchors;
+    float ar, ag, ab, _pad;
+};
+float load_f(ByteAddressBuffer b, uint o) { return asfloat(b.Load(o)); }
+[numthreads(64, 1, 1)]
+void main(uint3 tid : SV_DispatchThreadID) {
+    uint i = tid.x;
+    if (i >= N) return;
+    float x = load_f(in_pts, (0 * N + i) * 4);
+    float y = load_f(in_pts, (1 * N + i) * 4);
+    float z = load_f(in_pts, (2 * N + i) * 4);
+    float m[16]; [unroll] for (uint k = 0; k < 16; ++k) m[k] = load_f(in_matrix, k * 4);
+    float cx = m[0]*x + m[1]*y + m[2] *z + m[3];
+    float cy = m[4]*x + m[5]*y + m[6] *z + m[7];
+    float cz = m[8]*x + m[9]*y + m[10]*z + m[11];
+    float cw = m[12]*x + m[13]*y + m[14]*z + m[15];
+    float sx = 0, sy = 0, sd = 1e30; uint vis = 0;
+    if (cw > 1e-8) {
+        float nx = cx / cw, ny = cy / cw, nz = cz / cw;
+        sx = nx * (width * 0.5) + width * 0.5;
+        sy = height * 0.5 - ny * (height * 0.5);
+        sd = 0.5 * (nz + 1.0);
+        if (nx >= -1 && nx <= 1 && ny >= -1 && ny <= 1 && sd >= 0 && sd <= 1) vis = 1;
+    }
+    uint base = i * 5 * 4;
+    out_rec.Store(base + 0, asuint(sx));
+    out_rec.Store(base + 4, asuint(sy));
+    out_rec.Store(base + 8, asuint(sd));
+    out_rec.Store(base +12, vis);
+    out_rec.Store(base +16, asuint(in_ids.Load(i * 4)));
+    // Optional anchor stamp (atomic byte writes) elided — ships with the
+    // RHI compute commit alongside the rest of the WorldLabel kernel.
+}
+)";
+}
+
+// =============================================================================
+// WorldAxisGizmoPass — RGB X/Y/Z axes at world origin
+// =============================================================================
+namespace {
+
+void axis_gizmo_record(rg::ExecutionContext& ec, void* uctx) noexcept {
+    if (!uctx) return;
+    auto* st = static_cast<WorldAxisGizmoPass::State*>(uctx);
+    const cardinal::u32 W = st->width, H = st->height;
+    if (W == 0 || H == 0) { ec.dispatch(0, 1, 1); return; }
+
+    const float* mat = static_cast<const float*>(ec.map_buffer_read(st->in_matrix));
+    cardinal::u8* color = static_cast<cardinal::u8*>(ec.map_buffer_write(st->out_color));
+    float*        depth = static_cast<float*>      (ec.map_buffer_write(st->out_depth));
+    if (!mat || !color || !depth) { ec.dispatch(0, 1, 1); return; }
+
+    // The pass owns its color + depth output (declared on add_to_graph),
+    // so we clear here the same way WireframePass does. Hosts composite
+    // this onto the polygon-viewport output externally (alpha-test the
+    // gizmo color != 0 over the under-image).
+    for (cardinal::u32 i = 0; i < W * H; ++i) {
+        color[i * 4 + 0] = 0;
+        color[i * 4 + 1] = 0;
+        color[i * 4 + 2] = 0;
+        color[i * 4 + 3] = 0;          // alpha 0 = "no gizmo pixel here"
+        depth[i] = 1.0f;
+    }
+
+    float m[16];
+    for (int i = 0; i < 16; ++i) m[i] = fzf(mat[i], (i % 5 == 0) ? 1.0f : 0.0f);
+
+    const float ox = fzf(st->origin_x, 0.0f);
+    const float oy = fzf(st->origin_y, 0.0f);
+    const float oz = fzf(st->origin_z, 0.0f);
+    const float lx = fzf(st->length_x, 1.0f);
+    const float ly = fzf(st->length_y, 1.0f);
+    const float lz = fzf(st->length_z, 1.0f);
+
+    const float hw = 0.5f * static_cast<float>(W);
+    const float hh = 0.5f * static_cast<float>(H);
+
+    auto project_to_pixel = [&](float x, float y, float z,
+                                int& out_px, int& out_py, float& out_pz, bool& on_screen) {
+        const float cx = m[0]  * x + m[1]  * y + m[2]  * z + m[3];
+        const float cy = m[4]  * x + m[5]  * y + m[6]  * z + m[7];
+        const float cz = m[8]  * x + m[9]  * y + m[10] * z + m[11];
+        const float cw = m[12] * x + m[13] * y + m[14] * z + m[15];
+        on_screen = false;
+        if (cardinal::abs(cw) < 1.0e-8f || !isf(cw) || cw <= 0.0f) {
+            out_px = 0; out_py = 0; out_pz = 1.0e30f;
+            return;
+        }
+        const float nx = cx / cw;
+        const float ny = cy / cw;
+        const float nz = cz / cw;
+        out_px = static_cast<int>(nx * hw + hw);
+        out_py = static_cast<int>(hh - ny * hh);
+        out_pz = 0.5f * (nz + 1.0f);
+        on_screen = (nx >= -1.5f && nx <= 1.5f && ny >= -1.5f && ny <= 1.5f);
+    };
+
+    // Project the origin once.
+    int ox_px, ox_py; float ox_pz; bool ox_on;
+    project_to_pixel(ox, oy, oz, ox_px, ox_py, ox_pz, ox_on);
+
+    auto draw_segment = [&](float ex, float ey, float ez,
+                            cardinal::u8 cr, cardinal::u8 cg, cardinal::u8 cb,
+                            cardinal::u32& px_drawn) {
+        int ex_px, ex_py; float ex_pz; bool ex_on;
+        project_to_pixel(ox + ex, oy + ey, oz + ez, ex_px, ex_py, ex_pz, ex_on);
+        if (!ox_on && !ex_on) return;
+
+        // Inline Bresenham (deduped from WireframePass's helper to keep
+        // the gizmo pass self-contained).
+        int x0 = ox_px, y0 = ox_py, x1 = ex_px, y1 = ex_py;
+        const int dx = (x1 > x0) ? (x1 - x0) : (x0 - x1);
+        const int dy = -((y1 > y0) ? (y1 - y0) : (y0 - y1));
+        const int sx = (x0 < x1) ? 1 : -1;
+        const int sy = (y0 < y1) ? 1 : -1;
+        int err = dx + dy;
+        const float total_len = static_cast<float>((dx > -dy) ? dx : -dy);
+        int x = x0, y = y0, step = 0;
+        const int max_iter = (dx + (-dy)) + 1;
+        while (step < max_iter) {
+            if (x >= 0 && y >= 0 &&
+                static_cast<cardinal::u32>(x) < W &&
+                static_cast<cardinal::u32>(y) < H) {
+                const float t = (total_len > 0.0f)
+                    ? static_cast<float>(step) / total_len : 0.0f;
+                const float z = ox_pz + t * (ex_pz - ox_pz);
+                const cardinal::usize pix = static_cast<cardinal::usize>(y) * W +
+                                            static_cast<cardinal::usize>(x);
+                if (isf(z) && z >= 0.0f && z <= 1.0f && z <= depth[pix]) {
+                    depth[pix] = z;
+                    color[pix * 4 + 0] = cr;
+                    color[pix * 4 + 1] = cg;
+                    color[pix * 4 + 2] = cb;
+                    color[pix * 4 + 3] = 255;
+                    ++px_drawn;
+                }
+            }
+            if (x == x1 && y == y1) break;
+            const int e2 = 2 * err;
+            if (e2 >= dy) { err += dy; x += sx; }
+            if (e2 <= dx) { err += dx; y += sy; }
+            ++step;
+        }
+    };
+
+    cardinal::u32 px_drawn = 0;
+    draw_segment(lx, 0, 0, 255, 0,   0,   px_drawn);   // +X = red
+    draw_segment(0, ly, 0, 0,   255, 0,   px_drawn);   // +Y = green
+    draw_segment(0, 0, lz, 0,   0,   255, px_drawn);   // +Z = blue
+    st->axis_pixels_drawn = px_drawn;
+
+    ec.dispatch(1, 1, 1);
+}
+
+}  // namespace
+
+cardinal::shared_ptr<WorldAxisGizmoPass::State> WorldAxisGizmoPass::add_to_graph(
+    rg::Graph& g,
+    rg::ResourceHandle in_matrix,
+    cardinal::u32 width, cardinal::u32 height,
+    float origin_x, float origin_y, float origin_z,
+    float length_x, float length_y, float length_z)
+{
+    auto st = cardinal::shared_ptr<State>(new State());
+    st->in_matrix = in_matrix;
+    st->width = width; st->height = height;
+    st->origin_x = origin_x; st->origin_y = origin_y; st->origin_z = origin_z;
+    st->length_x = length_x; st->length_y = length_y; st->length_z = length_z;
+
+    rg::BufferDesc cd;
+    cd.name         = "gizmo.color";
+    cd.size_bytes   = static_cast<cardinal::usize>(width) * height * 4u;
+    cd.stride_bytes = 4;
+    st->out_color = g.declare_buffer(cd);
+
+    rg::BufferDesc dd;
+    dd.name         = "gizmo.depth";
+    dd.size_bytes   = static_cast<cardinal::usize>(width) * height * sizeof(float);
+    dd.stride_bytes = sizeof(float);
+    st->out_depth = g.declare_buffer(dd);
+
+    rg::PassDesc pd;
+    pd.name = "WorldAxisGizmoPass";
+    pd.kind = rg::PassKind::Compute;
+    pd.accesses.push_back(rg::ResourceAccess{in_matrix,     rg::AccessMode::Read,      0});
+    pd.accesses.push_back(rg::ResourceAccess{st->out_color, rg::AccessMode::ReadWrite, 1});
+    pd.accesses.push_back(rg::ResourceAccess{st->out_depth, rg::AccessMode::ReadWrite, 2});
+    pd.record   = axis_gizmo_record;
+    pd.user_ctx = st.get();
+    pd.dispatch_x = 1; pd.dispatch_y = 1; pd.dispatch_z = 1;
+    g.add_pass(cardinal::move(pd));
+    return st;
+}
+
+const char* WorldAxisGizmoPass::hlsl_source() noexcept {
+    return R"(// Cardinal — WorldAxisGizmoPass.hlsl
+// 3 threads — one per axis. Each runs Bresenham + atomic depth on its
+// segment. CPU reference walks all 3 serially.
+ByteAddressBuffer  in_matrix : register(t0);
+RWByteAddressBuffer out_color : register(u0);
+RWByteAddressBuffer out_depth : register(u1);
+cbuffer Params : register(b0) {
+    uint width, height, _p0, _p1;
+    float ox, oy, oz, _p2;
+    float lx, ly, lz, _p3;
+};
+[numthreads(3, 1, 1)]
+void main(uint3 tid : SV_DispatchThreadID) {
+    // Axis = tid.x ∈ {0, 1, 2}. Body deferred to the RHI compute commit.
+}
+)";
+}
+
 const char* WireframePass::hlsl_source() noexcept {
     return R"(// Cardinal — WireframePass.hlsl
 //

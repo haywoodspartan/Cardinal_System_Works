@@ -2076,6 +2076,276 @@ void test_polygon_viewport_hlsl_nonempty() {
     CHECK(gpu::PyramidPrimitivePass::hlsl_source()[0] != '\0');
 }
 
+// ----------------------------------------------------------------------------
+// WorldLabelPass — projects world anchors → screen-space records the host
+// UI consumes. The "(-1, 0, -1)" floating label in the reference image.
+// ----------------------------------------------------------------------------
+void test_world_label_projects_to_screen_center() {
+    // One anchor at world (0, 0, 0.5); identity matrix → maps to NDC
+    // (0, 0, 0.5) → screen pixel (W/2, H/2) → depth 0.75.
+    constexpr cardinal::u32 N = 1;
+    constexpr cardinal::u32 W = 32, H = 32;
+    cardinal::vector<float> pts = { 0.0f, 0.0f, 0.5f };   // SoA: x, y, z
+    cardinal::vector<cardinal::u32> ids = { 42u };
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1,
+    };
+
+    auto g = rg::Graph::create();
+    auto h_p = g->declare_buffer(rg::BufferDesc{"pts", pts.size() * sizeof(float), 0, true});
+    auto h_i = g->declare_buffer(rg::BufferDesc{"ids", ids.size() * sizeof(cardinal::u32), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat", mat.size() * sizeof(float), 0, true});
+    InitBlob bp{h_p, pts.data(), pts.size() * sizeof(float)};
+    InitBlob bi{h_i, ids.data(), ids.size() * sizeof(cardinal::u32)};
+    InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+    add_init_pass(*g, "ip", h_p, &bp);
+    add_init_pass(*g, "ii", h_i, &bi);
+    add_init_pass(*g, "im", h_m, &bm);
+
+    auto st = gpu::WorldLabelPass::add_to_graph(*g, h_p, h_i, h_m, N, W, H, true);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+
+    CHECK(st->visible_count == 1u);
+    CHECK(st->culled_count  == 0u);
+
+    auto rec = b->buffer_contents(st->out_records);
+    CHECK(rec.size() == N * gpu::kWorldLabelRecordFloats * sizeof(float));
+    const float* rf = reinterpret_cast<const float*>(rec.data());
+    const float sx = rf[0];
+    const float sy = rf[1];
+    const float sd = rf[2];
+    const cardinal::u32 visu = *reinterpret_cast<const cardinal::u32*>(&rf[3]);
+    const cardinal::u32 label_id = *reinterpret_cast<const cardinal::u32*>(&rf[4]);
+    CHECK(visu == 1u);
+    CHECK(label_id == 42u);
+    // Screen center.
+    CHECK(sx >= 15.0f && sx <= 17.0f);
+    CHECK(sy >= 15.0f && sy <= 17.0f);
+    // Depth = (0.5/1 + 1) * 0.5 = 0.75.
+    CHECK(sd >= 0.74f && sd <= 0.76f);
+
+    // Anchor marker drawn at the screen center.
+    auto col = b->buffer_contents(st->out_color);
+    const cardinal::usize p = (16u * W + 16u) * 4u;
+    CHECK(col[p + 0] == 255);  // default anchor color = white
+    CHECK(col[p + 1] == 255);
+    CHECK(col[p + 2] == 255);
+    CHECK(col[p + 3] == 255);
+}
+
+void test_world_label_offscreen_culled() {
+    // Anchor at (10, 0, 0.5) — way past +X edge of NDC under identity.
+    constexpr cardinal::u32 N = 1;
+    constexpr cardinal::u32 W = 16, H = 16;
+    cardinal::vector<float> pts = { 10.0f, 0.0f, 0.5f };
+    cardinal::vector<cardinal::u32> ids = { 7u };
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1,
+    };
+    auto g = rg::Graph::create();
+    auto h_p = g->declare_buffer(rg::BufferDesc{"pts", pts.size() * sizeof(float), 0, true});
+    auto h_i = g->declare_buffer(rg::BufferDesc{"ids", ids.size() * sizeof(cardinal::u32), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat", mat.size() * sizeof(float), 0, true});
+    InitBlob bp{h_p, pts.data(), pts.size() * sizeof(float)};
+    InitBlob bi{h_i, ids.data(), ids.size() * sizeof(cardinal::u32)};
+    InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+    add_init_pass(*g, "ip", h_p, &bp);
+    add_init_pass(*g, "ii", h_i, &bi);
+    add_init_pass(*g, "im", h_m, &bm);
+
+    auto st = gpu::WorldLabelPass::add_to_graph(*g, h_p, h_i, h_m, N, W, H, false);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->visible_count == 0u);
+    CHECK(st->culled_count  == 1u);
+
+    auto rec = b->buffer_contents(st->out_records);
+    const float* rf = reinterpret_cast<const float*>(rec.data());
+    const cardinal::u32 visu = *reinterpret_cast<const cardinal::u32*>(&rf[3]);
+    CHECK(visu == 0u);
+}
+
+void test_world_label_behind_camera_culled() {
+    // Anchor with negative w (behind the camera).
+    constexpr cardinal::u32 N = 1;
+    constexpr cardinal::u32 W = 16, H = 16;
+    cardinal::vector<float> pts = { 0.0f, 0.0f, -1.0f };
+    cardinal::vector<cardinal::u32> ids = { 0u };
+    // Project: pinhole-style w = z + 1 → at z=-1 w=0, which is "behind".
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 1, 1,
+    };
+    auto g = rg::Graph::create();
+    auto h_p = g->declare_buffer(rg::BufferDesc{"pts", pts.size() * sizeof(float), 0, true});
+    auto h_i = g->declare_buffer(rg::BufferDesc{"ids", ids.size() * sizeof(cardinal::u32), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat", mat.size() * sizeof(float), 0, true});
+    InitBlob bp{h_p, pts.data(), pts.size() * sizeof(float)};
+    InitBlob bi{h_i, ids.data(), ids.size() * sizeof(cardinal::u32)};
+    InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+    add_init_pass(*g, "ip", h_p, &bp);
+    add_init_pass(*g, "ii", h_i, &bi);
+    add_init_pass(*g, "im", h_m, &bm);
+
+    auto st = gpu::WorldLabelPass::add_to_graph(*g, h_p, h_i, h_m, N, W, H, false);
+    CHECK(g->compile());
+    rg::CpuBackend::create()->execute(*g);
+    CHECK(st->visible_count == 0u);
+}
+
+void test_world_label_pyramid_corner_match_image() {
+    // Reproduce the labelled corner from the reference image:
+    // a pyramid corner at world (-1, 0, -1) → projects somewhere on
+    // screen → record visible == 1.
+    constexpr cardinal::u32 N = 1;
+    constexpr cardinal::u32 W = 64, H = 32;
+    cardinal::vector<float> pts = { -1.0f, 0.0f, -1.0f };
+    cardinal::vector<cardinal::u32> ids = { 0xC0DEu };
+    // Simple ortho-ish view: shift the point into +Z (in front) by 3 units
+    // and scale to fit NDC.
+    cardinal::vector<float> mat = {
+        0.5f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.5f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.5f, 1.5f,
+        0.0f, 0.0f, 0.0f, 1.0f,
+    };
+    auto g = rg::Graph::create();
+    auto h_p = g->declare_buffer(rg::BufferDesc{"pts", pts.size() * sizeof(float), 0, true});
+    auto h_i = g->declare_buffer(rg::BufferDesc{"ids", ids.size() * sizeof(cardinal::u32), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat", mat.size() * sizeof(float), 0, true});
+    InitBlob bp{h_p, pts.data(), pts.size() * sizeof(float)};
+    InitBlob bi{h_i, ids.data(), ids.size() * sizeof(cardinal::u32)};
+    InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+    add_init_pass(*g, "ip", h_p, &bp);
+    add_init_pass(*g, "ii", h_i, &bi);
+    add_init_pass(*g, "im", h_m, &bm);
+
+    auto st = gpu::WorldLabelPass::add_to_graph(*g, h_p, h_i, h_m, N, W, H, true);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->visible_count == 1u);
+    auto rec = b->buffer_contents(st->out_records);
+    const float* rf = reinterpret_cast<const float*>(rec.data());
+    const cardinal::u32 label_id = *reinterpret_cast<const cardinal::u32*>(&rf[4]);
+    CHECK(label_id == 0xC0DEu);
+}
+
+void test_world_label_nan_inputs_safe() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    constexpr cardinal::u32 N = 2;
+    constexpr cardinal::u32 W = 8, H = 8;
+    cardinal::vector<float> pts(N * 3u, qnan);
+    cardinal::vector<cardinal::u32> ids = { 1u, 2u };
+    cardinal::vector<float> mat(16, qnan);
+
+    auto g = rg::Graph::create();
+    auto h_p = g->declare_buffer(rg::BufferDesc{"pts", pts.size() * sizeof(float), 0, true});
+    auto h_i = g->declare_buffer(rg::BufferDesc{"ids", ids.size() * sizeof(cardinal::u32), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat", mat.size() * sizeof(float), 0, true});
+    InitBlob bp{h_p, pts.data(), pts.size() * sizeof(float)};
+    InitBlob bi{h_i, ids.data(), ids.size() * sizeof(cardinal::u32)};
+    InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+    add_init_pass(*g, "ip", h_p, &bp);
+    add_init_pass(*g, "ii", h_i, &bi);
+    add_init_pass(*g, "im", h_m, &bm);
+
+    auto st = gpu::WorldLabelPass::add_to_graph(*g, h_p, h_i, h_m, N, W, H, false);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto rec = b->buffer_contents(st->out_records);
+    const float* rf = reinterpret_cast<const float*>(rec.data());
+    // Every record field must be finite.
+    for (cardinal::usize i = 0; i < N * 3u; ++i) {
+        CHECK(rf[i] == rf[i]);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// WorldAxisGizmoPass — the RGB X/Y/Z axes editor overlay.
+// ----------------------------------------------------------------------------
+void test_axis_gizmo_draws_three_colors() {
+    constexpr cardinal::u32 W = 64, H = 64;
+    // Identity view-proj keeps the unit axes on screen (each axis end at
+    // ±1 in NDC).
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1,
+    };
+    auto g = rg::Graph::create();
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat", mat.size() * sizeof(float), 0, true});
+    InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+    add_init_pass(*g, "im", h_m, &bm);
+    // Origin at world (0, 0, 0.5) so the axes have non-zero w (= 1).
+    auto st = gpu::WorldAxisGizmoPass::add_to_graph(
+        *g, h_m, W, H, 0, 0, 0.5f, 0.5f, 0.5f, 0.5f);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->axis_pixels_drawn > 0u);
+
+    auto col = b->buffer_contents(st->out_color);
+    // Scan the framebuffer for at least one pure-red, pure-green, pure-blue pixel.
+    bool saw_red = false, saw_green = false, saw_blue = false;
+    for (cardinal::usize i = 0; i < W * H; ++i) {
+        const cardinal::u8 r = col[i * 4 + 0];
+        const cardinal::u8 g_ = col[i * 4 + 1];
+        const cardinal::u8 b_ = col[i * 4 + 2];
+        if (r == 255 && g_ == 0   && b_ == 0)   saw_red   = true;
+        if (r == 0   && g_ == 255 && b_ == 0)   saw_green = true;
+        if (r == 0   && g_ == 0   && b_ == 255) saw_blue  = true;
+    }
+    CHECK(saw_red);
+    CHECK(saw_green);
+    CHECK(saw_blue);
+}
+
+void test_axis_gizmo_offscreen_origin_zero_pixels() {
+    constexpr cardinal::u32 W = 16, H = 16;
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1,
+    };
+    auto g = rg::Graph::create();
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat", mat.size() * sizeof(float), 0, true});
+    InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+    add_init_pass(*g, "im", h_m, &bm);
+    // Origin at (100, 100, 0.5) — way off screen, axis endpoints also far.
+    auto st = gpu::WorldAxisGizmoPass::add_to_graph(
+        *g, h_m, W, H, 100, 100, 0.5f, 0.1f, 0.1f, 0.1f);
+    CHECK(g->compile());
+    rg::CpuBackend::create()->execute(*g);
+    CHECK(st->axis_pixels_drawn == 0u);
+}
+
+void test_axis_gizmo_nan_matrix_safe() {
+    const float qnan = std::numeric_limits<float>::quiet_NaN();
+    constexpr cardinal::u32 W = 8, H = 8;
+    cardinal::vector<float> mat(16, qnan);
+    auto g = rg::Graph::create();
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat", mat.size() * sizeof(float), 0, true});
+    InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+    add_init_pass(*g, "im", h_m, &bm);
+    auto st = gpu::WorldAxisGizmoPass::add_to_graph(*g, h_m, W, H);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    auto dep = b->buffer_contents(st->out_depth);
+    const float* df = reinterpret_cast<const float*>(dep.data());
+    for (cardinal::usize i = 0; i < W * H; ++i) CHECK(df[i] == df[i]);
+}
+
+void test_label_and_gizmo_hlsl_nonempty() {
+    CHECK(gpu::WorldLabelPass::hlsl_source() != nullptr);
+    CHECK(gpu::WorldLabelPass::hlsl_source()[0] != '\0');
+    CHECK(gpu::WorldAxisGizmoPass::hlsl_source() != nullptr);
+    CHECK(gpu::WorldAxisGizmoPass::hlsl_source()[0] != '\0');
+}
+
 void test_reset_clears_state() {
     auto g = rg::Graph::create();
     FillOp op{};
@@ -2175,6 +2445,16 @@ int main() {
     test_polygon_viewport_nan_safe();
     test_chain_scene_polygon_viewport();
     test_polygon_viewport_hlsl_nonempty();
+
+    test_world_label_projects_to_screen_center();
+    test_world_label_offscreen_culled();
+    test_world_label_behind_camera_culled();
+    test_world_label_pyramid_corner_match_image();
+    test_world_label_nan_inputs_safe();
+    test_axis_gizmo_draws_three_colors();
+    test_axis_gizmo_offscreen_origin_zero_pixels();
+    test_axis_gizmo_nan_matrix_safe();
+    test_label_and_gizmo_hlsl_nonempty();
 
     test_zero_size_buffer_safe();
     test_reset_clears_state();

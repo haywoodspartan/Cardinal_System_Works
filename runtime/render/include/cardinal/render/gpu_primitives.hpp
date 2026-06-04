@@ -169,6 +169,91 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// WorldLabelPass — projects world-space anchor points through a view-proj
+// matrix and emits per-anchor screen-space records the host UI (ImGui /
+// editor panel) consumes to render a floating "(x, y, z)" text tag at that
+// pixel position. This is the engine-side half of the editor's vertex-
+// coordinate tooltip: the projection + visibility + occlusion checks live
+// in the graph; the actual glyph rasterisation is the host's job.
+//
+// For each input anchor (world.xyz + label_id) the pass writes one
+// LabelOut record:
+//   { screen_x_px : f32, screen_y_px : f32, depth_ndc01 : f32,
+//     visible    : u32  (1 = on-screen + in front of camera, 0 = cull),
+//     label_id   : u32 }  → 5 dwords / 20 bytes / record
+//
+// Optionally, when in_color is wired, the pass also stamps a small 3×3
+// anchor crosshair into the framebuffer so the user sees where the text
+// will land before the UI layer composes it on top (matches the editor's
+// "show me where the label anchors" debug mode in the reference image).
+// ---------------------------------------------------------------------------
+constexpr cardinal::u32 kWorldLabelRecordFloats = 5;   // sx, sy, depth, visible, label_id
+
+class WorldLabelPass {
+public:
+    struct State {
+        graph::ResourceHandle in_world_points;   // 3 * N floats SoA (x, y, z)
+        graph::ResourceHandle in_label_ids;      // N × u32 (caller-defined)
+        graph::ResourceHandle in_matrix;         // 16 floats row-major
+        graph::ResourceHandle out_records;       // N × kWorldLabelRecordFloats * 4 bytes
+        graph::ResourceHandle out_color;         // optional — width*height*4 (anchor markers)
+        cardinal::u32         label_count        {0};
+        cardinal::u32         width              {0};
+        cardinal::u32         height             {0};
+        bool                  draw_anchors       {true};
+        float                 anchor_r{1.0f}, anchor_g{1.0f}, anchor_b{1.0f};
+        // Stats:
+        cardinal::u32         visible_count      {0};
+        cardinal::u32         culled_count       {0};
+    };
+
+    static cardinal::shared_ptr<State> add_to_graph(
+        graph::Graph& g,
+        graph::ResourceHandle in_world_points,
+        graph::ResourceHandle in_label_ids,
+        graph::ResourceHandle in_matrix,
+        cardinal::u32 label_count,
+        cardinal::u32 width, cardinal::u32 height,
+        bool draw_anchors = true);
+
+    static const char* hlsl_source() noexcept;
+};
+
+// ---------------------------------------------------------------------------
+// WorldAxisGizmoPass — draws the world-space X / Y / Z axes from a chosen
+// origin as colored line segments (X = red, Y = green, Z = blue) into a
+// color + depth framebuffer. The classic editor axis tripod. Length is
+// per-axis; depth-tested so the gizmo correctly composites behind nearer
+// geometry. This is the cyan-axis-edge sort of marker visible in the
+// reference image — the engine-side debug overlay every polygon viewport
+// ships with.
+// ---------------------------------------------------------------------------
+class WorldAxisGizmoPass {
+public:
+    struct State {
+        graph::ResourceHandle in_matrix;        // 16 floats view-proj
+        graph::ResourceHandle out_color;
+        graph::ResourceHandle out_depth;
+        cardinal::u32 width  {0};
+        cardinal::u32 height {0};
+        // Origin + per-axis length in world units.
+        float origin_x{0}, origin_y{0}, origin_z{0};
+        float length_x{1.0f}, length_y{1.0f}, length_z{1.0f};
+        // Stats:
+        cardinal::u32 axis_pixels_drawn {0};
+    };
+
+    static cardinal::shared_ptr<State> add_to_graph(
+        graph::Graph& g,
+        graph::ResourceHandle in_matrix,
+        cardinal::u32 width, cardinal::u32 height,
+        float origin_x = 0, float origin_y = 0, float origin_z = 0,
+        float length_x = 1.0f, float length_y = 1.0f, float length_z = 1.0f);
+
+    static const char* hlsl_source() noexcept;
+};
+
+// ---------------------------------------------------------------------------
 // WireframePass — projects 3D world-space triangles through a 4×4 view-proj
 // matrix, then rasterizes each edge as a Bresenham line into a color +
 // depth framebuffer. Lines per triangle = 3 (ab, bc, ca).
