@@ -2037,6 +2037,227 @@ void test_polygon_viewport_nan_safe() {
 
 // End-to-end: rainbow-floor + sphere + pyramid → polygon viewport, like the
 // reference image. Pin the triangle counts that go through each stage.
+// ----------------------------------------------------------------------------
+// PlaneQuadPrimitivePass + QuadSubdividePass + QuadWireframePass
+// Quad-aware wireframe: squares show as squares (no diagonal), each
+// cell can be quad-divided N levels (4^N sub-quads per source).
+// ----------------------------------------------------------------------------
+void test_plane_quad_emits_quads() {
+    gpu::PlaneSpec spec;
+    spec.half_size_x = 1.0f; spec.half_size_z = 1.0f;
+    spec.subdivisions_x = 4; spec.subdivisions_z = 4;
+    auto g = rg::Graph::create();
+    auto st = gpu::PlaneQuadPrimitivePass::add_to_graph(*g, spec);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->quad_count == 16u);     // 4*4 = 16 quads
+    auto out = b->buffer_contents(st->out_quads);
+    CHECK(out.size() == 16u * 12u * sizeof(float));
+    // First quad: corners at (-1,-1)→(-0.5,-1)→(-0.5,-0.5)→(-1,-0.5) on XZ.
+    const float* of = reinterpret_cast<const float*>(out.data());
+    CHECK(of[0]  == -1.0f);  CHECK(of[2]  == -1.0f);    // a = (-1, _, -1)
+    CHECK(of[3]  == -0.5f);  CHECK(of[5]  == -1.0f);    // b
+    CHECK(of[6]  == -0.5f);  CHECK(of[8]  == -0.5f);    // c
+    CHECK(of[9]  == -1.0f);  CHECK(of[11] == -0.5f);    // d
+}
+
+void test_quad_subdivide_1_level_makes_4_children() {
+    // One source quad → 4 sub-quads at level 1.
+    constexpr cardinal::u32 M = 1;
+    cardinal::vector<float> in_q = {
+        0, 0, 0,  1, 0, 0,  1, 0, 1,  0, 0, 1,
+    };
+    auto g = rg::Graph::create();
+    auto h_i = g->declare_buffer(rg::BufferDesc{"in", in_q.size() * sizeof(float), 0, true});
+    InitBlob bi{h_i, in_q.data(), in_q.size() * sizeof(float)};
+    add_init_pass(*g, "ii", h_i, &bi);
+    auto st = gpu::QuadSubdividePass::add_to_graph(*g, h_i, M, 1);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->quads_emitted == 4u);
+    CHECK(st->sub_quads_per_input == 4u);
+
+    // Verify centre vertex (0.5, 0, 0.5) appears in the output — it's the
+    // shared corner of all 4 children.
+    auto out = b->buffer_contents(st->out_quads);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    bool found_centre = false;
+    for (cardinal::u32 q = 0; q < 4 && !found_centre; ++q) {
+        for (int v = 0; v < 4; ++v) {
+            const float x = of[q * 12 + v * 3 + 0];
+            const float z = of[q * 12 + v * 3 + 2];
+            if (x > 0.499f && x < 0.501f && z > 0.499f && z < 0.501f) {
+                found_centre = true; break;
+            }
+        }
+    }
+    CHECK(found_centre);
+}
+
+void test_quad_subdivide_2_levels_makes_16_children() {
+    constexpr cardinal::u32 M = 1;
+    cardinal::vector<float> in_q = {
+        0, 0, 0,  1, 0, 0,  1, 0, 1,  0, 0, 1,
+    };
+    auto g = rg::Graph::create();
+    auto h_i = g->declare_buffer(rg::BufferDesc{"in", in_q.size() * sizeof(float), 0, true});
+    InitBlob bi{h_i, in_q.data(), in_q.size() * sizeof(float)};
+    add_init_pass(*g, "ii", h_i, &bi);
+    auto st = gpu::QuadSubdividePass::add_to_graph(*g, h_i, M, 2);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->quads_emitted == 16u);
+    CHECK(st->sub_quads_per_input == 16u);
+}
+
+void test_quad_subdivide_level_0_passes_through() {
+    constexpr cardinal::u32 M = 2;
+    cardinal::vector<float> in_q = {
+        0, 0, 0,  1, 0, 0,  1, 0, 1,  0, 0, 1,
+        2, 0, 0,  3, 0, 0,  3, 0, 1,  2, 0, 1,
+    };
+    auto g = rg::Graph::create();
+    auto h_i = g->declare_buffer(rg::BufferDesc{"in", in_q.size() * sizeof(float), 0, true});
+    InitBlob bi{h_i, in_q.data(), in_q.size() * sizeof(float)};
+    add_init_pass(*g, "ii", h_i, &bi);
+    auto st = gpu::QuadSubdividePass::add_to_graph(*g, h_i, M, 0);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->quads_emitted == M);
+    auto out = b->buffer_contents(st->out_quads);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    // First quad unchanged.
+    for (int k = 0; k < 12; ++k) CHECK(of[k] == in_q[k]);
+}
+
+void test_quad_subdivide_levels_clamp_at_4() {
+    constexpr cardinal::u32 M = 1;
+    cardinal::vector<float> in_q = {
+        0, 0, 0,  1, 0, 0,  1, 0, 1,  0, 0, 1,
+    };
+    auto g = rg::Graph::create();
+    auto h_i = g->declare_buffer(rg::BufferDesc{"in", in_q.size() * sizeof(float), 0, true});
+    InitBlob bi{h_i, in_q.data(), in_q.size() * sizeof(float)};
+    add_init_pass(*g, "ii", h_i, &bi);
+    auto st = gpu::QuadSubdividePass::add_to_graph(*g, h_i, M, 999);
+    CHECK(st->levels == 4u);                // clamped
+    CHECK(st->sub_quads_per_input == 256u); // 4^4
+}
+
+void test_quad_wireframe_draws_four_edges_per_quad() {
+    // One CCW quad at the centre of NDC.
+    constexpr cardinal::u32 W = 32, H = 32;
+    cardinal::vector<float> quads = {
+        -0.5f, 0.0f, -0.5f,
+         0.5f, 0.0f, -0.5f,
+         0.5f, 0.0f,  0.5f,
+        -0.5f, 0.0f,  0.5f,
+    };
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,  0, 0, -1, 0,  0, 1, 0, 0,  0, 0, 0.5f, 1,
+    };
+    auto g = rg::Graph::create();
+    auto h_q = g->declare_buffer(rg::BufferDesc{"q",  quads.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"m",  mat.size()   * sizeof(float), 0, true});
+    InitBlob bq{h_q, quads.data(), quads.size() * sizeof(float)};
+    InitBlob bm{h_m, mat.data(),   mat.size()   * sizeof(float)};
+    add_init_pass(*g, "iQ", h_q, &bq);
+    add_init_pass(*g, "iM", h_m, &bm);
+    auto st = gpu::QuadWireframePass::add_to_graph(*g, h_q, h_m, W, H, 1,
+                                                   0.0f, 1.0f, 0.0f);  // green
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->edges_drawn == 4u);            // 4 perimeter edges, no diagonal
+    CHECK(st->quads_drawn == 1u);
+    CHECK(st->pixels_drawn > 0u);
+    // At least one pixel must be green.
+    auto col = b->buffer_contents(st->out_color);
+    bool found_green = false;
+    for (cardinal::u32 i = 0; i < W * H; ++i) {
+        if (col[i*4+0] == 0 && col[i*4+1] == 255 && col[i*4+2] == 0) {
+            found_green = true; break;
+        }
+    }
+    CHECK(found_green);
+}
+
+void test_quad_wireframe_does_not_draw_diagonals() {
+    // Critical test: WireframePass on the equivalent triangle-pair would
+    // draw 6 edges (4 perimeter + diagonal counted twice — once per tri).
+    // QuadWireframePass draws ONLY 4. This is the "squares show as
+    // squares" contract.
+    constexpr cardinal::u32 W = 16, H = 16;
+    cardinal::vector<float> quads = {
+        -0.5f, 0.0f, -0.5f,  0.5f, 0.0f, -0.5f,
+         0.5f, 0.0f,  0.5f, -0.5f, 0.0f,  0.5f,
+    };
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,  0, 0, -1, 0,  0, 1, 0, 0,  0, 0, 0.5f, 1,
+    };
+    auto g = rg::Graph::create();
+    auto h_q = g->declare_buffer(rg::BufferDesc{"q",  quads.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"m",  mat.size()   * sizeof(float), 0, true});
+    InitBlob bq{h_q, quads.data(), quads.size() * sizeof(float)};
+    InitBlob bm{h_m, mat.data(),   mat.size()   * sizeof(float)};
+    add_init_pass(*g, "iQ", h_q, &bq);
+    add_init_pass(*g, "iM", h_m, &bm);
+    auto st = gpu::QuadWireframePass::add_to_graph(*g, h_q, h_m, W, H, 1);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(st->edges_drawn == 4u);   // 4, not 6 (no diagonal)
+}
+
+void test_chain_plane_subdivide_wireframe_edge_count_scales() {
+    // The headline chain: PlaneQuad → QuadSubdivide(N) → QuadWireframe.
+    // edges_drawn = quads * 4 where quads = source_quads * 4^N.
+    gpu::PlaneSpec spec;
+    spec.half_size_x = 0.5f; spec.half_size_z = 0.5f;
+    spec.subdivisions_x = 2; spec.subdivisions_z = 2;   // 4 source quads
+    constexpr cardinal::u32 W = 32, H = 32;
+    cardinal::vector<float> mat = {
+        1, 0, 0, 0,  0, 0, -1, 0,  0, 1, 0, 0,  0, 0, 0.5f, 1,
+    };
+
+    auto run = [&](cardinal::u32 levels) -> cardinal::u32 {
+        auto g = rg::Graph::create();
+        auto plane = gpu::PlaneQuadPrimitivePass::add_to_graph(*g, spec);
+        auto sub   = gpu::QuadSubdividePass::add_to_graph(*g, plane->out_quads,
+                                                          plane->quad_count, levels);
+        auto h_m = g->declare_buffer(rg::BufferDesc{"m", mat.size() * sizeof(float), 0, true});
+        InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+        add_init_pass(*g, "iM", h_m, &bm);
+        const cardinal::u32 total_quads = plane->quad_count * sub->sub_quads_per_input;
+        auto wire = gpu::QuadWireframePass::add_to_graph(*g, sub->out_quads, h_m, W, H, total_quads);
+        CHECK(g->compile());
+        auto b = rg::CpuBackend::create();
+        b->execute(*g);
+        return wire->edges_drawn;
+    };
+
+    // 4 source quads with 4^N children each → 4 * 4^N quads → 16 * 4^N edges.
+    const cardinal::u32 e0 = run(0);
+    const cardinal::u32 e1 = run(1);
+    const cardinal::u32 e2 = run(2);
+    CHECK(e0 == 16u);      // 4 quads × 4 edges
+    CHECK(e1 == 64u);      // 4 * 4 quads × 4 edges
+    CHECK(e2 == 256u);     // 4 * 16 quads × 4 edges
+    // Strict monotonic: more subdivision → more edges.
+    CHECK(e0 < e1);
+    CHECK(e1 < e2);
+}
+
+void test_quad_passes_hlsl_nonempty() {
+    CHECK(gpu::PlaneQuadPrimitivePass::hlsl_source()[0] != '\0');
+    CHECK(gpu::QuadSubdividePass::hlsl_source()[0] != '\0');
+    CHECK(gpu::QuadWireframePass::hlsl_source()[0] != '\0');
+}
+
 void test_chain_scene_polygon_viewport() {
     gpu::PlaneSpec floor_spec;
     floor_spec.half_size_x = 5.0f; floor_spec.half_size_z = 5.0f;
@@ -3585,6 +3806,16 @@ int main() {
     test_polygon_viewport_nan_safe();
     test_chain_scene_polygon_viewport();
     test_polygon_viewport_hlsl_nonempty();
+
+    test_plane_quad_emits_quads();
+    test_quad_subdivide_1_level_makes_4_children();
+    test_quad_subdivide_2_levels_makes_16_children();
+    test_quad_subdivide_level_0_passes_through();
+    test_quad_subdivide_levels_clamp_at_4();
+    test_quad_wireframe_draws_four_edges_per_quad();
+    test_quad_wireframe_does_not_draw_diagonals();
+    test_chain_plane_subdivide_wireframe_edge_count_scales();
+    test_quad_passes_hlsl_nonempty();
 
     test_world_label_projects_to_screen_center();
     test_world_label_offscreen_culled();

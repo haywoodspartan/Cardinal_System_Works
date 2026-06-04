@@ -169,6 +169,111 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// PlaneQuadPrimitivePass — sibling of PlanePrimitivePass that emits the
+// grid in QUAD FORMAT instead of triangle pairs. Each quad is 12 floats
+// (4 verts × xyz, CCW from +Y): (x0,z0) → (x1,z0) → (x1,z1) → (x0,z1).
+// This is what QuadSubdividePass + QuadWireframePass consume so the
+// wireframe view can show the cell's 4 perimeter edges without the
+// triangle diagonal cluttering the topology.
+// ---------------------------------------------------------------------------
+class PlaneQuadPrimitivePass {
+public:
+    struct State {
+        graph::ResourceHandle out_quads;     // M * 12 floats
+        cardinal::u32 quad_count {0};
+        PlaneSpec     spec;
+    };
+    static cardinal::shared_ptr<State> add_to_graph(graph::Graph& g, PlaneSpec spec);
+    static const char* hlsl_source() noexcept;
+};
+
+// ---------------------------------------------------------------------------
+// QuadSubdividePass — N-level 4-way subdivision of a quad mesh. Each
+// input quad (a, b, c, d) is split into 4 sub-quads via edge midpoints
+// + the quad centre:
+//
+//   mab = mid(a, b)    mbc = mid(b, c)
+//   mcd = mid(c, d)    mda = mid(d, a)
+//   cen = avg(a, b, c, d)
+//
+//   sub 0: (a,   mab, cen, mda)
+//   sub 1: (mab, b,   mbc, cen)
+//   sub 2: (cen, mbc, c,   mcd)
+//   sub 3: (mda, cen, mcd, d)
+//
+// At `levels` levels of recursion, every input quad becomes 4^levels
+// sub-quads. The output is appended in order: every input's 4^levels
+// children sit contiguously, so callers know which range belongs to
+// which source quad without an auxiliary index buffer.
+//
+// Hard cap: levels ∈ [0, 4] → at most 256 sub-quads per input. Levels
+// 5+ would exceed any reasonable per-input budget.
+// ---------------------------------------------------------------------------
+constexpr cardinal::u32 kMaxQuadSubdivisionLevels = 4;
+
+class QuadSubdividePass {
+public:
+    struct State {
+        graph::ResourceHandle in_quads;      // M * 12 floats
+        graph::ResourceHandle out_quads;     // M * 4^levels * 12 floats
+        cardinal::u32 input_quad_count {0};
+        cardinal::u32 levels           {1};
+        cardinal::u32 sub_quads_per_input {4};
+        // Stats:
+        cardinal::u32 quads_emitted    {0};
+    };
+
+    static cardinal::shared_ptr<State> add_to_graph(
+        graph::Graph& g,
+        graph::ResourceHandle in_quads,
+        cardinal::u32 input_quad_count,
+        cardinal::u32 levels = 1);
+
+    static const char* hlsl_source() noexcept;
+};
+
+// ---------------------------------------------------------------------------
+// QuadWireframePass — projects a quad mesh through a 4×4 view-proj and
+// Bresenham-rasterises the 4 perimeter edges per quad. Unlike
+// WireframePass (which draws 3 edges per triangle and so shows the
+// diagonals inside each cell), this pass only draws the quad's
+// OUTLINE — so a subdivided plane shows as a clean grid of squares.
+//
+//   in_quads   : M * 12 floats (4 verts xyz per quad)
+//   in_matrix  : 16 floats row-major view-proj
+//   out_color  : W * H * 4 bytes (RGBA8, cleared per-execute)
+//   out_depth  : W * H * 4 bytes (float, cleared to 1.0)
+// ---------------------------------------------------------------------------
+class QuadWireframePass {
+public:
+    struct State {
+        graph::ResourceHandle in_quads;
+        graph::ResourceHandle in_matrix;
+        graph::ResourceHandle out_color;
+        graph::ResourceHandle out_depth;
+        cardinal::u32 width  {0};
+        cardinal::u32 height {0};
+        cardinal::u32 quad_count {0};
+        float line_r {1.0f}, line_g {1.0f}, line_b {1.0f};
+        // Stats:
+        cardinal::u32 pixels_drawn       {0};
+        cardinal::u32 edges_drawn        {0};   // 4 * quads_drawn
+        cardinal::u32 quads_drawn        {0};
+        cardinal::u32 quads_offscreen    {0};
+    };
+
+    static cardinal::shared_ptr<State> add_to_graph(
+        graph::Graph& g,
+        graph::ResourceHandle in_quads,
+        graph::ResourceHandle in_matrix,
+        cardinal::u32 width, cardinal::u32 height,
+        cardinal::u32 quad_count,
+        float line_r = 1.0f, float line_g = 1.0f, float line_b = 1.0f);
+
+    static const char* hlsl_source() noexcept;
+};
+
+// ---------------------------------------------------------------------------
 // WorldLabelPass — projects world-space anchor points through a view-proj
 // matrix and emits per-anchor screen-space records the host UI (ImGui /
 // editor panel) consumes to render a floating "(x, y, z)" text tag at that

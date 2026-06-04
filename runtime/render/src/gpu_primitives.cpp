@@ -1313,6 +1313,427 @@ void main(uint3 tid : SV_DispatchThreadID) {
 )";
 }
 
+// =============================================================================
+// PlaneQuadPrimitivePass — grid plane in quad format
+// =============================================================================
+namespace {
+
+void plane_quad_record(rg::ExecutionContext& ec, void* uctx) noexcept {
+    if (!uctx) return;
+    auto* st = static_cast<PlaneQuadPrimitivePass::State*>(uctx);
+    const cardinal::u32 sx = clamp_u32(st->spec.subdivisions_x, 1, 1024);
+    const cardinal::u32 sz = clamp_u32(st->spec.subdivisions_z, 1, 1024);
+    const float ex = fzf(st->spec.half_size_x, 1.0f);
+    const float ez = fzf(st->spec.half_size_z, 1.0f);
+    const float cx = fzf(st->spec.center_x, 0.0f);
+    const float cy = fzf(st->spec.center_y, 0.0f);
+    const float cz = fzf(st->spec.center_z, 0.0f);
+
+    float* out = static_cast<float*>(ec.map_buffer_write(st->out_quads));
+    if (!out) { ec.dispatch(0, 1, 1); return; }
+
+    const float step_x = (2.0f * ex) / static_cast<float>(sx);
+    const float step_z = (2.0f * ez) / static_cast<float>(sz);
+    cardinal::usize off = 0;
+    for (cardinal::u32 j = 0; j < sz; ++j) {
+        const float z0 = cz - ez + static_cast<float>(j)     * step_z;
+        const float z1 = cz - ez + static_cast<float>(j + 1) * step_z;
+        for (cardinal::u32 i = 0; i < sx; ++i) {
+            const float x0 = cx - ex + static_cast<float>(i)     * step_x;
+            const float x1 = cx - ex + static_cast<float>(i + 1) * step_x;
+            // Quad layout: 4 verts CCW from +Y = (x0,z0)→(x1,z0)→(x1,z1)→(x0,z1)
+            out[off +  0] = x0; out[off +  1] = cy; out[off +  2] = z0;
+            out[off +  3] = x1; out[off +  4] = cy; out[off +  5] = z0;
+            out[off +  6] = x1; out[off +  7] = cy; out[off +  8] = z1;
+            out[off +  9] = x0; out[off + 10] = cy; out[off + 11] = z1;
+            off += 12;
+        }
+    }
+    st->quad_count = sx * sz;
+    ec.dispatch((sx + 7) / 8, (sz + 7) / 8, 1);
+}
+
+}  // namespace
+
+cardinal::shared_ptr<PlaneQuadPrimitivePass::State> PlaneQuadPrimitivePass::add_to_graph(
+    rg::Graph& g, PlaneSpec spec)
+{
+    auto st = cardinal::shared_ptr<State>(new State());
+    st->spec = spec;
+    const cardinal::u32 sx = clamp_u32(spec.subdivisions_x, 1, 1024);
+    const cardinal::u32 sz = clamp_u32(spec.subdivisions_z, 1, 1024);
+    const cardinal::u32 Q = sx * sz;
+    st->quad_count = Q;
+
+    rg::BufferDesc od;
+    od.name         = "planeq.quads";
+    od.size_bytes   = static_cast<cardinal::usize>(Q) * 12u * sizeof(float);
+    od.stride_bytes = sizeof(float);
+    st->out_quads = g.declare_buffer(od);
+
+    rg::PassDesc pd;
+    pd.name = "PlaneQuadPrimitivePass";
+    pd.kind = rg::PassKind::Compute;
+    pd.accesses.push_back(rg::ResourceAccess{st->out_quads, rg::AccessMode::Write, 0});
+    pd.record   = plane_quad_record;
+    pd.user_ctx = st.get();
+    pd.dispatch_x = (Q + 63) / 64;
+    g.add_pass(cardinal::move(pd));
+    return st;
+}
+
+const char* PlaneQuadPrimitivePass::hlsl_source() noexcept {
+    return R"(// Cardinal — PlaneQuadPrimitivePass.hlsl
+// One thread per grid cell, emits one quad (12 floats).
+RWByteAddressBuffer out_quads : register(u0);
+cbuffer Params : register(b0) {
+    float hx, hz, cx, cy; float cz, _p0, _p1, _p2; uint sx, sz, _p3, _p4;
+};
+void store_f(RWByteAddressBuffer b, uint o, float v) { b.Store(o, asuint(v)); }
+[numthreads(8, 8, 1)]
+void main(uint3 tid : SV_DispatchThreadID) {
+    uint i = tid.x, j = tid.y;
+    if (i >= sx || j >= sz) return;
+    float step_x = (2 * hx) / float(sx);
+    float step_z = (2 * hz) / float(sz);
+    float x0 = cx - hx + i * step_x, x1 = x0 + step_x;
+    float z0 = cz - hz + j * step_z, z1 = z0 + step_z;
+    uint base = (j * sx + i) * 12 * 4;
+    store_f(out_quads, base + 0*4, x0); store_f(out_quads, base + 1*4, cy); store_f(out_quads, base + 2*4, z0);
+    store_f(out_quads, base + 3*4, x1); store_f(out_quads, base + 4*4, cy); store_f(out_quads, base + 5*4, z0);
+    store_f(out_quads, base + 6*4, x1); store_f(out_quads, base + 7*4, cy); store_f(out_quads, base + 8*4, z1);
+    store_f(out_quads, base + 9*4, x0); store_f(out_quads, base +10*4, cy); store_f(out_quads, base +11*4, z1);
+}
+)";
+}
+
+// =============================================================================
+// QuadSubdividePass — 4-way midpoint subdivision, N levels
+// =============================================================================
+namespace {
+
+struct Quad {
+    float a[3], b[3], c[3], d[3];
+};
+
+inline void quad_read(const float* base, Quad& q) noexcept {
+    for (int k = 0; k < 3; ++k) {
+        q.a[k] = fzf(base[ 0 + k], 0.0f);
+        q.b[k] = fzf(base[ 3 + k], 0.0f);
+        q.c[k] = fzf(base[ 6 + k], 0.0f);
+        q.d[k] = fzf(base[ 9 + k], 0.0f);
+    }
+}
+inline void quad_write(float* base, const Quad& q) noexcept {
+    for (int k = 0; k < 3; ++k) {
+        base[ 0 + k] = q.a[k]; base[ 3 + k] = q.b[k];
+        base[ 6 + k] = q.c[k]; base[ 9 + k] = q.d[k];
+    }
+}
+inline void mid3(const float* p, const float* q, float* m) noexcept {
+    for (int k = 0; k < 3; ++k) m[k] = 0.5f * (p[k] + q[k]);
+}
+inline void quad_centre(const Quad& q, float* c) noexcept {
+    for (int k = 0; k < 3; ++k) {
+        c[k] = 0.25f * (q.a[k] + q.b[k] + q.c[k] + q.d[k]);
+    }
+}
+
+// Subdivide ONE quad into 4 children in `out`. Writes 4 * 12 = 48 floats.
+void subdivide_one(const Quad& s, float* out) noexcept {
+    float mab[3], mbc[3], mcd[3], mda[3], cen[3];
+    mid3(s.a, s.b, mab); mid3(s.b, s.c, mbc);
+    mid3(s.c, s.d, mcd); mid3(s.d, s.a, mda);
+    quad_centre(s, cen);
+    Quad q;
+    // sub 0: (a, mab, cen, mda)
+    for (int k = 0; k < 3; ++k) {
+        q.a[k] = s.a[k];   q.b[k] = mab[k];
+        q.c[k] = cen[k];   q.d[k] = mda[k];
+    }
+    quad_write(out + 0 * 12, q);
+    // sub 1: (mab, b, mbc, cen)
+    for (int k = 0; k < 3; ++k) {
+        q.a[k] = mab[k];   q.b[k] = s.b[k];
+        q.c[k] = mbc[k];   q.d[k] = cen[k];
+    }
+    quad_write(out + 1 * 12, q);
+    // sub 2: (cen, mbc, c, mcd)
+    for (int k = 0; k < 3; ++k) {
+        q.a[k] = cen[k];   q.b[k] = mbc[k];
+        q.c[k] = s.c[k];   q.d[k] = mcd[k];
+    }
+    quad_write(out + 2 * 12, q);
+    // sub 3: (mda, cen, mcd, d)
+    for (int k = 0; k < 3; ++k) {
+        q.a[k] = mda[k];   q.b[k] = cen[k];
+        q.c[k] = mcd[k];   q.d[k] = s.d[k];
+    }
+    quad_write(out + 3 * 12, q);
+}
+
+void quad_subdivide_record(rg::ExecutionContext& ec, void* uctx) noexcept {
+    if (!uctx) return;
+    auto* st = static_cast<QuadSubdividePass::State*>(uctx);
+    const cardinal::u32 M     = st->input_quad_count;
+    const cardinal::u32 lvls  = clamp_u32(st->levels, 0, kMaxQuadSubdivisionLevels);
+    const float* in_q  = static_cast<const float*>(ec.map_buffer_read(st->in_quads));
+    float*       out_q = static_cast<float*>      (ec.map_buffer_write(st->out_quads));
+    if (!in_q || !out_q) { ec.dispatch(0, 1, 1); return; }
+
+    if (lvls == 0) {
+        // Passthrough.
+        for (cardinal::u32 t = 0; t < M; ++t) {
+            for (int k = 0; k < 12; ++k) out_q[t * 12 + k] = fzf(in_q[t * 12 + k], 0.0f);
+        }
+        st->quads_emitted = M;
+        ec.dispatch((M + 63) / 64, 1, 1);
+        return;
+    }
+
+    // Ping-pong subdivision. Need a scratch buffer for intermediate levels;
+    // for simplicity (and to keep allocator-free behaviour) we route the
+    // final level directly to out_q and use an on-stack array for the
+    // pre-level buffer. The hard cap of 4 levels = 256 sub-quads × 12 floats
+    // per input keeps the scratch size bounded.
+    constexpr cardinal::u32 kMaxSubPerInput = 256;   // 4^4
+    float scratch[kMaxSubPerInput * 12];
+    const cardinal::u32 final_per_input = [&]() {
+        cardinal::u32 n = 1;
+        for (cardinal::u32 i = 0; i < lvls; ++i) n *= 4u;
+        return n;
+    }();
+
+    for (cardinal::u32 t = 0; t < M; ++t) {
+        // Load source quad into scratch (count = 1).
+        Quad q0;
+        quad_read(in_q + t * 12, q0);
+        quad_write(scratch, q0);
+        cardinal::u32 current_count = 1;
+        for (cardinal::u32 l = 0; l < lvls; ++l) {
+            const cardinal::u32 next_count = current_count * 4u;
+            // Subdivide each of the current quads in-place. Walk
+            // backwards so children don't overwrite still-pending parents.
+            for (cardinal::u32 i = current_count; i > 0; --i) {
+                const cardinal::u32 src_idx = i - 1;
+                Quad parent;
+                quad_read(scratch + src_idx * 12, parent);
+                subdivide_one(parent, scratch + src_idx * 4 * 12);
+            }
+            current_count = next_count;
+        }
+        // Copy this input's 4^lvls children into out_q at the right offset.
+        const cardinal::u32 dst_base = t * final_per_input * 12;
+        for (cardinal::u32 i = 0; i < final_per_input * 12; ++i) {
+            out_q[dst_base + i] = scratch[i];
+        }
+    }
+    st->quads_emitted        = M * final_per_input;
+    st->sub_quads_per_input  = final_per_input;
+    ec.dispatch((st->quads_emitted + 63) / 64, 1, 1);
+}
+
+}  // namespace
+
+cardinal::shared_ptr<QuadSubdividePass::State> QuadSubdividePass::add_to_graph(
+    rg::Graph& g, rg::ResourceHandle in_quads, cardinal::u32 M, cardinal::u32 levels)
+{
+    auto st = cardinal::shared_ptr<State>(new State());
+    st->in_quads = in_quads;
+    st->input_quad_count = M;
+    st->levels = clamp_u32(levels, 0, kMaxQuadSubdivisionLevels);
+    cardinal::u32 mult = 1;
+    for (cardinal::u32 i = 0; i < st->levels; ++i) mult *= 4u;
+    st->sub_quads_per_input = mult;
+    const cardinal::u32 total = M * mult;
+
+    rg::BufferDesc od;
+    od.name         = "quad.sub";
+    od.size_bytes   = static_cast<cardinal::usize>(total) * 12u * sizeof(float);
+    od.stride_bytes = sizeof(float);
+    st->out_quads = g.declare_buffer(od);
+
+    rg::PassDesc pd;
+    pd.name = "QuadSubdividePass";
+    pd.kind = rg::PassKind::Compute;
+    pd.accesses.push_back(rg::ResourceAccess{in_quads,     rg::AccessMode::Read,  0});
+    pd.accesses.push_back(rg::ResourceAccess{st->out_quads,rg::AccessMode::Write, 1});
+    pd.record   = quad_subdivide_record;
+    pd.user_ctx = st.get();
+    pd.dispatch_x = (total + 63) / 64;
+    g.add_pass(cardinal::move(pd));
+    return st;
+}
+
+const char* QuadSubdividePass::hlsl_source() noexcept {
+    return R"(// Cardinal — QuadSubdividePass.hlsl
+// One thread per input quad. Subdivides into 4^levels children via
+// edge midpoints + quad-centre. Hard cap at levels=4 (256/quad).
+[numthreads(64, 1, 1)]
+void main(uint3 tid : SV_DispatchThreadID) { /* RHI compute commit */ }
+)";
+}
+
+// =============================================================================
+// QuadWireframePass — 4 perimeter edges per quad, Bresenham
+// =============================================================================
+namespace {
+
+void quad_wire_record(rg::ExecutionContext& ec, void* uctx) noexcept {
+    if (!uctx) return;
+    auto* st = static_cast<QuadWireframePass::State*>(uctx);
+    const cardinal::u32 W = st->width, H = st->height;
+    if (W == 0 || H == 0) { ec.dispatch(0, 1, 1); return; }
+
+    const float* quads = static_cast<const float*>(ec.map_buffer_read(st->in_quads));
+    const float* mat   = static_cast<const float*>(ec.map_buffer_read(st->in_matrix));
+    cardinal::u8* color = static_cast<cardinal::u8*>(ec.map_buffer_write(st->out_color));
+    float*        depth = static_cast<float*>      (ec.map_buffer_write(st->out_depth));
+    if (!color || !depth) { ec.dispatch(0, 1, 1); return; }
+
+    for (cardinal::u32 i = 0; i < W * H; ++i) {
+        color[i * 4 + 0] = 0;
+        color[i * 4 + 1] = 0;
+        color[i * 4 + 2] = 0;
+        color[i * 4 + 3] = 255;
+        depth[i] = 1.0f;
+    }
+    if (!quads || !mat || st->quad_count == 0) { ec.dispatch(0, 1, 1); return; }
+
+    float m[16];
+    for (int i = 0; i < 16; ++i) m[i] = fzf(mat[i], (i % 5 == 0) ? 1.0f : 0.0f);
+
+    const cardinal::u8 lr = to_u8(st->line_r);
+    const cardinal::u8 lg = to_u8(st->line_g);
+    const cardinal::u8 lb = to_u8(st->line_b);
+
+    cardinal::u32 px_drawn = 0, edges_drawn = 0, quads_drawn = 0, quads_off = 0;
+    const float hw = 0.5f * static_cast<float>(W);
+    const float hh = 0.5f * static_cast<float>(H);
+
+    auto project = [&](float x, float y, float z, float& sx, float& sy, float& sz, float& sw) {
+        const float cx = m[0]  * x + m[1]  * y + m[2]  * z + m[3];
+        const float cy = m[4]  * x + m[5]  * y + m[6]  * z + m[7];
+        const float cz = m[8]  * x + m[9]  * y + m[10] * z + m[11];
+        const float cw = m[12] * x + m[13] * y + m[14] * z + m[15];
+        sw = cw;
+        if (cardinal::abs(cw) < 1.0e-8f || !isf(cw)) { sx = 0; sy = 0; sz = 1.0e30f; return; }
+        sx = cx / cw; sy = cy / cw; sz = cz / cw;
+    };
+
+    auto draw_edge = [&](float ax_ndc, float ay_ndc, float az_ndc,
+                         float bx_ndc, float by_ndc, float bz_ndc) {
+        int x0 = static_cast<int>(ax_ndc * hw + hw);
+        int y0 = static_cast<int>(hh - ay_ndc * hh);
+        int x1 = static_cast<int>(bx_ndc * hw + hw);
+        int y1 = static_cast<int>(hh - by_ndc * hh);
+        const float z0 = 0.5f * (az_ndc + 1.0f);
+        const float z1 = 0.5f * (bz_ndc + 1.0f);
+        const int dx = (x1 > x0) ? (x1 - x0) : (x0 - x1);
+        const int dy = -((y1 > y0) ? (y1 - y0) : (y0 - y1));
+        const int sx = (x0 < x1) ? 1 : -1;
+        const int sy = (y0 < y1) ? 1 : -1;
+        int err = dx + dy;
+        const float total_len = static_cast<float>((dx > -dy) ? dx : -dy);
+        int x = x0, y = y0, step = 0;
+        const int max_iter = (dx + (-dy)) + 1;
+        while (step < max_iter) {
+            if (x >= 0 && y >= 0 &&
+                static_cast<cardinal::u32>(x) < W &&
+                static_cast<cardinal::u32>(y) < H) {
+                const float t = (total_len > 0.0f) ? static_cast<float>(step) / total_len : 0.0f;
+                const float z = z0 + t * (z1 - z0);
+                const cardinal::usize pix = static_cast<cardinal::usize>(y) * W +
+                                            static_cast<cardinal::usize>(x);
+                if (isf(z) && z >= 0.0f && z <= 1.0f && z <= depth[pix]) {
+                    depth[pix] = z;
+                    color[pix * 4 + 0] = lr;
+                    color[pix * 4 + 1] = lg;
+                    color[pix * 4 + 2] = lb;
+                    color[pix * 4 + 3] = 255;
+                    ++px_drawn;
+                }
+            }
+            if (x == x1 && y == y1) break;
+            const int e2 = 2 * err;
+            if (e2 >= dy) { err += dy; x += sx; }
+            if (e2 <= dx) { err += dx; y += sy; }
+            ++step;
+        }
+        ++edges_drawn;
+    };
+
+    for (cardinal::u32 q = 0; q < st->quad_count; ++q) {
+        const float* v = quads + q * 12;
+        float sx[4], sy[4], sz[4], sw[4];
+        for (int k = 0; k < 4; ++k) {
+            project(fzf(v[k * 3 + 0], 0.0f),
+                    fzf(v[k * 3 + 1], 0.0f),
+                    fzf(v[k * 3 + 2], 0.0f),
+                    sx[k], sy[k], sz[k], sw[k]);
+        }
+        const bool any_behind = (sw[0] <= 0) || (sw[1] <= 0) || (sw[2] <= 0) || (sw[3] <= 0);
+        const bool all_left  = sx[0] < -1 && sx[1] < -1 && sx[2] < -1 && sx[3] < -1;
+        const bool all_right = sx[0] >  1 && sx[1] >  1 && sx[2] >  1 && sx[3] >  1;
+        const bool all_below = sy[0] < -1 && sy[1] < -1 && sy[2] < -1 && sy[3] < -1;
+        const bool all_above = sy[0] >  1 && sy[1] >  1 && sy[2] >  1 && sy[3] >  1;
+        if (any_behind || all_left || all_right || all_below || all_above) {
+            ++quads_off;
+            continue;
+        }
+        // Four perimeter edges: a-b, b-c, c-d, d-a.
+        draw_edge(sx[0], sy[0], sz[0], sx[1], sy[1], sz[1]);
+        draw_edge(sx[1], sy[1], sz[1], sx[2], sy[2], sz[2]);
+        draw_edge(sx[2], sy[2], sz[2], sx[3], sy[3], sz[3]);
+        draw_edge(sx[3], sy[3], sz[3], sx[0], sy[0], sz[0]);
+        ++quads_drawn;
+    }
+    st->pixels_drawn     = px_drawn;
+    st->edges_drawn      = edges_drawn;
+    st->quads_drawn      = quads_drawn;
+    st->quads_offscreen  = quads_off;
+    ec.dispatch((W + 7) / 8, (H + 7) / 8, 1);
+}
+
+}  // namespace
+
+cardinal::shared_ptr<QuadWireframePass::State> QuadWireframePass::add_to_graph(
+    rg::Graph& g, rg::ResourceHandle in_quads, rg::ResourceHandle in_mat,
+    cardinal::u32 W, cardinal::u32 H, cardinal::u32 Q,
+    float lr, float lg, float lb)
+{
+    auto st = cardinal::shared_ptr<State>(new State());
+    st->in_quads = in_quads; st->in_matrix = in_mat;
+    st->width = W; st->height = H; st->quad_count = Q;
+    st->line_r = lr; st->line_g = lg; st->line_b = lb;
+
+    rg::BufferDesc cd; cd.name = "qwire.color"; cd.size_bytes = W * H * 4u; cd.stride_bytes = 4;
+    st->out_color = g.declare_buffer(cd);
+    rg::BufferDesc dd; dd.name = "qwire.depth"; dd.size_bytes = W * H * sizeof(float); dd.stride_bytes = sizeof(float);
+    st->out_depth = g.declare_buffer(dd);
+
+    rg::PassDesc pd;
+    pd.name = "QuadWireframePass"; pd.kind = rg::PassKind::Compute;
+    pd.accesses.push_back(rg::ResourceAccess{in_quads,     rg::AccessMode::Read,  0});
+    pd.accesses.push_back(rg::ResourceAccess{in_mat,       rg::AccessMode::Read,  1});
+    pd.accesses.push_back(rg::ResourceAccess{st->out_color,rg::AccessMode::Write, 2});
+    pd.accesses.push_back(rg::ResourceAccess{st->out_depth,rg::AccessMode::Write, 3});
+    pd.record = quad_wire_record; pd.user_ctx = st.get();
+    pd.dispatch_x = (W + 7) / 8; pd.dispatch_y = (H + 7) / 8;
+    g.add_pass(cardinal::move(pd));
+    return st;
+}
+
+const char* QuadWireframePass::hlsl_source() noexcept {
+    return R"(// Cardinal — QuadWireframePass.hlsl
+// 4 threads per quad — one per perimeter edge. Atomic depth writes for
+// closest-z wins. Diagonals NEVER drawn — that's the quad-vs-tri
+// distinction from WireframePass.
+[numthreads(64, 1, 1)]
+void main(uint3 tid : SV_DispatchThreadID) { /* RHI compute commit */ }
+)";
+}
+
 const char* WireframePass::hlsl_source() noexcept {
     return R"(// Cardinal — WireframePass.hlsl
 //
