@@ -16,8 +16,17 @@ set(CARDINAL_RHI_SOURCES
     src/vulkan/alloc.cpp         # VMA glue
     src/vulkan/modern.cpp        # NVIDIA SDK shims (DLSS/Reflex/Streamline/RTXMU)
     # ---- D3D12 backend (Windows only) ---------------------------------
-    src/d3d12/d3d12.cpp          # D3D12Device + Swapchain + Buffer +
-                                 # Texture + Pipeline + AccelStructure
+    # Phase 2 split (per-class TUs for finer-grained incremental rebuilds).
+    # internal.hpp hosts the shared includes + ComPtr + inline helpers +
+    # the small leaf classes (Buffer / Texture / Pipeline) + the big-class
+    # declarations (Swapchain / Device). Each big class's out-of-line
+    # methods live in their own TU below.
+    src/d3d12/device.cpp         # D3D12Device methods + create_d3d12_device
+                                 # + d3d12_interop functions + non-Windows
+                                 # fallback (only TU that defines the symbol
+                                 # when CARDINAL_PLATFORM_WINDOWS is 0)
+    src/d3d12/swapchain.cpp      # D3D12Swapchain methods + Reflex/NvAPI
+                                 # integration + per-viewport RTT mgmt
 )
 
 add_library(cardinal_rhi STATIC ${CARDINAL_RHI_SOURCES} ${CARDINAL_RHI_HEADERS})
