@@ -340,16 +340,15 @@ public:
         ImGui_ImplWin32_NewFrame();
 #endif
         ImGui::NewFrame();
-        // NOTE: ImGuizmo::BeginFrame() is intentionally NOT called here.
-        // BeginFrame creates a full-screen invisible "gizmo" ImGui window —
-        // harmless on its own, but under ImGui_ConfigFlags_ViewportsEnable
-        // (multi-viewport) it can become a separate platform window and
-        // interferes with the docking layer's window-drag hit testing,
-        // breaking the user's ability to grab dockable panel title bars
-        // and move them around. We get the same gizmo functionality by
-        // calling ImGuizmo::SetDrawlist() inside draw_imguizmo_overlay_,
-        // which uses the viewport panel's draw list directly — no global
-        // window required. SetOrthographic is set once in initialize().
+        // ImGuizmo per-frame setup. Must be called before any panel renders
+        // a gizmo so the internal projection state (display size, mouse
+        // position cache, draw-list defaults) is fresh. The 96 x 96 invisible
+        // "gizmo" window BeginFrame creates is harmless w/ NoInputs — the
+        // earlier suspicion that it broke docking turned out to be wrong;
+        // the real cause was per-panel ImGuiWindowFlags_NoMove flags in
+        // panels/*.cpp (fixed in 62bdcb2). Removing this call broke gizmo
+        // handle alignment with the manipulated object.
+        ImGuizmo::BeginFrame();
         ++frame_count_;
         // Pick state is populated by draw_viewport_panel(); reset at the
         // top of each frame so a stale click doesn't leak across frames.
