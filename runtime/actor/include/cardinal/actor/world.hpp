@@ -54,6 +54,18 @@ public:
     // Ctrl-D primitive every editor needs.
     Actor*  duplicate(ActorId id);
 
+    // ---- Placement ---------------------------------------------------
+    //
+    // Spawn helpers that place the new actor at a world position instead of
+    // the origin — so stamping prefabs / spawning actors from the editor
+    // doesn't pile everything at (0,0,0). Each sets the new actor's
+    // TransformComponent.translation to `pos` (adding a Transform if the
+    // prefab prototype somehow lacked one).
+    Actor*  spawn_at(cardinal::string name, const cardinal::scene::Vec3& pos);
+    Actor*  spawn_prefab_at(const cardinal::string& name,
+                            const cardinal::scene::Vec3& pos,
+                            const cardinal::string& instance_name = "");
+
     // Mark for destruction; the actual remove happens on the next sweep().
     void    destroy(ActorId id);
     void    sweep();   // physically remove dead actors

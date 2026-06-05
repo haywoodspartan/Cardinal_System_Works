@@ -902,6 +902,38 @@ void test_duplicate() {
     CHECK(w.duplicate(99999u) == nullptr);
 }
 
+// ---- spawn placement (spawn_at / spawn_prefab_at) -----------------
+void test_spawn_placement() {
+    ac::World w;
+
+    // spawn_at places a plain actor at a world position.
+    ac::Actor* a = w.spawn_at("Marker", { 5.0f, 1.0f, -3.0f });
+    CHECK(a != nullptr);
+    auto* t = a->get_component<ac::TransformComponent>();
+    CHECK(t != nullptr);
+    CHECK(ap(t->translation.x, 5.0f) && ap(t->translation.y, 1.0f) && ap(t->translation.z, -3.0f));
+
+    // spawn_prefab_at places a stamped instance (vs the prototype's origin).
+    ac::Actor* src = w.spawn("Box");
+    src->add_component<ac::MeshComponent>()->asset_id = "box";
+    CHECK(w.create_prefab("Box", src->id()));
+    // Prototype's transform is at origin.
+    ac::Actor* i1 = w.spawn_prefab_at("Box", { 10.0f, 0.0f, 0.0f });
+    CHECK(i1 != nullptr);
+    CHECK(ap(i1->get_component<ac::TransformComponent>()->translation.x, 10.0f));
+    CHECK(i1->get_component<ac::MeshComponent>() != nullptr);   // still a full clone
+    CHECK(w.prefab_of(i1->id()) == "Box");                      // still linked
+
+    // Two stamps at different positions don't pile up.
+    ac::Actor* i2 = w.spawn_prefab_at("Box", { 12.0f, 0.0f, 0.0f });
+    CHECK(ap(i2->get_component<ac::TransformComponent>()->translation.x, 12.0f));
+    CHECK(i1->get_component<ac::TransformComponent>()->translation.x !=
+          i2->get_component<ac::TransformComponent>()->translation.x);
+
+    // Unknown prefab -> nullptr (placement no-op).
+    CHECK(w.spawn_prefab_at("Nope", { 0, 0, 0 }) == nullptr);
+}
+
 // ---- component serialization (round-trip via factory) -------------
 void test_component_serialization() {
     // Local near-zero check (delta already subtracted at the call sites).
@@ -1161,6 +1193,7 @@ int main() {
     test_enable_disable();
     test_copy_paste_component();
     test_duplicate();
+    test_spawn_placement();
     test_component_serialization();
     test_event_bus();
     test_event_bus_reentrant();

@@ -32,6 +32,12 @@ struct State {
     char library_path[512]{ "save/prefabs.cardinalprefab" };
     // Last-operation feedback line shown under the Save/Load buttons.
     char status[160]{};
+    // Spawn placement — where the next stamped instance lands (instead of
+    // piling at the origin). With auto_step on, X advances by spawn_step
+    // after each spawn so repeated stamps lay out in a row.
+    float spawn_pos[3]{ 0.0f, 0.0f, 0.0f };
+    float spawn_step{ 2.0f };
+    bool  auto_step{ true };
 };
 
 void draw(State& state,

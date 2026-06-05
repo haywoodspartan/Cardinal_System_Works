@@ -143,6 +143,20 @@ void draw(State& state,
     }
     ImGui::Text("%zu prefab%s", names.size(), names.size() == 1 ? "" : "s");
 
+    // Placement — where Spawn drops the instance. Auto-step lays repeated
+    // stamps in a row instead of piling them at one point.
+    ImGui::SetNextItemWidth(180.0f);
+    ImGui::DragFloat3("Spawn at", state.spawn_pos, 0.1f);
+    ImGui::SameLine();
+    ImGui::Checkbox("auto-step", &state.auto_step);
+    if (state.auto_step) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(70.0f);
+        ImGui::DragFloat("##step", &state.spawn_step, 0.05f);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("X offset added after each spawn");
+    }
+
     if (ImGui::BeginTable("##prefab_table", 3,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
                           ImGuiTableFlags_SizingStretchProp)) {
@@ -167,8 +181,12 @@ void draw(State& state,
 
             ImGui::TableSetColumnIndex(2);
             if (ImGui::SmallButton("Spawn")) {
-                if (auto* inst = world->spawn_prefab(n)) {
+                const cardinal::scene::Vec3 pos{ state.spawn_pos[0],
+                                                 state.spawn_pos[1],
+                                                 state.spawn_pos[2] };
+                if (auto* inst = world->spawn_prefab_at(n, pos)) {
                     if (selected_actor_id_inout) *selected_actor_id_inout = inst->id();
+                    if (state.auto_step) state.spawn_pos[0] += state.spawn_step;
                 }
             }
             ImGui::SameLine();

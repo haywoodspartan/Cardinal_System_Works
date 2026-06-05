@@ -66,6 +66,30 @@ Actor* World::duplicate(ActorId id) {
     return dst;
 }
 
+// ---- Placement --------------------------------------------------------
+namespace {
+void place_at_(Actor& a, const cardinal::scene::Vec3& pos) {
+    auto* tr = a.get_component<TransformComponent>();
+    if (tr == nullptr) tr = a.add_component<TransformComponent>();
+    tr->translation = pos;
+}
+}  // namespace
+
+Actor* World::spawn_at(cardinal::string name, const cardinal::scene::Vec3& pos) {
+    Actor* a = spawn(cardinal::move(name));
+    place_at_(*a, pos);
+    return a;
+}
+
+Actor* World::spawn_prefab_at(const cardinal::string& name,
+                              const cardinal::scene::Vec3& pos,
+                              const cardinal::string& instance_name) {
+    Actor* a = spawn_prefab(name, instance_name);
+    if (a == nullptr) return nullptr;
+    place_at_(*a, pos);
+    return a;
+}
+
 void World::destroy(ActorId id) {
     for (auto& a : actors_) if (a->id() == id) { a->kill(); return; }
 }
