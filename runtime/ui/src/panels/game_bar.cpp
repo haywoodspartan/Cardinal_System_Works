@@ -5,6 +5,7 @@
 
 #include <cardinal/game/game.hpp>
 #include <cardinal/serial/serial.hpp>
+#include <cardinal/serial/world_history.hpp>
 #include <cardinal/actor/world.hpp>
 
 #include <cardinal/ui/imgui.hpp>
@@ -35,8 +36,14 @@ void draw(cardinal::game::Game* game, const char* title, bool* p_open) {
     static bool             s_restore_on_stop = true;
     static cardinal::string s_snapshot;
 
+    // Undo / redo history — snapshot checkpoints of the authored world.
+    // Baseline-captured once; the host (or the Checkpoint button) adds more.
+    static cardinal::serial::WorldHistory s_history;
+    if (s_history.empty()) s_history.capture(game->world());
+
     auto play_with_snapshot = [&]() {
         s_snapshot = cardinal::serial::serialize_world(game->world());
+        s_history.capture(game->world());   // also a natural undo checkpoint
         game->start_play();
     };
     auto stop_with_restore = [&]() {
@@ -69,6 +76,26 @@ void draw(cardinal::game::Game* game, const char* title, bool* p_open) {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Snapshot the scene on Play and restore it on Stop, "
                           "so playtesting doesn't alter your authored scene.");
+
+    // ---- Undo / redo history -----------------------------------------
+    // Checkpoint snapshots the world; Undo/Redo step through them. Only
+    // meaningful while editing (Stopped) — while playing, the world is the
+    // live sim, not the authored scene.
+    ImGui::BeginDisabled(state != cardinal::game::GameState::Stopped);
+    if (ImGui::Button("Checkpoint")) s_history.capture(game->world());
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Snapshot the current scene as an undo checkpoint.");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!s_history.can_undo());
+    if (ImGui::Button("Undo")) s_history.undo(*game);
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!s_history.can_redo());
+    if (ImGui::Button("Redo")) s_history.redo(*game);
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%zu/%zu)", s_history.cursor() + 1, s_history.depth());
+    ImGui::EndDisabled();
 
     ImGui::SameLine();
     ImGui::Text("|  state: ");
@@ -114,6 +141,14 @@ void draw(cardinal::game::Game* game, const char* title, bool* p_open) {
             if      (state == cardinal::game::GameState::Playing) game->pause_play();
             else if (state == cardinal::game::GameState::Paused)  game->resume_play();
             // In Stopped state ESC is a no-op (Studio is already idle).
+        }
+        // Ctrl+Z undo / Ctrl+Y (or Ctrl+Shift+Z) redo — editor mode only.
+        if (state == cardinal::game::GameState::Stopped && io.KeyCtrl) {
+            if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+                if (io.KeyShift) s_history.redo(*game);
+                else             s_history.undo(*game);
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) s_history.redo(*game);
         }
     }
 

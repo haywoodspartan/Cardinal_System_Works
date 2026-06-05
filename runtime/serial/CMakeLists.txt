@@ -1,6 +1,8 @@
 add_library(cardinal_serial STATIC
     src/serial.cpp
-    include/cardinal/serial/serial.hpp)
+    src/world_history.cpp
+    include/cardinal/serial/serial.hpp
+    include/cardinal/serial/world_history.hpp)
 add_library(cardinal::serial ALIAS cardinal_serial)
 
 target_include_directories(cardinal_serial PUBLIC

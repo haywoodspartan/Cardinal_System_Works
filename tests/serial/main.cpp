@@ -19,6 +19,7 @@
 // =============================================================================
 
 #include <cardinal/serial/serial.hpp>
+#include <cardinal/serial/world_history.hpp>
 #include <cardinal/sky/sky.hpp>
 #include <cardinal/actor/world.hpp>
 #include <cardinal/game/game.hpp>
@@ -386,6 +387,98 @@ void test_play_snapshot_restore(const std::filesystem::path& /*dir*/) {
     CHECK(rprop != nullptr && rprop->enabled());                          // re-enabled
 }
 
+// ---- WorldHistory: snapshot-based undo / redo ---------------------
+void test_world_history() {
+    namespace ac = cardinal::actor;
+    cardinal::sim::SimWorld sw{cardinal::sim::SimDesc{}};
+    cardinal::game::Game game{sw};
+
+    // IMPORTANT: undo/redo rebuild the world (replace), so any Actor* is
+    // INVALIDATED across a restore. Always re-find the actor by name — this
+    // helper set / getter never caches a pointer across a deserialize.
+    auto set_hero_x = [&](float x) {
+        ac::Actor* h = game.world().find_by_name("Hero");
+        if (h) h->get_component<ac::TransformComponent>()->translation.x = x;
+    };
+    auto hero_x = [&]() {
+        ac::Actor* h = game.world().find_by_name("Hero");
+        return h ? h->get_component<ac::TransformComponent>()->translation.x : -999.0f;
+    };
+
+    game.world().spawn("Hero");
+    set_hero_x(0.0f);
+
+    cardinal::serial::WorldHistory hist(8);
+    CHECK(hist.empty());
+    CHECK(!hist.can_undo() && !hist.can_redo());
+
+    // Baseline checkpoint (x=0).
+    CHECK(hist.capture(game.world()));
+    CHECK(hist.depth() == sz(1) && hist.cursor() == sz(0));
+    CHECK(!hist.can_undo());
+
+    // Capturing an UNCHANGED world is a no-op (dedup).
+    CHECK(!hist.capture(game.world()));
+    CHECK(hist.depth() == sz(1));
+
+    // Edit -> x=10, checkpoint.
+    set_hero_x(10.0f);
+    CHECK(hist.capture(game.world()));
+    CHECK(hist.depth() == sz(2) && hist.cursor() == sz(1));
+    CHECK(hist.can_undo() && !hist.can_redo());
+
+    // Edit -> x=20, checkpoint.
+    set_hero_x(20.0f);
+    CHECK(hist.capture(game.world()));
+    CHECK(hist.depth() == sz(3) && hist.cursor() == sz(2));
+    CHECK(approx(hero_x(), 20.0f, 1e-3f));
+
+    // Undo -> x=10, undo -> x=0 (each restore rebuilds the world).
+    CHECK(hist.undo(game));
+    CHECK(approx(hero_x(), 10.0f, 1e-3f));
+    CHECK(hist.can_undo() && hist.can_redo());
+    CHECK(hist.undo(game));
+    CHECK(approx(hero_x(), 0.0f, 1e-3f));
+    CHECK(!hist.can_undo() && hist.can_redo());
+    CHECK(!hist.undo(game));                      // at the bottom
+
+    // Redo -> x=10.
+    CHECK(hist.redo(game));
+    CHECK(approx(hero_x(), 10.0f, 1e-3f));
+
+    // New edit + capture from the middle TRUNCATES the redo tail (x=20).
+    set_hero_x(99.0f);
+    CHECK(hist.capture(game.world()));
+    CHECK(hist.depth() == sz(3));                 // [0, 10, 99] — old 20 dropped
+    CHECK(!hist.can_redo());
+    CHECK(hist.redo(game) == false);              // tail gone
+    CHECK(hist.undo(game) && approx(hero_x(), 10.0f, 1e-3f));
+
+    // Undo restores STRUCTURE too (spawn/destroy), not just field values.
+    cardinal::serial::WorldHistory h2(8);
+    h2.capture(game.world());                     // baseline (1 actor: Hero)
+    const cardinal::usize base = game.world().actor_count();
+    game.world().spawn("Extra");
+    h2.capture(game.world());                     // now 2 actors
+    CHECK(game.world().actor_count() == base + sz(1));
+    CHECK(h2.undo(game));
+    game.world().sweep();
+    CHECK(game.world().actor_count() == base);    // Extra undone
+    CHECK(game.world().find_by_name("Extra") == nullptr);
+
+    // Bounded depth: a 2-deep history keeps only the latest 2 checkpoints.
+    cardinal::serial::WorldHistory h3(2);
+    for (int i = 0; i < 5; ++i) {
+        set_hero_x(static_cast<float>(100 + i));
+        h3.capture(game.world());
+    }
+    CHECK(h3.depth() == sz(2));                    // capped
+    CHECK(h3.can_undo() && !h3.can_redo());
+
+    hist.clear();
+    CHECK(hist.empty() && !hist.can_undo() && !hist.can_redo());
+}
+
 int main() {
     std::error_code ec;
     std::filesystem::path dir =
@@ -404,6 +497,7 @@ int main() {
     test_prefab_roundtrip(dir);
     test_world_full_components(dir);
     test_play_snapshot_restore(dir);
+    test_world_history();
 
     const auto removed = std::filesystem::remove_all(dir, ec);
     (void)removed;
