@@ -139,6 +139,20 @@ public:
     bool   has_prefab(const cardinal::string& name) const;
     void   remove_prefab(const cardinal::string& name);
     cardinal::vector<cardinal::string> prefab_names() const;
+
+    // Library management — round out prefab CRUD.
+    //   rename_prefab(old, new) — move a prototype to a new key. Fails
+    //     (returns false) if `old` is absent, or `new` is empty / already
+    //     taken. Existing spawned instances keep their old PrefabLink name
+    //     (revert/apply on them would then miss — acceptable; renaming is a
+    //     library edit, not a retroactive relink).
+    //   duplicate_prefab(name, new_name) — clone a prototype under a new
+    //     name. If `new_name` is empty, an auto-unique "<name> (copy)" /
+    //     "(copy N)" is chosen. Fails if `name` is absent or an explicit
+    //     `new_name` is already taken.
+    bool   rename_prefab(const cardinal::string& old_name, const cardinal::string& new_name);
+    bool   duplicate_prefab(const cardinal::string& name,
+                            const cardinal::string& new_name = "");
     // Number of components captured in the named prefab (0 if absent) —
     // for the panel's "Crate (5 components)" display.
     u32    prefab_component_count(const cardinal::string& name) const;

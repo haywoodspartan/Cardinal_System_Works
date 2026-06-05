@@ -320,6 +320,48 @@ void World::remove_prefab(const cardinal::string& name) {
     prefabs_.erase(name);
 }
 
+bool World::rename_prefab(const cardinal::string& old_name,
+                          const cardinal::string& new_name) {
+    if (new_name.empty() || new_name == old_name) return false;
+    auto it = prefabs_.find(old_name);
+    if (it == prefabs_.end()) return false;          // nothing to rename
+    if (prefabs_.find(new_name) != prefabs_.end()) return false;  // target taken
+    auto proto = cardinal::move(it->second);
+    proto->set_name(new_name);                       // keep prototype name in sync
+    prefabs_.erase(it);
+    prefabs_[new_name] = cardinal::move(proto);
+    return true;
+}
+
+bool World::duplicate_prefab(const cardinal::string& name,
+                             const cardinal::string& new_name) {
+    auto it = prefabs_.find(name);
+    if (it == prefabs_.end()) return false;          // no source
+
+    cardinal::string target = new_name;
+    if (target.empty()) {
+        // Auto-unique "<name> (copy)" / "(copy N)" (mirrors actor duplicate).
+        cardinal::string base = name;
+        const auto paren = base.rfind(" (copy");
+        if (paren != cardinal::string::npos && base.back() == ')')
+            base = base.substr(0, paren);
+        target = base + " (copy)";
+        for (u32 n = 2; prefabs_.find(target) != prefabs_.end(); ++n) {
+            char suffix[40];
+            cardinal::snprintf(suffix, sizeof(suffix), " (copy %u)", n);
+            target = base + suffix;
+        }
+    } else if (prefabs_.find(target) != prefabs_.end()) {
+        return false;                                // explicit name already taken
+    }
+
+    // Clone the prototype's components into a fresh detached prototype.
+    auto proto = cardinal::make_unique<Actor>(0u, target);
+    it->second->clone_components_into(*proto, nullptr);
+    prefabs_[target] = cardinal::move(proto);
+    return true;
+}
+
 cardinal::vector<cardinal::string> World::prefab_names() const {
     cardinal::vector<cardinal::string> r;
     r.reserve(prefabs_.size());

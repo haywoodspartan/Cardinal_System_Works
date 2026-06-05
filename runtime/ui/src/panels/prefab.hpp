@@ -38,6 +38,9 @@ struct State {
     float spawn_pos[3]{ 0.0f, 0.0f, 0.0f };
     float spawn_step{ 2.0f };
     bool  auto_step{ true };
+    // Rename popup state: which prefab is being renamed + the edit buffer.
+    char  rename_target[128]{};
+    char  rename_buf[128]{};
 };
 
 void draw(State& state,

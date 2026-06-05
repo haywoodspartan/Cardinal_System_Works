@@ -523,6 +523,48 @@ void test_prefabs() {
     CHECK(rest->get_component<ac::RigidBodyComponent>()->velocity.x == 0.0f);
 }
 
+// ---- prefab library management (rename / duplicate) ---------------
+void test_prefab_library_mgmt() {
+    ac::World w;
+    ac::Actor* src = w.spawn("Barrel");
+    src->add_component<ac::MeshComponent>()->asset_id = "barrel";
+    src->add_component<ac::RigidBodyComponent>();
+    CHECK(w.create_prefab("Barrel", src->id()));
+    CHECK(w.prefab_component_count("Barrel") == sz(3));   // Transform+Mesh+RigidBody
+
+    // Rename: key moves, component set preserved, old name gone.
+    CHECK(w.rename_prefab("Barrel", "Crate"));
+    CHECK(!w.has_prefab("Barrel"));
+    CHECK(w.has_prefab("Crate"));
+    CHECK(w.prefab_component_count("Crate") == sz(3));
+    // Rename failure modes: missing source, empty target, taken target.
+    CHECK(!w.rename_prefab("Barrel", "X"));               // source gone
+    CHECK(!w.rename_prefab("Crate", ""));                 // empty target
+    CHECK(w.create_prefab("Other", src->id()));
+    CHECK(!w.rename_prefab("Crate", "Other"));            // target taken
+    CHECK(w.has_prefab("Crate") && w.has_prefab("Other")); // both intact
+
+    // Duplicate with auto-unique name.
+    CHECK(w.duplicate_prefab("Crate"));                   // -> "Crate (copy)"
+    CHECK(w.has_prefab("Crate (copy)"));
+    CHECK(w.prefab_component_count("Crate (copy)") == sz(3));
+    CHECK(w.duplicate_prefab("Crate"));                   // -> "Crate (copy 2)"
+    CHECK(w.has_prefab("Crate (copy 2)"));
+
+    // Duplicate with an explicit name; clone is independent of the source.
+    CHECK(w.duplicate_prefab("Crate", "CrateV2"));
+    CHECK(w.has_prefab("CrateV2"));
+    // Editing an instance of the dup must not affect the original prefab.
+    ac::Actor* v2 = w.spawn_prefab("CrateV2");
+    v2->get_component<ac::MeshComponent>()->asset_id = "edited";
+    ac::Actor* orig = w.spawn_prefab("Crate");
+    CHECK(orig->get_component<ac::MeshComponent>()->asset_id == "barrel");
+
+    // Duplicate failure modes.
+    CHECK(!w.duplicate_prefab("Nope"));                   // no source
+    CHECK(!w.duplicate_prefab("Crate", "Other"));         // explicit name taken
+}
+
 // ---- starter prefab library ---------------------------------------
 void test_builtin_prefabs() {
     ac::World w;
@@ -1185,6 +1227,7 @@ int main() {
     test_world_lifecycle();
     test_blueprints();
     test_prefabs();
+    test_prefab_library_mgmt();
     test_builtin_prefabs();
     test_find_all_queries();
     test_bulk_ops();

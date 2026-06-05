@@ -161,13 +161,14 @@ void draw(State& state,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
                           ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Name",       ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Components",  ImGuiTableColumnFlags_WidthFixed, 90.0f);
-        ImGui::TableSetupColumn("Actions",     ImGuiTableColumnFlags_WidthFixed, 150.0f);
+        ImGui::TableSetupColumn("Components",  ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn("Actions",     ImGuiTableColumnFlags_WidthFixed, 250.0f);
         ImGui::TableHeadersRow();
 
-        // We may delete during iteration; collect a pending delete and apply
-        // after the loop so the names vector stays valid.
+        // We may mutate the table during iteration; collect pending edits and
+        // apply after the loop so the names vector stays valid.
         cardinal::string to_delete;
+        bool open_rename = false;
 
         for (const auto& n : names) {
             ImGui::TableNextRow();
@@ -190,6 +191,18 @@ void draw(State& state,
                 }
             }
             ImGui::SameLine();
+            if (ImGui::SmallButton("Dup")) {
+                world->duplicate_prefab(n);           // auto-unique "(copy)"
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Rename")) {
+                cardinal::snprintf(state.rename_target, sizeof(state.rename_target),
+                                   "%s", n.c_str());
+                cardinal::snprintf(state.rename_buf, sizeof(state.rename_buf),
+                                   "%s", n.c_str());
+                open_rename = true;
+            }
+            ImGui::SameLine();
             if (ImGui::SmallButton("Delete")) {
                 to_delete = n;
             }
@@ -199,6 +212,29 @@ void draw(State& state,
         ImGui::EndTable();
 
         if (!to_delete.empty()) world->remove_prefab(to_delete);
+        if (open_rename) ImGui::OpenPopup("Rename Prefab");
+    }
+
+    // Rename popup (outside the table so its ID isn't row-scoped).
+    if (ImGui::BeginPopup("Rename Prefab")) {
+        ImGui::Text("Rename '%s'", state.rename_target);
+        ImGui::SetNextItemWidth(220.0f);
+        const bool entered = ImGui::InputText("##rename_buf", state.rename_buf,
+                                              sizeof(state.rename_buf),
+                                              ImGuiInputTextFlags_EnterReturnsTrue);
+        const bool valid = state.rename_buf[0] != '\0' &&
+                           cardinal::strcmp(state.rename_buf, state.rename_target) != 0 &&
+                           !world->has_prefab(state.rename_buf);
+        if (!valid) ImGui::BeginDisabled();
+        const bool ok = ImGui::Button("OK") || entered;
+        if (!valid) ImGui::EndDisabled();
+        if (ok && valid) {
+            world->rename_prefab(state.rename_target, state.rename_buf);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
     }
 
     ImGui::End();
