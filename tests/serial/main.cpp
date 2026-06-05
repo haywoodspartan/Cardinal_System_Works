@@ -335,6 +335,57 @@ void test_world_full_components(const std::filesystem::path& dir) {
     }
 }
 
+// ---- play-mode snapshot / restore (the PIE contract) --------------
+// game_bar snapshots the world on Play (save_world) and restores it on
+// Stop (load_world replace). Verify that contract: snapshot, mutate the
+// world as playtesting would (move actors, spawn new ones, disable some),
+// then restore -> the authored scene is exactly back.
+void test_play_snapshot_restore(const std::filesystem::path& dir) {
+    namespace ac = cardinal::actor;
+    const cardinal::string snap = (dir / "pie_snap.cardinalworld").string();
+
+    cardinal::sim::SimWorld sw{cardinal::sim::SimDesc{}};
+    cardinal::game::Game game{sw};
+
+    // Authored scene: two actors with set positions + a tag.
+    ac::Actor* hero = game.world().spawn("Hero");
+    hero->get_component<ac::TransformComponent>()->translation = { 1.0f, 0.0f, 2.0f };
+    hero->add_component<ac::TagComponent>()->add("player");
+    ac::Actor* prop = game.world().spawn("Prop");
+    prop->get_component<ac::TransformComponent>()->translation = { -4.0f, 0.0f, 0.0f };
+    const cardinal::usize authored_count = game.world().actor_count();
+    CHECK(authored_count == sz(2));
+
+    // --- Play: snapshot ---
+    ser::save_world(game.world(), snap);
+
+    // --- Playtest mutations: move the hero, spawn a projectile, disable prop ---
+    hero->get_component<ac::TransformComponent>()->translation = { 50.0f, 9.0f, 50.0f };
+    game.world().spawn("Projectile(runtime)");
+    prop->set_enabled(false);
+    CHECK(game.world().actor_count() == sz(3));    // a runtime actor appeared
+
+    // --- Stop: restore ---
+    const auto ls = ser::load_world(game, snap, /*replace_existing=*/true);
+    CHECK(ls.actors_spawned >= 2u);
+    game.world().sweep();
+
+    // The authored scene is back: 2 actors, hero at its authored pos, the
+    // runtime projectile gone, prop re-enabled.
+    CHECK(game.world().actor_count() == authored_count);
+    ac::Actor* rhero = game.world().find_by_name("Hero");
+    CHECK(rhero != nullptr);
+    if (rhero) {
+        auto* t = rhero->get_component<ac::TransformComponent>();
+        CHECK(approx(t->translation.x, 1.0f, 1e-3f) && approx(t->translation.z, 2.0f, 1e-3f));
+        CHECK(rhero->get_component<ac::TagComponent>() != nullptr);
+        CHECK(rhero->get_component<ac::TagComponent>()->has("player"));
+    }
+    CHECK(game.world().find_by_name("Projectile(runtime)") == nullptr);  // runtime gone
+    ac::Actor* rprop = game.world().find_by_name("Prop");
+    CHECK(rprop != nullptr && rprop->enabled());                          // re-enabled
+}
+
 int main() {
     std::error_code ec;
     std::filesystem::path dir =
@@ -352,6 +403,7 @@ int main() {
     test_sky_failures(dir);
     test_prefab_roundtrip(dir);
     test_world_full_components(dir);
+    test_play_snapshot_restore(dir);
 
     const auto removed = std::filesystem::remove_all(dir, ec);
     (void)removed;

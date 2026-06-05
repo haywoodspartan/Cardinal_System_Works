@@ -4,6 +4,8 @@
 #include "game_bar.hpp"
 
 #include <cardinal/game/game.hpp>
+#include <cardinal/serial/serial.hpp>
+#include <cardinal/actor/world.hpp>
 
 #include <cardinal/ui/imgui.hpp>
 
@@ -21,10 +23,35 @@ void draw(cardinal::game::Game* game, const char* title, bool* p_open) {
 
     const cardinal::game::GameState state = game->state();
 
+    // ---- Play-mode scene snapshot / restore --------------------------
+    //
+    // Playtesting mutates the live world (physics moves bodies, scripts
+    // spawn/destroy actors, the player walks around). Without a snapshot
+    // those changes would permanently corrupt the authored scene. On Play
+    // we serialize the world to a snapshot file; on Stop we reload it,
+    // restoring the scene exactly as it was — the standard UE/Unity PIE
+    // contract. Toggle off to keep play-mode changes.
+    static bool s_restore_on_stop = true;
+    static bool s_has_snapshot    = false;
+    constexpr const char* kSnapPath = "save/.pie_snapshot.cardinalworld";
+
+    auto play_with_snapshot = [&]() {
+        cardinal::string err;
+        cardinal::serial::save_world(game->world(), kSnapPath, &err);
+        s_has_snapshot = err.empty();
+        game->start_play();
+    };
+    auto stop_with_restore = [&]() {
+        game->stop_play();
+        if (s_restore_on_stop && s_has_snapshot) {
+            cardinal::serial::load_world(*game, kSnapPath, /*replace_existing=*/true);
+        }
+    };
+
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12, 6));
     if (state == cardinal::game::GameState::Stopped) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.65f, 0.30f, 1.0f));
-        if (ImGui::Button("Play")) game->start_play();
+        if (ImGui::Button("Play")) play_with_snapshot();
         ImGui::PopStyleColor();
     } else if (state == cardinal::game::GameState::Paused) {
         if (ImGui::Button("Resume")) game->resume_play();
@@ -35,9 +62,15 @@ void draw(cardinal::game::Game* game, const char* title, bool* p_open) {
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(state == cardinal::game::GameState::Stopped);
-    if (ImGui::Button("Stop")) game->stop_play();
+    if (ImGui::Button("Stop")) stop_with_restore();
     ImGui::EndDisabled();
     ImGui::PopStyleVar();
+
+    ImGui::SameLine();
+    ImGui::Checkbox("Restore on Stop", &s_restore_on_stop);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Snapshot the scene on Play and restore it on Stop, "
+                          "so playtesting doesn't alter your authored scene.");
 
     ImGui::SameLine();
     ImGui::Text("|  state: ");
@@ -69,7 +102,7 @@ void draw(cardinal::game::Game* game, const char* title, bool* p_open) {
     const ImGuiIO& io = ImGui::GetIO();
     if (!io.WantCaptureKeyboard) {
         if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) {
-            if (state == cardinal::game::GameState::Stopped) game->start_play();
+            if (state == cardinal::game::GameState::Stopped) play_with_snapshot();
             else if (state == cardinal::game::GameState::Paused) game->resume_play();
         }
         if (ImGui::IsKeyPressed(ImGuiKey_F6, false)) {
@@ -77,7 +110,7 @@ void draw(cardinal::game::Game* game, const char* title, bool* p_open) {
             else if (state == cardinal::game::GameState::Paused)  game->resume_play();
         }
         if (ImGui::IsKeyPressed(ImGuiKey_F8, false)) {
-            if (state != cardinal::game::GameState::Stopped) game->stop_play();
+            if (state != cardinal::game::GameState::Stopped) stop_with_restore();
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             if      (state == cardinal::game::GameState::Playing) game->pause_play();
