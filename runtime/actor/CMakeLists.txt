@@ -4,11 +4,13 @@ add_library(cardinal_actor STATIC
     src/world.cpp
     src/builtin_prefabs.cpp
     src/validation.cpp
+    src/scene_stats.cpp
     include/cardinal/actor/component.hpp
     include/cardinal/actor/actor.hpp
     include/cardinal/actor/world.hpp
     include/cardinal/actor/builtin_prefabs.hpp
-    include/cardinal/actor/validation.hpp)
+    include/cardinal/actor/validation.hpp
+    include/cardinal/actor/scene_stats.hpp)
 add_library(cardinal::actor ALIAS cardinal_actor)
 
 target_include_directories(cardinal_actor PUBLIC

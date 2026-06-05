@@ -5,6 +5,7 @@
 
 #include <cardinal/actor/world.hpp>
 #include <cardinal/actor/validation.hpp>
+#include <cardinal/actor/scene_stats.hpp>
 
 #include <cardinal/ui/imgui.hpp>
 
@@ -298,6 +299,25 @@ void draw(cardinal::actor::World* world,
     ImGui::EndChild();
 
     if (selected_actor_id_inout) *selected_actor_id_inout = sel;
+
+    // ---- Scene statistics (composition overview) ---------------------
+    if (ImGui::CollapsingHeader("Scene Stats")) {
+        const auto st = cardinal::actor::compute_world_stats(*world);
+        ImGui::Text("Actors: %u  (%u enabled, %u disabled)",
+                    st.actors, st.enabled, st.disabled);
+        ImGui::Text("Prefab instances: %u", st.prefab_instances);
+        if (!st.by_component.empty() &&
+            ImGui::TreeNodeEx("Components", ImGuiTreeNodeFlags_DefaultOpen)) {
+            for (const auto& nc : st.by_component)
+                ImGui::BulletText("%s: %u", nc.name.c_str(), nc.count);
+            ImGui::TreePop();
+        }
+        if (!st.by_tag.empty() && ImGui::TreeNode("Tags")) {
+            for (const auto& nc : st.by_tag)
+                ImGui::BulletText("%s: %u", nc.name.c_str(), nc.count);
+            ImGui::TreePop();
+        }
+    }
 
     // ---- Scene validation (problems panel) ---------------------------
     if (ImGui::CollapsingHeader("Validate Scene")) {

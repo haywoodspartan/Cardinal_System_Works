@@ -25,6 +25,7 @@
 #include <cardinal/actor/world.hpp>
 #include <cardinal/actor/builtin_prefabs.hpp>
 #include <cardinal/actor/validation.hpp>
+#include <cardinal/actor/scene_stats.hpp>
 #include <cardinal/core/log.hpp>
 
 #include <any>
@@ -1015,6 +1016,60 @@ void test_validation() {
     CHECK(ac::validate_world(clean).empty());
 }
 
+// ---- scene statistics ---------------------------------------------
+void test_world_stats() {
+    ac::World w;
+
+    // 2 mesh actors (one disabled), 1 light, 2 tagged.
+    ac::Actor* m1 = w.spawn("M1");
+    m1->add_component<ac::MeshComponent>();
+    ac::Actor* m2 = w.spawn("M2");
+    m2->add_component<ac::MeshComponent>();
+    m2->set_enabled(false);
+    ac::Actor* lt = w.spawn("L");
+    lt->add_component<ac::LightComponent>();
+    ac::Actor* t1 = w.spawn("T1");
+    t1->add_component<ac::TagComponent>()->add("enemy");
+    ac::Actor* t2 = w.spawn("T2");
+    auto* tc2 = t2->add_component<ac::TagComponent>();
+    tc2->add("enemy"); tc2->add("boss");
+
+    // A prefab instance (carries a PrefabLink).
+    CHECK(w.create_prefab("M1", m1->id()));
+    ac::Actor* inst = w.spawn_prefab("M1");
+    CHECK(inst != nullptr);
+
+    auto s = ac::compute_world_stats(w);
+
+    // 6 alive actors: M1, M2, L, T1, T2, instance.
+    CHECK(s.actors == 6u);
+    CHECK(s.enabled == 5u && s.disabled == 1u);     // M2 disabled
+    CHECK(s.prefab_instances == 1u);                // the spawned instance
+
+    // Component breakdown: every actor has a Transform (6).
+    CHECK(s.component_count("Transform") == 6u);
+    // Mesh: M1, M2, and the instance (cloned from M1) = 3.
+    CHECK(s.component_count("Mesh") == 3u);
+    CHECK(s.component_count("Light") == 1u);
+    CHECK(s.component_count("Tag") == 2u);
+    CHECK(s.component_count("PrefabLink") == 1u);    // only the instance
+    CHECK(s.component_count("Nope") == 0u);
+
+    // Tag breakdown: "enemy" on T1 + T2 = 2; "boss" on T2 = 1.
+    CHECK(s.tag_count("enemy") == 2u);
+    CHECK(s.tag_count("boss") == 1u);
+    CHECK(s.tag_count("none") == 0u);
+
+    // Breakdowns are sorted by name.
+    for (cardinal::usize i = 1; i < s.by_component.size(); ++i)
+        CHECK(s.by_component[i - 1].name < s.by_component[i].name);
+
+    // Empty world -> zeros.
+    ac::World empty;
+    auto es = ac::compute_world_stats(empty);
+    CHECK(es.actors == 0u && es.by_component.empty() && es.by_tag.empty());
+}
+
 // ---- grid snapping ------------------------------------------------
 void test_snap_grid() {
     // The pure helper rounds to the nearest multiple.
@@ -1475,6 +1530,7 @@ int main() {
     test_align_distribute();
     test_snap_grid();
     test_validation();
+    test_world_stats();
     test_prefab_link_revert_apply();
     test_has_remove_component();
     test_enable_disable();
