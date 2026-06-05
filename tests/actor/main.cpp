@@ -1016,6 +1016,55 @@ void test_validation() {
     CHECK(ac::validate_world(clean).empty());
 }
 
+// ---- validation auto-fix ------------------------------------------
+void test_validation_autofix() {
+    ac::World w;
+
+    // Zero-scale axis.
+    ac::Actor* flat = w.spawn("Flat");
+    flat->get_component<ac::TransformComponent>()->scale.y = 0.0f;
+    // Out-of-bounds position.
+    ac::Actor* lost = w.spawn("Lost");
+    lost->get_component<ac::TransformComponent>()->translation = { 1e9f, 0.0f, 0.0f };
+    // Duplicate names.
+    w.spawn("Twin");
+    ac::Actor* twin2 = w.spawn("Twin");
+    // A clean actor that must stay untouched.
+    ac::Actor* keep = w.spawn("Keep");
+    keep->get_component<ac::TransformComponent>()->translation = { 3.0f, 4.0f, 5.0f };
+
+    const cardinal::u32 fixed = ac::auto_fix_world(w);
+    CHECK(fixed == 3u);   // 1 scale + 1 position + 1 rename
+
+    // Zero scale recovered to 1.
+    CHECK(ap(flat->get_component<ac::TransformComponent>()->scale.y, 1.0f));
+    // Out-of-bounds reset to origin.
+    CHECK(ap(lost->get_component<ac::TransformComponent>()->translation.x, 0.0f));
+    // The 2nd Twin got a unique name.
+    CHECK(twin2->name() != "Twin");
+    CHECK(twin2->name() == "Twin (2)");
+    // Exactly one actor is now named "Twin" (exact, not substring).
+    int exact_twins = 0;
+    for (const auto& ap2 : w.actors())
+        if (ap2->alive() && ap2->name() == "Twin") ++exact_twins;
+    CHECK(exact_twins == 1);
+    // The clean actor is untouched.
+    CHECK(ap(keep->get_component<ac::TransformComponent>()->translation.x, 3.0f));
+
+    // Re-validate: scale / bounds / dup-name issues are gone.
+    auto after = ac::validate_world(w);
+    for (const auto& i : after) {
+        CHECK(i.message.find("zero scale axis") == cardinal::string::npos);
+        CHECK(i.message.find("far outside")     == cardinal::string::npos);
+        CHECK(i.message.find("share the name")  == cardinal::string::npos);
+    }
+
+    // A clean world -> 0 fixes.
+    ac::World clean;
+    clean.spawn("A"); clean.spawn("B");
+    CHECK(ac::auto_fix_world(clean) == 0u);
+}
+
 // ---- scene statistics ---------------------------------------------
 void test_world_stats() {
     ac::World w;
@@ -1530,6 +1579,7 @@ int main() {
     test_align_distribute();
     test_snap_grid();
     test_validation();
+    test_validation_autofix();
     test_world_stats();
     test_prefab_link_revert_apply();
     test_has_remove_component();

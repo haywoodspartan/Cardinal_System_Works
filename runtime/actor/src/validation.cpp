@@ -140,4 +140,57 @@ u32 count_issues(const cardinal::vector<ValidationIssue>& issues, Severity min_s
     return n;
 }
 
+u32 auto_fix_world(World& world) {
+    u32 fixed = 0;
+
+    // Snapshot alive ids in order (we'll mutate via find()).
+    cardinal::vector<u32> ids;
+    for (const auto& a : world.actors()) if (a->alive()) ids.push_back(a->id());
+
+    // ---- Transform fixes: zero scale + bad position ------------------
+    for (u32 id : ids) {
+        Actor* a = world.find(id);
+        if (a == nullptr) continue;
+        auto* t = a->get_component<TransformComponent>();
+        if (t == nullptr) continue;
+        bool changed = false;
+        if (t->scale.x == 0.0f) { t->scale.x = 1.0f; changed = true; }
+        if (t->scale.y == 0.0f) { t->scale.y = 1.0f; changed = true; }
+        if (t->scale.z == 0.0f) { t->scale.z = 1.0f; changed = true; }
+        if (coord_bad(t->translation.x) || coord_bad(t->translation.y) ||
+            coord_bad(t->translation.z)) {
+            t->translation = { 0.0f, 0.0f, 0.0f };
+            changed = true;
+        }
+        if (changed) ++fixed;
+    }
+
+    // ---- Duplicate-name fixes ----------------------------------------
+    cardinal::vector<cardinal::string> claimed;
+    auto is_claimed = [&](const cardinal::string& s) {
+        for (const auto& c : claimed) if (c == s) return true;
+        return false;
+    };
+    for (u32 id : ids) {
+        Actor* a = world.find(id);
+        if (a == nullptr) continue;
+        const cardinal::string nm = a->name();
+        if (!is_claimed(nm)) { claimed.push_back(nm); continue; }
+        // Find the next free "<name> (n)".
+        cardinal::string cand;
+        for (u32 n = 2; ; ++n) {
+            char suffix[32];
+            cardinal::snprintf(suffix, sizeof(suffix), " (%u)", n);
+            cand = nm + suffix;
+            if (!is_claimed(cand)) break;
+        }
+        a->set_name(cand);
+        claimed.push_back(cand);
+        ++fixed;
+    }
+
+    if (fixed) world.bump_revision();
+    return fixed;
+}
+
 }  // namespace cardinal::actor

@@ -38,4 +38,15 @@ cardinal::vector<ValidationIssue> validate_world(const World& world);
 // Count issues at or above a severity (e.g. count_issues(issues, Warning)).
 u32 count_issues(const cardinal::vector<ValidationIssue>& issues, Severity min_severity);
 
+// Apply the mechanically-safe fixes — the ones with an unambiguous correct
+// answer, so they don't need designer intent:
+//   * a zero scale axis  -> reset that axis to 1
+//   * a non-finite / far-out-of-bounds position -> reset to the origin
+//   * a duplicate actor name -> rename the later one "<name> (2)" etc.
+// Issues that DO need a human decision (missing mesh asset, dead light,
+// extra active camera, empty actor) are left alone. Bumps the revision when
+// it changes anything (so it's one undo step). Returns the number of fixes
+// applied.
+u32 auto_fix_world(World& world);
+
 }  // namespace cardinal::actor

@@ -328,6 +328,14 @@ void draw(cardinal::actor::World* world,
             ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.4f, 1.0f), "No issues found.");
         } else {
             ImGui::Text("%zu issue(s), %u warning+",  issues.size(), warns);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Fix Auto-fixable")) {
+                cardinal::actor::auto_fix_world(*world);
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Reset zero scales, recover out-of-bounds "
+                                  "positions, and de-duplicate names. Other "
+                                  "issues need a manual decision.");
             if (ImGui::BeginChild("##issues", ImVec2(0, 120.0f), ImGuiChildFlags_FrameStyle)) {
                 for (cardinal::usize i = 0; i < issues.size(); ++i) {
                     const auto& iss = issues[i];
