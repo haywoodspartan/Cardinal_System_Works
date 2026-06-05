@@ -1,7 +1,7 @@
 // ProcessLock — cross-process named mutex. Win path uses CreateMutexW;
 // non-Windows reduces to an in-process mutex pointer (named-IPC stub).
 
-#include <cardinal/core/pa/lock.hpp>
+#include <cardinal/core/sync/lock.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
 #include <Windows.h>

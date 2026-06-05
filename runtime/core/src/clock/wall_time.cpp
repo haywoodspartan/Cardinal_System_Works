@@ -1,4 +1,4 @@
-#include <cardinal/core/pa/wall_time.hpp>
+#include <cardinal/core/clock/wall_time.hpp>
 
 #include <ctime>
 #include <chrono>

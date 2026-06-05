@@ -1,4 +1,4 @@
-#include <cardinal/core/pa/directory.hpp>
+#include <cardinal/core/os/directory.hpp>
 
 #include <filesystem>
 #include <system_error>

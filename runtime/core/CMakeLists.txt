@@ -53,28 +53,43 @@ set(CARDINAL_CORE_HEADERS
     # empty no-op type on non-Windows so cross-platform code can hold it
     # unconditionally without #ifdef ladders at the use site.
     include/cardinal/core/kernel_object_attribute.hpp
-    # Flat (sorted-vector-backed) associative containers — cache-tight
-    # std::set / std::map drop-ins for build-once-read-many tables, small
-    # N, and iteration-heavy paths. Modernised port of Pearl Abyss
-    # BinarySet/BinaryMap (binary-search lookup on a flat array).
-    include/cardinal/core/flat_set.hpp
-    include/cardinal/core/flat_map.hpp
-    # Bump / pool allocators — per-frame scratch arena + fixed-size slab
-    # pool. The bread-and-butter allocators for hot transient paths
-    # (graph nodes, RHI command staging, particle pool, etc.). Header-only.
-    include/cardinal/core/linear_allocator.hpp
-    include/cardinal/core/pool_allocator.hpp
-    # STL-allocator adapter that forwards allocate() to a LinearAllocator
-    # — used to back std::vector / cardinal::vector with arena memory
-    # transparently. deallocate() is a no-op; reset the arena en masse.
-    include/cardinal/core/arena_allocator.hpp
-    # Service locator for engine-wide singletons + shared_object<T>
-    # flyweight cache (find-or-create with weak_ptr-backed auto-eviction).
-    include/cardinal/core/global_object_manager.hpp
-    include/cardinal/core/shared_object.hpp
-    # Pearl Abyss Pa* surface modernised onto C++20. Umbrella + per-component
-    # sub-headers under cardinal/core/pa/ — used as the porting bridge when
-    # bringing CrimsonDesert-style server / tooling code into cardinal::core.
+    # ---------------------------------------------------------------------
+    # Semantic subdirectories — folder reorg pass (cardinal/core/ used to
+    # have ~65 files flat at the root; group them by responsibility so the
+    # tree is navigable. Old paths kept as forwarding stubs (see below) so
+    # engine-wide includes don't churn.
+    # ---------------------------------------------------------------------
+    # alloc/ — bump / pool / arena allocators. Hot-path transient memory.
+    include/cardinal/core/alloc/linear_allocator.hpp
+    include/cardinal/core/alloc/pool_allocator.hpp
+    include/cardinal/core/alloc/arena_allocator.hpp
+    # container/ — cardinal-specific containers (flat associative,
+    # synchronised queues from the Pa port).
+    include/cardinal/core/container/flat_set.hpp
+    include/cardinal/core/container/flat_map.hpp
+    include/cardinal/core/container/queue.hpp
+    # sync/ — concurrency primitives ported from PA + new abstractions.
+    include/cardinal/core/sync/lock.hpp
+    include/cardinal/core/sync/access.hpp
+    include/cardinal/core/sync/worker_thread.hpp
+    # clock/ — wall-clock + interval timers (modernised PaTime / PaTimer).
+    include/cardinal/core/clock/wall_time.hpp
+    include/cardinal/core/clock/stopwatch.hpp
+    # os/ — file I/O, directory enumeration, SEH minidump (Pa-port subset).
+    include/cardinal/core/os/file.hpp
+    include/cardinal/core/os/directory.hpp
+    include/cardinal/core/os/seh.hpp
+    # string/ — fixed-capacity stack strings (Pa StringA/W).
+    include/cardinal/core/string/fixed_string.hpp
+    # service/ — service locator + shared_object intern cache.
+    include/cardinal/core/service/global_object_manager.hpp
+    include/cardinal/core/service/shared_object.hpp
+    # ---------------------------------------------------------------------
+    # pa.hpp umbrella + forwarding stubs at the OLD pa/* and old root-level
+    # paths. Stubs are 5-line `#pragma once + #include` files that let
+    # existing engine #includes resolve to the new canonical locations
+    # without code churn. Remove the stubs once consumers migrate.
+    # ---------------------------------------------------------------------
     include/cardinal/core/pa.hpp
     include/cardinal/core/pa/lock.hpp
     include/cardinal/core/pa/access.hpp
@@ -86,6 +101,13 @@ set(CARDINAL_CORE_HEADERS
     include/cardinal/core/pa/directory.hpp
     include/cardinal/core/pa/thread.hpp
     include/cardinal/core/pa/seh.hpp
+    include/cardinal/core/linear_allocator.hpp
+    include/cardinal/core/pool_allocator.hpp
+    include/cardinal/core/arena_allocator.hpp
+    include/cardinal/core/flat_set.hpp
+    include/cardinal/core/flat_map.hpp
+    include/cardinal/core/global_object_manager.hpp
+    include/cardinal/core/shared_object.hpp
 )
 
 set(CARDINAL_CORE_SOURCES
@@ -117,15 +139,16 @@ set(CARDINAL_CORE_SOURCES
     # no-op stubs so the symbol set is identical across platforms).
     src/kernel_object_attribute.cpp
     # Pa* port — non-template TUs (lock-process / file-IO / directory-fs /
-    # thread-impl / wall-time / SEH-minidump). Templates stay header-only.
-    src/pa/lock.cpp
-    src/pa/file.cpp
-    src/pa/directory.cpp
-    src/pa/thread.cpp
-    src/pa/wall_time.cpp
-    src/pa/seh.cpp
+    # thread-impl / wall-time / SEH-minidump) relocated by the folder reorg
+    # into semantic subdirs alongside their headers.
+    src/sync/lock.cpp
+    src/sync/worker_thread.cpp
+    src/os/file.cpp
+    src/os/directory.cpp
+    src/os/seh.cpp
+    src/clock/wall_time.cpp
     # GlobalObjectManager — service locator for engine-wide singletons.
-    src/global_object_manager.cpp
+    src/service/global_object_manager.cpp
 )
 
 if(WIN32)

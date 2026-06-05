@@ -1,4 +1,4 @@
-#include <cardinal/core/pa/thread.hpp>
+#include <cardinal/core/sync/worker_thread.hpp>
 #include <cardinal/core/affinity.hpp>
 
 #include <chrono>
