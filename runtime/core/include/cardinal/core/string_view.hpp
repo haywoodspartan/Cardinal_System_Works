@@ -1,18 +1,5 @@
 #pragma once
-
-// =============================================================================
-// Cardinal core — <string_view> vocabulary (single sanctioned include site
-// per the FOUNDATION RULE). Companion to cardinal::string in core/types.hpp.
-// =============================================================================
-
-#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
-
-#include <string_view>
-
-namespace cardinal {
-
-using string_view  = std::string_view;
-using wstring_view = std::wstring_view;
-using std::string_view_literals::operator""sv;
-
-}  // namespace cardinal
+// Forwarding stub - moved into a semantic subdir during the core folder
+// reorg. New canonical path: <cardinal/core/std/string_view.hpp>. Update call sites at
+// leisure; this stub will be removed once consumers migrate.
+#include <cardinal/core/std/string_view.hpp>

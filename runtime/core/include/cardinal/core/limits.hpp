@@ -1,17 +1,5 @@
 #pragma once
-
-// =============================================================================
-// Cardinal core — <limits> vocabulary (single sanctioned include site per the
-// FOUNDATION RULE). Non-core code uses cardinal::numeric_limits<T>.
-// =============================================================================
-
-#include <cardinal/core/types.hpp>   // MASTER typedef header (FOUNDATION RULE)
-
-#include <limits>
-
-namespace cardinal {
-
-template <class T> using numeric_limits = std::numeric_limits<T>;
-using std::float_round_style;
-
-}  // namespace cardinal
+// Forwarding stub - moved into a semantic subdir during the core folder
+// reorg. New canonical path: <cardinal/core/std/limits.hpp>. Update call sites at
+// leisure; this stub will be removed once consumers migrate.
+#include <cardinal/core/std/limits.hpp>

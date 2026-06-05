@@ -25,8 +25,8 @@
 // the same five headers per .cpp.
 // =============================================================================
 
-#include <cardinal/core/types.hpp>          // u8..u64, i8..i64, f32/f64, usize, shared_ptr, unique_ptr
-#include <cardinal/core/containers.hpp>     // vector, string, array
-#include <cardinal/core/utility.hpp>        // move, swap, forward
-#include <cardinal/core/cmath.hpp>          // isfinite, sqrt, clamp, pow, cos/sin/tan, abs
-#include <cardinal/core/algorithm.hpp>      // clamp, min, max
+#include <cardinal/core/types.hpp>              // u8..u64, i8..i64, f32/f64, usize, shared_ptr, unique_ptr
+#include <cardinal/core/std/containers.hpp>     // vector, string, array
+#include <cardinal/core/std/utility.hpp>        // move, swap, forward
+#include <cardinal/core/std/cmath.hpp>          // isfinite, sqrt, clamp, pow, cos/sin/tan, abs
+#include <cardinal/core/std/algorithm.hpp>      // clamp, min, max

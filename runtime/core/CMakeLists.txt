@@ -1,96 +1,205 @@
 set(CARDINAL_CORE_HEADERS
-    # Engine-wide precompiled header. Any module can opt-in via:
-    #   target_precompile_headers(<target> PRIVATE
-    #       <cardinal/core/precompile.hpp>)
-    # Foundation rule still holds: std headers stay INSIDE cardinal::core,
-    # this header re-exports the foundation's container / utility / math /
-    # algorithm surface so downstream modules don't restate it per .cpp.
-    include/cardinal/core/precompile.hpp
+    # ---------------------------------------------------------------------
+    # Foundation (root) — types, platform, precompile, umbrella. These are
+    # the most heavily-included files in the engine; everything else lives
+    # one directory down so the tree is navigable.
+    # ---------------------------------------------------------------------
     include/cardinal/core/types.hpp
-    include/cardinal/core/platform.hpp
-    include/cardinal/core/topology.hpp
-    include/cardinal/core/affinity.hpp
-    include/cardinal/core/jobs.hpp
-    include/cardinal/core/log.hpp
-    include/cardinal/core/frame_pacer.hpp
-    include/cardinal/core/handle.hpp
-    include/cardinal/core/time.hpp
-    include/cardinal/core/result.hpp
-    include/cardinal/core/scope_guard.hpp
-    include/cardinal/core/hash.hpp
-    include/cardinal/core/id_gen.hpp
-    include/cardinal/core/math.hpp
-    include/cardinal/core/spatial.hpp
-    include/cardinal/core/memory.hpp
-    include/cardinal/core/budget.hpp
-    include/cardinal/core/async.hpp
-    include/cardinal/core/autoscaler.hpp
-    # HAL (file I/O, dynamic library, OS info, mono clock, CPU features) +
-    # IO Dispatcher (priority async I/O on top of the worker pool) — folded
-    # into core so every dependent gets them transitively without separate
-    # cardinal::hal / cardinal::io link targets.
-    include/cardinal/core/hal.hpp
-    include/cardinal/core/io.hpp
-    # Geometry math (AABB / OBB / Sphere / Capsule / Plane / Frustum /
-    # Triangle / Polygon2D / Ray / Hit / AabbBvh / DynamicMesh) lives here
-    # in cardinal::core::geom. Used by physics / partition / level / nav /
-    # ai — every one of those modules already depends on core.
-    include/cardinal/core/geom.hpp
-    # Crash reporter — Win32 SEH unhandled-exception filter that writes a
-    # minidump + text log on uncaught exceptions. Stub on Linux for now.
-    include/cardinal/core/crash.hpp
-    # Trace export — chrome://tracing-compatible JSON dump of FrameScope
-    # samples for offline profiling.
-    include/cardinal/core/trace_export.hpp
-    # File watcher — event-driven file change notifications (Win32
-    # ReadDirectoryChangesW today; inotify on Linux when WSI lands).
-    include/cardinal/core/file_watcher.hpp
-    # SIMD math — runtime-dispatched vector ops + std::vector aliases.
-    include/cardinal/core/simd_math.hpp
     include/cardinal/core/typedefs.hpp
-    # Windows kernel-object attribute wrapper — RAII over OBJECT_ATTRIBUTES
-    # for NT API calls (NtCreateFile/Event/Mutant/Key, etc.). Builds as an
-    # empty no-op type on non-Windows so cross-platform code can hold it
-    # unconditionally without #ifdef ladders at the use site.
-    include/cardinal/core/kernel_object_attribute.hpp
+    include/cardinal/core/platform.hpp
+    include/cardinal/core/precompile.hpp
+    include/cardinal/core/std.hpp                # umbrella over std/
+
     # ---------------------------------------------------------------------
-    # Semantic subdirectories — folder reorg pass (cardinal/core/ used to
-    # have ~65 files flat at the root; group them by responsibility so the
-    # tree is navigable. Old paths kept as forwarding stubs (see below) so
-    # engine-wide includes don't churn.
+    # std/ — std vocabulary wrappers (single sanctioned include sites per
+    # the FOUNDATION RULE). Non-core code uses cardinal:: aliases only.
     # ---------------------------------------------------------------------
-    # alloc/ — bump / pool / arena allocators. Hot-path transient memory.
+    include/cardinal/core/std/algorithm.hpp
+    include/cardinal/core/std/any.hpp
+    include/cardinal/core/std/atomic.hpp
+    include/cardinal/core/std/bit.hpp
+    include/cardinal/core/std/cassert.hpp
+    include/cardinal/core/std/cctype.hpp
+    include/cardinal/core/std/charconv.hpp
+    include/cardinal/core/std/chrono.hpp
+    include/cardinal/core/std/climits.hpp
+    include/cardinal/core/std/cmath.hpp
+    include/cardinal/core/std/containers.hpp
+    include/cardinal/core/std/cstdarg.hpp
+    include/cardinal/core/std/cstdio.hpp
+    include/cardinal/core/std/cstdlib.hpp
+    include/cardinal/core/std/cstring.hpp
+    include/cardinal/core/std/ctime.hpp
+    include/cardinal/core/std/filesystem.hpp
+    include/cardinal/core/std/fstream.hpp
+    include/cardinal/core/std/future.hpp
+    include/cardinal/core/std/hash.hpp
+    include/cardinal/core/std/limits.hpp
+    include/cardinal/core/std/new.hpp
+    include/cardinal/core/std/sstream.hpp
+    include/cardinal/core/std/string_view.hpp
+    include/cardinal/core/std/thread.hpp
+    include/cardinal/core/std/traits.hpp
+    include/cardinal/core/std/utility.hpp
+
+    # ---------------------------------------------------------------------
+    # alloc/ — bump / pool / arena allocators for hot transient paths.
+    # ---------------------------------------------------------------------
     include/cardinal/core/alloc/linear_allocator.hpp
     include/cardinal/core/alloc/pool_allocator.hpp
     include/cardinal/core/alloc/arena_allocator.hpp
-    # container/ — cardinal-specific containers (flat associative,
-    # synchronised queues from the Pa port).
+
+    # ---------------------------------------------------------------------
+    # container/ — cardinal-specific associative containers + concurrent
+    # queues.
+    # ---------------------------------------------------------------------
     include/cardinal/core/container/flat_set.hpp
     include/cardinal/core/container/flat_map.hpp
     include/cardinal/core/container/queue.hpp
-    # sync/ — concurrency primitives (lock, access gate, worker thread).
+
+    # ---------------------------------------------------------------------
+    # sync/ — concurrency primitives: jobs/async/affinity/topology +
+    # autoscaler + frame_pacer + lock/access/worker_thread.
+    # ---------------------------------------------------------------------
+    include/cardinal/core/sync/jobs.hpp
+    include/cardinal/core/sync/async.hpp
+    include/cardinal/core/sync/affinity.hpp
+    include/cardinal/core/sync/topology.hpp
+    include/cardinal/core/sync/autoscaler.hpp
+    include/cardinal/core/sync/frame_pacer.hpp
     include/cardinal/core/sync/lock.hpp
     include/cardinal/core/sync/access.hpp
     include/cardinal/core/sync/worker_thread.hpp
-    # clock/ — wall-clock + interval timers (Time / Stopwatch /
-    # RepeatableTimer / CpuTime / CpuUsage).
+
+    # ---------------------------------------------------------------------
+    # clock/ — time / wall_time / stopwatch / RepeatableTimer.
+    # ---------------------------------------------------------------------
+    include/cardinal/core/clock/time.hpp
     include/cardinal/core/clock/wall_time.hpp
     include/cardinal/core/clock/stopwatch.hpp
-    # os/ — file I/O, directory enumeration, SEH minidump bridge.
+
+    # ---------------------------------------------------------------------
+    # os/ — OS abstraction (HAL, IO dispatcher, file watcher, Windows
+    # kernel-object attributes, sync file/directory/SEH).
+    # ---------------------------------------------------------------------
+    include/cardinal/core/os/hal.hpp
+    include/cardinal/core/os/io.hpp
+    include/cardinal/core/os/file_watcher.hpp
+    include/cardinal/core/os/kernel_object_attribute.hpp
     include/cardinal/core/os/file.hpp
     include/cardinal/core/os/directory.hpp
     include/cardinal/core/os/seh.hpp
-    # string/ — fixed-capacity stack strings (StringA<N> / StringW<N>).
+
+    # ---------------------------------------------------------------------
+    # math/ — math / simd_math / geometry / spatial.
+    # ---------------------------------------------------------------------
+    include/cardinal/core/math/math.hpp
+    include/cardinal/core/math/simd_math.hpp
+    include/cardinal/core/math/geom.hpp
+    include/cardinal/core/math/spatial.hpp
+
+    # ---------------------------------------------------------------------
+    # string/ — fixed-capacity stack strings.
+    # ---------------------------------------------------------------------
     include/cardinal/core/string/fixed_string.hpp
+
+    # ---------------------------------------------------------------------
+    # diag/ — log, crash reporter, trace export.
+    # ---------------------------------------------------------------------
+    include/cardinal/core/diag/log.hpp
+    include/cardinal/core/diag/crash.hpp
+    include/cardinal/core/diag/trace_export.hpp
+
+    # ---------------------------------------------------------------------
     # service/ — service locator + shared_object intern cache.
+    # ---------------------------------------------------------------------
     include/cardinal/core/service/global_object_manager.hpp
     include/cardinal/core/service/shared_object.hpp
+
     # ---------------------------------------------------------------------
-    # Backwards-compat forwarding stubs at the OLD root-level paths for
-    # the recently-grouped headers — 5-line `#pragma once + #include` files
-    # that let pre-reorg engine #includes resolve to the new canonical
-    # locations without code churn. Remove once consumers migrate.
+    # budget/ — pressure-tier budgets + OS memory snapshot.
     # ---------------------------------------------------------------------
+    include/cardinal/core/budget/budget.hpp
+    include/cardinal/core/budget/memory.hpp
+
+    # ---------------------------------------------------------------------
+    # handle/ — opaque handle types + id generation.
+    # ---------------------------------------------------------------------
+    include/cardinal/core/handle/handle.hpp
+    include/cardinal/core/handle/id_gen.hpp
+
+    # ---------------------------------------------------------------------
+    # error/ — Result type + scope-guard.
+    # ---------------------------------------------------------------------
+    include/cardinal/core/error/result.hpp
+    include/cardinal/core/error/scope_guard.hpp
+
+    # ---------------------------------------------------------------------
+    # Backwards-compat forwarding stubs at the OLD root-level paths so
+    # pre-reorg engine #includes resolve to the new canonical locations
+    # without code churn. Remove once consumers migrate.
+    # ---------------------------------------------------------------------
+    # std wrappers (28 stubs)
+    include/cardinal/core/algorithm.hpp
+    include/cardinal/core/any.hpp
+    include/cardinal/core/atomic.hpp
+    include/cardinal/core/bit.hpp
+    include/cardinal/core/cassert.hpp
+    include/cardinal/core/cctype.hpp
+    include/cardinal/core/charconv.hpp
+    include/cardinal/core/chrono.hpp
+    include/cardinal/core/climits.hpp
+    include/cardinal/core/cmath.hpp
+    include/cardinal/core/containers.hpp
+    include/cardinal/core/cstdarg.hpp
+    include/cardinal/core/cstdio.hpp
+    include/cardinal/core/cstdlib.hpp
+    include/cardinal/core/cstring.hpp
+    include/cardinal/core/ctime.hpp
+    include/cardinal/core/filesystem.hpp
+    include/cardinal/core/fstream.hpp
+    include/cardinal/core/future.hpp
+    include/cardinal/core/hash.hpp
+    include/cardinal/core/limits.hpp
+    include/cardinal/core/new.hpp
+    include/cardinal/core/sstream.hpp
+    include/cardinal/core/string_view.hpp
+    include/cardinal/core/thread.hpp
+    include/cardinal/core/traits.hpp
+    include/cardinal/core/utility.hpp
+    # diag/
+    include/cardinal/core/log.hpp
+    include/cardinal/core/crash.hpp
+    include/cardinal/core/trace_export.hpp
+    # math/
+    include/cardinal/core/math.hpp
+    include/cardinal/core/simd_math.hpp
+    include/cardinal/core/geom.hpp
+    include/cardinal/core/spatial.hpp
+    # sync/
+    include/cardinal/core/jobs.hpp
+    include/cardinal/core/async.hpp
+    include/cardinal/core/affinity.hpp
+    include/cardinal/core/topology.hpp
+    include/cardinal/core/autoscaler.hpp
+    include/cardinal/core/frame_pacer.hpp
+    # os/
+    include/cardinal/core/hal.hpp
+    include/cardinal/core/io.hpp
+    include/cardinal/core/file_watcher.hpp
+    include/cardinal/core/kernel_object_attribute.hpp
+    # clock/
+    include/cardinal/core/time.hpp
+    # budget/
+    include/cardinal/core/budget.hpp
+    include/cardinal/core/memory.hpp
+    # handle/
+    include/cardinal/core/handle.hpp
+    include/cardinal/core/id_gen.hpp
+    # error/
+    include/cardinal/core/result.hpp
+    include/cardinal/core/scope_guard.hpp
+    # alloc / container / service (from prior reorg pass)
     include/cardinal/core/linear_allocator.hpp
     include/cardinal/core/pool_allocator.hpp
     include/cardinal/core/arena_allocator.hpp
@@ -101,55 +210,54 @@ set(CARDINAL_CORE_HEADERS
 )
 
 set(CARDINAL_CORE_SOURCES
-    src/topology.cpp
-    src/jobs.cpp
-    src/log.cpp
-    src/frame_pacer.cpp
-    src/time.cpp
-    src/memory.cpp
-    src/budget.cpp
-    src/async.cpp
-    src/hal.cpp
-    src/io.cpp
-    src/geom.cpp
-    src/crash.cpp
-    src/trace_export.cpp
-    src/file_watcher.cpp
-    # SIMD math — one TU per ISA tier, each compiled with its own
-    # /arch flag below. Dispatcher binds the highest-tier ops the
-    # CPU supports at static init.
-    src/simd_math_scalar.cpp
-    src/simd_math_sse42.cpp
-    src/simd_math_avx.cpp
-    src/simd_math_avx2.cpp
-    src/simd_math_avx512.cpp
-    src/simd_math_dispatch.cpp
-    # KernelObjectAttribute — single TU with internal #if CARDINAL_PLATFORM_WINDOWS
-    # gate (Windows path = full impl over OBJECT_ATTRIBUTES; non-Windows path =
-    # no-op stubs so the symbol set is identical across platforms).
-    src/kernel_object_attribute.cpp
-    # Non-template TUs grouped alongside their headers under the semantic
-    # subdirs (sync / clock / os / service).
+    # diag/
+    src/diag/log.cpp
+    src/diag/crash.cpp
+    src/diag/trace_export.cpp
+    # math/ — one TU per ISA tier; per-source /arch flags below.
+    src/math/geom.cpp
+    src/math/simd_math_scalar.cpp
+    src/math/simd_math_sse42.cpp
+    src/math/simd_math_avx.cpp
+    src/math/simd_math_avx2.cpp
+    src/math/simd_math_avx512.cpp
+    src/math/simd_math_dispatch.cpp
+    # sync/
+    src/sync/jobs.cpp
+    src/sync/async.cpp
+    src/sync/topology.cpp
+    src/sync/frame_pacer.cpp
     src/sync/lock.cpp                       # ProcessLock cross-process named mutex
     src/sync/worker_thread.cpp              # Thread + ThreadManager
-    src/clock/wall_time.cpp                 # Time / CpuTime / CpuUsage
+    # os/
+    src/os/hal.cpp
+    src/os/io.cpp
+    src/os/file_watcher.cpp
+    src/os/kernel_object_attribute.cpp
     src/os/file.cpp                         # File / SyncReadFile / SyncWriteFile
     src/os/directory.cpp                    # Directory enumeration
     src/os/seh.cpp                          # SehManager + minidump bridge
-    src/service/global_object_manager.cpp   # Engine-wide singleton registry
+    # clock/
+    src/clock/time.cpp
+    src/clock/wall_time.cpp                 # Time / CpuTime / CpuUsage
+    # budget/
+    src/budget/budget.cpp
+    src/budget/memory.cpp
+    # service/
+    src/service/global_object_manager.cpp
 )
 
 if(WIN32)
     list(APPEND CARDINAL_CORE_SOURCES
-        src/topology_windows.cpp
-        src/affinity_windows.cpp
-        src/memory_windows.cpp
+        src/sync/topology_windows.cpp
+        src/sync/affinity_windows.cpp
+        src/budget/memory_windows.cpp
     )
 elseif(UNIX AND NOT APPLE)
     list(APPEND CARDINAL_CORE_SOURCES
-        src/topology_linux.cpp
-        src/affinity_linux.cpp
-        src/memory_linux.cpp
+        src/sync/topology_linux.cpp
+        src/sync/affinity_linux.cpp
+        src/budget/memory_linux.cpp
     )
 endif()
 
@@ -165,7 +273,7 @@ target_link_libraries(cardinal_core PUBLIC cardinal::compile_flags)
 # Per-platform extras for HAL.
 if(WIN32)
     # psapi: HAL OS info / process metrics.
-    # version: pa/file.cpp uses GetFileVersionInfo / VerQueryValue (Win32
+    # version: os/file.cpp uses GetFileVersionInfo / VerQueryValue (Win32
     # Version Resource scan) for File::get_version / get_my_version.
     # crash.cpp resolves dbghelp.dll dynamically via LoadLibrary so we
     # don't need to link it here — keeps the core lib free of a hard
@@ -200,13 +308,11 @@ set_target_properties(cardinal_core PROPERTIES
 # GCC/Clang use -mavx, -mavx2 -mfma, -mavx512f -mavx512vl, etc. The
 # scalar TU stays at baseline x86_64 (SSE2) so it runs on EVERY x64 CPU.
 if(MSVC)
-    # SSE4.2 + SSE4A use intrinsics that compile under the x64 baseline,
-    # so no extra /arch flag (would set a higher floor than we want).
-    set_source_files_properties(src/simd_math_avx.cpp    PROPERTIES COMPILE_OPTIONS "/arch:AVX")
-    set_source_files_properties(src/simd_math_avx2.cpp   PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
-    set_source_files_properties(src/simd_math_avx512.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
+    set_source_files_properties(src/math/simd_math_avx.cpp    PROPERTIES COMPILE_OPTIONS "/arch:AVX")
+    set_source_files_properties(src/math/simd_math_avx2.cpp   PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+    set_source_files_properties(src/math/simd_math_avx512.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
 else()
-    set_source_files_properties(src/simd_math_avx.cpp    PROPERTIES COMPILE_OPTIONS "-mavx")
-    set_source_files_properties(src/simd_math_avx2.cpp   PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
-    set_source_files_properties(src/simd_math_avx512.cpp PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512bw;-mavx512dq;-mavx512vl")
+    set_source_files_properties(src/math/simd_math_avx.cpp    PROPERTIES COMPILE_OPTIONS "-mavx")
+    set_source_files_properties(src/math/simd_math_avx2.cpp   PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
+    set_source_files_properties(src/math/simd_math_avx512.cpp PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512bw;-mavx512dq;-mavx512vl")
 endif()

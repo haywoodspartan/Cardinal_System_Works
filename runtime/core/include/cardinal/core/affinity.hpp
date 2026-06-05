@@ -1,11 +1,5 @@
 #pragma once
-
-#include <cardinal/core/types.hpp>
-
-namespace cardinal::affinity {
-
-// Pin the calling thread to a single logical core (OS-assigned id).
-// Returns true on success.
-bool pin_current_thread(u32 logical_core_id);
-
-}  // namespace cardinal::affinity
+// Forwarding stub - moved into a semantic subdir during the core folder
+// reorg. New canonical path: <cardinal/core/sync/affinity.hpp>. Update call sites at
+// leisure; this stub will be removed once consumers migrate.
+#include <cardinal/core/sync/affinity.hpp>
