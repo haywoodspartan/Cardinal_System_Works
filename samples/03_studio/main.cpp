@@ -31,6 +31,7 @@
 #include <cardinal/edit/undo.hpp>
 #include <cardinal/vt/vt.hpp>
 #include <cardinal/actor/world.hpp>
+#include <cardinal/actor/builtin_prefabs.hpp>
 #include <cardinal/sim/sim.hpp>
 #include <cardinal/anim/anim.hpp>
 #include <cardinal/audio/audio.hpp>
@@ -820,6 +821,10 @@ int main(int argc, char** argv) {
             l->intensity = 1.6f;
         }
     });
+
+    // Starter prefab library — lights, a physics prop, a camera, gameplay
+    // markers — ready to stamp from the Studio Prefab panel.
+    cardinal::actor::register_builtin_prefabs(aworld);
 
     cardinal::actor::Actor* hero = aworld.spawn("Hero");
     hero->add_component<cardinal::actor::TagComponent>()->add("player");

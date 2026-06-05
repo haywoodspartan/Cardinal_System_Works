@@ -23,6 +23,7 @@
 // =============================================================================
 
 #include <cardinal/actor/world.hpp>
+#include <cardinal/actor/builtin_prefabs.hpp>
 #include <cardinal/core/log.hpp>
 
 #include <any>
@@ -520,6 +521,55 @@ void test_prefabs() {
     CHECK(w.create_prefab("MovingCrate", src->id()));
     ac::Actor* rest = w.spawn_prefab("MovingCrate");
     CHECK(rest->get_component<ac::RigidBodyComponent>()->velocity.x == 0.0f);
+}
+
+// ---- starter prefab library ---------------------------------------
+void test_builtin_prefabs() {
+    ac::World w;
+    const cardinal::u32 added = ac::register_builtin_prefabs(w);
+    CHECK(added == 7u);                              // 7 starter prefabs
+
+    // All canonical names present.
+    CHECK(w.has_prefab("Point Light"));
+    CHECK(w.has_prefab("Directional Light"));
+    CHECK(w.has_prefab("Spot Light"));
+    CHECK(w.has_prefab("Physics Cube"));
+    CHECK(w.has_prefab("Camera"));
+    CHECK(w.has_prefab("Trigger Volume"));
+    CHECK(w.has_prefab("Player Start"));
+
+    // Component composition spot-checks.
+    CHECK(w.prefab_component_count("Point Light") == sz(2));   // Transform + Light
+    CHECK(w.prefab_component_count("Physics Cube") == sz(3));  // Transform + Mesh + RigidBody
+
+    // Stamping a starter prefab yields a working instance.
+    ac::Actor* lamp = w.spawn_prefab("Point Light");
+    CHECK(lamp != nullptr);
+    auto* l = lamp->get_component<ac::LightComponent>();
+    CHECK(l != nullptr && l->kind == ac::LightKind::Point);
+    ac::Actor* cube = w.spawn_prefab("Physics Cube");
+    CHECK(cube != nullptr);
+    CHECK(cube->get_component<ac::RigidBodyComponent>() != nullptr);
+    CHECK(cube->get_component<ac::MeshComponent>() != nullptr);
+    ac::Actor* trig = w.spawn_prefab("Trigger Volume");
+    CHECK(trig != nullptr);
+    CHECK(trig->get_component<ac::TagComponent>()->has("trigger"));
+
+    // Idempotent + non-clobbering: a second call adds nothing (all present),
+    // and a designer's same-name prefab is preserved.
+    CHECK(ac::register_builtin_prefabs(w) == 0u);
+
+    ac::World w2;
+    ac::Actor* custom = w2.spawn("MyLamp");
+    custom->add_component<ac::MeshComponent>();      // 1 non-default component
+    CHECK(w2.create_prefab("Point Light", custom->id()));   // user defines it first
+    const cardinal::u32 added2 = ac::register_builtin_prefabs(w2);
+    CHECK(added2 == 6u);                             // Point Light skipped
+    // The user's version (Transform + Mesh) survived, not the builtin Light one.
+    CHECK(w2.prefab_component_count("Point Light") == sz(2));
+    ac::Actor* mine = w2.spawn_prefab("Point Light");
+    CHECK(mine->get_component<ac::MeshComponent>() != nullptr);
+    CHECK(mine->get_component<ac::LightComponent>() == nullptr);   // not the builtin
 }
 
 // ---- has_component / remove_component -----------------------------
@@ -1023,6 +1073,7 @@ int main() {
     test_world_lifecycle();
     test_blueprints();
     test_prefabs();
+    test_builtin_prefabs();
     test_prefab_link_revert_apply();
     test_has_remove_component();
     test_enable_disable();
