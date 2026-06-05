@@ -68,6 +68,10 @@ set(CARDINAL_CORE_HEADERS
     # — used to back std::vector / cardinal::vector with arena memory
     # transparently. deallocate() is a no-op; reset the arena en masse.
     include/cardinal/core/arena_allocator.hpp
+    # Service locator for engine-wide singletons + shared_object<T>
+    # flyweight cache (find-or-create with weak_ptr-backed auto-eviction).
+    include/cardinal/core/global_object_manager.hpp
+    include/cardinal/core/shared_object.hpp
     # Pearl Abyss Pa* surface modernised onto C++20. Umbrella + per-component
     # sub-headers under cardinal/core/pa/ — used as the porting bridge when
     # bringing CrimsonDesert-style server / tooling code into cardinal::core.
@@ -120,6 +124,8 @@ set(CARDINAL_CORE_SOURCES
     src/pa/thread.cpp
     src/pa/wall_time.cpp
     src/pa/seh.cpp
+    # GlobalObjectManager — service locator for engine-wide singletons.
+    src/global_object_manager.cpp
 )
 
 if(WIN32)
