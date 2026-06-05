@@ -256,6 +256,23 @@ void draw(cardinal::actor::World* world,
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Round each shown actor's position to the "
                                   "nearest %.2f grid.", s_grid);
+
+            // Capture the shown set as a reusable multi-actor group prefab.
+            static char s_group_name[64] = "";
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::InputTextWithHint("##groupname", "group name",
+                                     s_group_name, sizeof(s_group_name));
+            ImGui::SameLine();
+            const bool can_group = s_group_name[0] != '\0';
+            if (!can_group) ImGui::BeginDisabled();
+            if (ImGui::SmallButton("->Group")) {
+                if (world->create_group_prefab(s_group_name, match_ids))
+                    s_group_name[0] = '\0';
+            }
+            if (!can_group) ImGui::EndDisabled();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Capture the shown actors as one reusable "
+                                  "group prefab (relative layout preserved).");
         }
     } else {
         ImGui::Text("Actors: %zu", world->actor_count());
@@ -315,6 +332,32 @@ void draw(cardinal::actor::World* world,
     }
 
     if (selected_actor_id_inout) *selected_actor_id_inout = sel;
+
+    // ---- Group prefabs (multi-actor templates) -----------------------
+    {
+        const auto groups = world->group_prefab_names();
+        if (!groups.empty() && ImGui::CollapsingHeader("Group Prefabs")) {
+            static float s_group_at[3] = { 0.0f, 0.0f, 0.0f };
+            ImGui::SetNextItemWidth(180.0f);
+            ImGui::DragFloat3("Spawn at##grp", s_group_at, 0.1f);
+            cardinal::string g_delete;
+            for (const auto& g : groups) {
+                ImGui::PushID(g.c_str());
+                ImGui::Text("%s (%u)", g.c_str(), world->group_prefab_member_count(g));
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Spawn")) {
+                    const cardinal::scene::Vec3 at{ s_group_at[0], s_group_at[1], s_group_at[2] };
+                    auto made = world->spawn_group_prefab(g, at);
+                    if (!made.empty() && selected_actor_id_inout)
+                        *selected_actor_id_inout = made.front()->id();
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Delete")) g_delete = g;
+                ImGui::PopID();
+            }
+            if (!g_delete.empty()) world->remove_group_prefab(g_delete);
+        }
+    }
 
     // ---- Scene statistics (composition overview) ---------------------
     if (ImGui::CollapsingHeader("Scene Stats")) {

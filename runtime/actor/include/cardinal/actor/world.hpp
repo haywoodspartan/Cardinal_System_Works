@@ -190,6 +190,29 @@ public:
     void   remove_prefab(const cardinal::string& name);
     cardinal::vector<cardinal::string> prefab_names() const;
 
+    // ---- Group prefabs (multi-actor templates) -----------------------
+    //
+    // Capture a SET of actors (a hand-arranged cluster — turret = base +
+    // barrel + sensor, room = walls + door + light) as one reusable unit,
+    // then stamp the whole group at a location. Positions are stored
+    // RELATIVE to the group anchor (the first captured actor), so the
+    // cluster keeps its shape wherever it's spawned. Each member is a full
+    // component clone (PrefabLink excluded, like single-actor capture).
+    //
+    //   create_group_prefab("Turret", {base,barrel,sensor})
+    //   spawn_group_prefab("Turret", where)  -> the 3 fresh actors
+    //
+    // Returns true if >=1 valid actor was captured. Replaces a same-name
+    // group. Distinct namespace from single-actor prefabs.
+    bool create_group_prefab(const cardinal::string& name,
+                             const cardinal::vector<ActorId>& ids);
+    cardinal::vector<Actor*> spawn_group_prefab(const cardinal::string& name,
+                                                const cardinal::scene::Vec3& at);
+    bool   has_group_prefab(const cardinal::string& name) const;
+    void   remove_group_prefab(const cardinal::string& name);
+    cardinal::vector<cardinal::string> group_prefab_names() const;
+    u32    group_prefab_member_count(const cardinal::string& name) const;
+
     // Library management — round out prefab CRUD.
     //   rename_prefab(old, new) — move a prototype to a new key. Fails
     //     (returns false) if `old` is absent, or `new` is empty / already
@@ -270,6 +293,15 @@ private:
     // ticked) whose components are the captured snapshot. spawn_prefab
     // clones from these.
     cardinal::unordered_map<cardinal::string, cardinal::unique_ptr<Actor>> prefabs_;
+
+    // Group prefabs — each a list of (component-snapshot prototype, position
+    // relative to the group anchor). Detached protos (id 0), never ticked.
+    struct GroupMember_ {
+        cardinal::unique_ptr<Actor> proto;
+        cardinal::scene::Vec3       rel{0, 0, 0};
+    };
+    struct GroupPrefab_ { cardinal::vector<GroupMember_> members; };
+    cardinal::unordered_map<cardinal::string, GroupPrefab_> group_prefabs_;
     struct Sub { HandlerId id; EventFn fn; };
     cardinal::unordered_map<cardinal::string, cardinal::vector<Sub>>        subscribers_;
     HandlerId                                                next_handler_id_{1};

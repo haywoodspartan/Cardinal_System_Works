@@ -599,6 +599,89 @@ void World::add_prefab(cardinal::string name, cardinal::unique_ptr<Actor> protot
     prefabs_[cardinal::move(name)] = cardinal::move(prototype);
 }
 
+// ---- Group prefabs ----------------------------------------------------
+bool World::create_group_prefab(const cardinal::string& name,
+                                const cardinal::vector<ActorId>& ids) {
+    // Gather the valid (alive) source actors in the given order.
+    cardinal::vector<Actor*> srcs;
+    srcs.reserve(ids.size());
+    for (ActorId id : ids) {
+        if (Actor* a = find(id)) { if (a->alive()) srcs.push_back(a); }
+    }
+    if (srcs.empty()) {
+        cardinal::log::warnf("actor/world",
+            "create_group_prefab('%s'): no valid actors in the set", name.c_str());
+        return false;
+    }
+
+    // Anchor = the first actor's position; members store positions relative
+    // to it so the cluster keeps its shape wherever it's stamped.
+    cardinal::scene::Vec3 anchor{0, 0, 0};
+    if (auto* t0 = srcs[0]->get_component<TransformComponent>()) anchor = t0->translation;
+
+    GroupPrefab_ gp;
+    gp.members.reserve(srcs.size());
+    for (Actor* a : srcs) {
+        GroupMember_ m;
+        m.proto = cardinal::make_unique<Actor>(0u, a->name());
+        // Clone components EXCEPT a PrefabLink (a group template stores
+        // config, not instance lineage) — mirrors create_prefab.
+        for (const auto& c : a->components()) {
+            if (cardinal::strcmp(c->type_name(), "PrefabLink") == 0) continue;
+            if (auto copy = c->clone()) m.proto->adopt_component(cardinal::move(copy));
+        }
+        cardinal::scene::Vec3 pos{0, 0, 0};
+        if (auto* t = a->get_component<TransformComponent>()) pos = t->translation;
+        m.rel = { pos.x - anchor.x, pos.y - anchor.y, pos.z - anchor.z };
+        gp.members.push_back(cardinal::move(m));
+    }
+    group_prefabs_[name] = cardinal::move(gp);
+    return true;
+}
+
+cardinal::vector<Actor*> World::spawn_group_prefab(const cardinal::string& name,
+                                                   const cardinal::scene::Vec3& at) {
+    cardinal::vector<Actor*> out;
+    auto it = group_prefabs_.find(name);
+    if (it == group_prefabs_.end()) {
+        cardinal::log::warnf("actor/world",
+            "spawn_group_prefab('%s'): no such group", name.c_str());
+        return out;
+    }
+    out.reserve(it->second.members.size());
+    for (const auto& m : it->second.members) {
+        Actor* dst = spawn_bare_(m.proto->name());   // no auto-Transform
+        m.proto->clone_components_into(*dst, nullptr);
+        if (auto* t = dst->get_component<TransformComponent>()) {
+            t->translation = { at.x + m.rel.x, at.y + m.rel.y, at.z + m.rel.z };
+        }
+        out.push_back(dst);
+    }
+    return out;
+}
+
+bool World::has_group_prefab(const cardinal::string& name) const {
+    return group_prefabs_.find(name) != group_prefabs_.end();
+}
+
+void World::remove_group_prefab(const cardinal::string& name) {
+    group_prefabs_.erase(name);
+}
+
+cardinal::vector<cardinal::string> World::group_prefab_names() const {
+    cardinal::vector<cardinal::string> r;
+    r.reserve(group_prefabs_.size());
+    for (const auto& [n, _] : group_prefabs_) r.push_back(n);
+    cardinal::sort(r.begin(), r.end());
+    return r;
+}
+
+u32 World::group_prefab_member_count(const cardinal::string& name) const {
+    auto it = group_prefabs_.find(name);
+    return it == group_prefabs_.end() ? 0u
+         : static_cast<u32>(it->second.members.size());
+}
+
 cardinal::string World::prefab_of(ActorId id) const {
     const Actor* a = find(id);
     if (a == nullptr) return {};

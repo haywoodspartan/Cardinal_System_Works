@@ -568,6 +568,77 @@ void test_prefab_library_mgmt() {
     CHECK(!w.duplicate_prefab("Crate", "Other"));         // explicit name taken
 }
 
+// ---- group prefabs (multi-actor templates) ------------------------
+void test_group_prefab() {
+    ac::World w;
+    // A 3-actor cluster: a base at (10,0,0), a barrel +0,1,0 above it, a
+    // sensor +0,2,1. Anchor is the FIRST captured actor (base).
+    ac::Actor* base = w.spawn("Base");
+    base->get_component<ac::TransformComponent>()->translation = { 10.0f, 0.0f, 0.0f };
+    base->add_component<ac::MeshComponent>()->asset_id = "base";
+    ac::Actor* barrel = w.spawn("Barrel");
+    barrel->get_component<ac::TransformComponent>()->translation = { 10.0f, 1.0f, 0.0f };
+    barrel->add_component<ac::MeshComponent>()->asset_id = "barrel";
+    ac::Actor* sensor = w.spawn("Sensor");
+    sensor->get_component<ac::TransformComponent>()->translation = { 10.0f, 2.0f, 1.0f };
+    sensor->add_component<ac::LightComponent>();
+
+    cardinal::vector<cardinal::u32> ids = { base->id(), barrel->id(), sensor->id() };
+    CHECK(w.create_group_prefab("Turret", ids));
+    CHECK(w.has_group_prefab("Turret"));
+    CHECK(w.group_prefab_member_count("Turret") == 3u);
+
+    // Spawn the group at a new location; relative layout preserved + offset.
+    const cardinal::usize before = w.actor_count();
+    auto inst = w.spawn_group_prefab("Turret", { 100.0f, 0.0f, 0.0f });
+    CHECK(inst.size() == sz(3));
+    CHECK(w.actor_count() == before + sz(3));
+
+    // Member 0 (base) at the anchor -> exactly `at`.
+    auto p0 = inst[0]->get_component<ac::TransformComponent>()->translation;
+    CHECK(ap(p0.x, 100.0f) && ap(p0.y, 0.0f) && ap(p0.z, 0.0f));
+    // Member 1 (barrel) kept its +0,1,0 relative offset.
+    auto p1 = inst[1]->get_component<ac::TransformComponent>()->translation;
+    CHECK(ap(p1.x, 100.0f) && ap(p1.y, 1.0f) && ap(p1.z, 0.0f));
+    // Member 2 (sensor) kept +0,2,1.
+    auto p2 = inst[2]->get_component<ac::TransformComponent>()->translation;
+    CHECK(ap(p2.x, 100.0f) && ap(p2.y, 2.0f) && ap(p2.z, 1.0f));
+    // Components are full clones.
+    CHECK(inst[0]->get_component<ac::MeshComponent>()->asset_id == "base");
+    CHECK(inst[1]->get_component<ac::MeshComponent>()->asset_id == "barrel");
+    CHECK(inst[2]->get_component<ac::LightComponent>() != nullptr);
+
+    // Independence — editing a spawned member doesn't change the source.
+    inst[0]->get_component<ac::MeshComponent>()->asset_id = "edited";
+    CHECK(base->get_component<ac::MeshComponent>()->asset_id == "base");
+
+    // A 2nd spawn is independent of the 1st.
+    auto inst2 = w.spawn_group_prefab("Turret", { 0.0f, 50.0f, 0.0f });
+    CHECK(inst2.size() == sz(3));
+    CHECK(ap(inst2[1]->get_component<ac::TransformComponent>()->translation.y, 51.0f));
+
+    // PrefabLink is NOT captured into a group template (config, not lineage).
+    ac::Actor* linkedActor = nullptr;
+    for (auto* x : inst) {
+        if (x->get_component<ac::PrefabLinkComponent>()) linkedActor = x;
+    }
+    CHECK(linkedActor == nullptr);
+
+    // Listing + removal + count.
+    CHECK(w.create_group_prefab("Pair", { base->id(), barrel->id() }));
+    auto names = w.group_prefab_names();
+    CHECK(names.size() == sz(2));
+    CHECK(names[0] == "Pair" && names[1] == "Turret");   // sorted
+    w.remove_group_prefab("Turret");
+    CHECK(!w.has_group_prefab("Turret"));
+    CHECK(w.spawn_group_prefab("Turret", { 0, 0, 0 }).empty());   // gone
+
+    // Edge cases: empty id set + unknown name.
+    CHECK(!w.create_group_prefab("Bad", {}));
+    CHECK(!w.create_group_prefab("Bad", { 99999u }));    // no valid actors
+    CHECK(w.spawn_group_prefab("Nope", { 0, 0, 0 }).empty());
+}
+
 // ---- starter prefab library ---------------------------------------
 void test_builtin_prefabs() {
     ac::World w;
@@ -1738,6 +1809,7 @@ int main() {
     test_blueprints();
     test_prefabs();
     test_prefab_library_mgmt();
+    test_group_prefab();
     test_builtin_prefabs();
     test_find_all_queries();
     test_bulk_ops();
