@@ -381,6 +381,28 @@ void draw(cardinal::actor::World* world,
             if (++col % 3 != 0) ImGui::SameLine();
         }
         if (col % 3 != 0) ImGui::NewLine();
+
+        // ---- Array tool — stamp a spaced line of copies --------------
+        ImGui::Separator();
+        if (ImGui::TreeNode("Array tool")) {
+            static int   s_count = 4;
+            static float s_step[3] = { 2.0f, 0.0f, 0.0f };
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::DragInt("Count", &s_count, 0.2f, 1, 256);
+            ImGui::SetNextItemWidth(200.0f);
+            ImGui::DragFloat3("Step", s_step, 0.1f);
+            if (ImGui::Button("Create Array")) {
+                const cardinal::scene::Vec3 step{ s_step[0], s_step[1], s_step[2] };
+                auto made = world->array_actor(a->id(),
+                                static_cast<cardinal::u32>(s_count < 1 ? 1 : s_count), step);
+                if (!made.empty() && selected_actor_id_inout)
+                    *selected_actor_id_inout = made.back()->id();
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Stamp %d copies of this actor, each offset "
+                                  "by Step from the last.", s_count);
+            ImGui::TreePop();
+        }
     }
 
     ImGui::End();

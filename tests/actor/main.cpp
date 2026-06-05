@@ -1086,6 +1086,34 @@ void test_spawn_placement() {
     CHECK(w.spawn_prefab_at("Nope", { 0, 0, 0 }) == nullptr);
 }
 
+// ---- array tool (spaced line of clones) ---------------------------
+void test_array_actor() {
+    ac::World w;
+    ac::Actor* src = w.spawn("Pillar");
+    src->get_component<ac::TransformComponent>()->translation = { 1.0f, 0.0f, 0.0f };
+    src->add_component<ac::MeshComponent>()->asset_id = "pillar";
+
+    // Array of 3, stepping +2 on X: copies at 3, 5, 7 (source stays at 1).
+    auto made = w.array_actor(src->id(), 3, { 2.0f, 0.0f, 0.0f });
+    CHECK(made.size() == sz(3));
+    CHECK(ap(made[0]->get_component<ac::TransformComponent>()->translation.x, 3.0f));
+    CHECK(ap(made[1]->get_component<ac::TransformComponent>()->translation.x, 5.0f));
+    CHECK(ap(made[2]->get_component<ac::TransformComponent>()->translation.x, 7.0f));
+    // Each copy is a full clone (carries the Mesh) with a distinct id.
+    CHECK(made[0]->get_component<ac::MeshComponent>() != nullptr);
+    CHECK(made[0]->id() != src->id() && made[1]->id() != made[0]->id());
+    // Source unchanged.
+    CHECK(ap(src->get_component<ac::TransformComponent>()->translation.x, 1.0f));
+    // 1 source + 3 copies live in the world.
+    CHECK(w.actor_count() == sz(4));
+
+    // Edge cases: count 0 + unknown id -> empty, no spawns.
+    const cardinal::usize before = w.actor_count();
+    CHECK(w.array_actor(src->id(), 0, { 1, 0, 0 }).empty());
+    CHECK(w.array_actor(99999u, 5, { 1, 0, 0 }).empty());
+    CHECK(w.actor_count() == before);
+}
+
 // ---- component serialization (round-trip via factory) -------------
 void test_component_serialization() {
     // Local near-zero check (delta already subtracted at the call sites).
@@ -1349,6 +1377,7 @@ int main() {
     test_copy_paste_component();
     test_duplicate();
     test_spawn_placement();
+    test_array_actor();
     test_component_serialization();
     test_event_bus();
     test_event_bus_reentrant();

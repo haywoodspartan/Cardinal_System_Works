@@ -92,6 +92,31 @@ Actor* World::spawn_prefab_at(const cardinal::string& name,
     return a;
 }
 
+cardinal::vector<Actor*> World::array_actor(ActorId src_id, u32 count,
+                                            const cardinal::scene::Vec3& step) {
+    cardinal::vector<Actor*> out;
+    Actor* src = find(src_id);
+    if (src == nullptr || count == 0) return out;
+
+    // Source position (origin if it somehow lacks a Transform).
+    cardinal::scene::Vec3 base{0, 0, 0};
+    if (auto* st = src->get_component<TransformComponent>()) base = st->translation;
+
+    out.reserve(count);
+    for (u32 i = 1; i <= count; ++i) {
+        Actor* dup = duplicate(src_id);   // full clone: name, components, link, enabled
+        if (dup == nullptr) continue;
+        if (auto* t = dup->get_component<TransformComponent>()) {
+            const float fi = static_cast<float>(i);
+            t->translation = { base.x + step.x * fi,
+                               base.y + step.y * fi,
+                               base.z + step.z * fi };
+        }
+        out.push_back(dup);
+    }
+    return out;
+}
+
 void World::destroy(ActorId id) {
     for (auto& a : actors_) if (a->id() == id) { a->kill(); ++revision_; return; }
 }

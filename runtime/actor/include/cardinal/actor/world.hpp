@@ -66,6 +66,14 @@ public:
                             const cardinal::scene::Vec3& pos,
                             const cardinal::string& instance_name = "");
 
+    // Array tool — stamp `count` copies of an actor in a line, each offset
+    // by `step` from the previous (copy i lands at source + step*i). Every
+    // copy is a full clone (unique name, components, prefab link, enabled),
+    // so a configured prop becomes a row/grid in one action. The source is
+    // unchanged; returns the created copies (empty if src unknown / count 0).
+    cardinal::vector<Actor*> array_actor(ActorId src, u32 count,
+                                         const cardinal::scene::Vec3& step);
+
     // Mark for destruction; the actual remove happens on the next sweep().
     void    destroy(ActorId id);
     void    sweep();   // physically remove dead actors
