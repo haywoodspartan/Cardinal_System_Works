@@ -3,23 +3,23 @@
 // =============================================================================
 // Cardinal core — SyncQueue / NonDuplicableUnorderedSyncQueue /
 // WaitableQueue / PriorityQueue / StaticCircularQueue — modern
-// C++20 port of Pearl Abyss PaQueue.h.
+// C++20 port of the queue surface.
 //
-// Surface 1:1 with the original templates (so Pa-style queue users port
+// Surface 1:1 with the original templates (so callers port
 // mechanically) but the synchronisation primitive is now any type that
 // satisfies the cardinal::core::ThreadLock concept (shared/exclusive
 // + try variants) — defaults to ThreadLock.
 //
 // Key design choices:
-//   * Backing container is std::deque by default (matches Pa) — std::vector
+//   * Backing container is std::deque by default  — std::vector
 //     can be plugged via the third template arg if random access matters.
 //   * WaitableQueue uses cardinal::condition_variable_any + the same lock
-//     concept (replaces PA's CreateSemaphore + WaitForSingleObjectEx loop);
+//     concept (replaces the legacy CreateSemaphore + WaitForSingleObjectEx loop);
 //     supports timed wait with chrono::milliseconds.
 //   * StaticCircularQueue is the lock-free, fixed-capacity ring (used a lot
-//     in PA's logging path); no allocations after construction.
+//     by frame-rate-sensitive logging paths); no allocations after construction.
 //   * Lightweight return-code convention: u32 result; 0 = ok, 4306 = empty
-//     (matches Win32 ERROR_EMPTY) — Pa code already understands this.
+//     (matches Win32 ERROR_EMPTY) — downstream code already understands this.
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
@@ -37,7 +37,7 @@
 
 namespace cardinal::core {
 
-// Result codes — match Win32 sym numbers Pa already uses.
+// Result codes — match Win32 sym numbers the engine already uses.
 inline constexpr i32 kQueueOk    = 0;
 inline constexpr i32 kQueueEmpty = 4306;   // ERROR_EMPTY
 
@@ -210,7 +210,7 @@ private:
 
 // ---------------------------------------------------------------------------
 // PriorityQueue<T> — std::priority_queue adapter exposing begin/end + isExist.
-// Not thread-safe (matches PA).
+// Not thread-safe .
 // ---------------------------------------------------------------------------
 template <class T, class Container = std::vector<T>, class Compare = std::less<T>>
 class PriorityQueue : public std::priority_queue<T, Container, Compare> {

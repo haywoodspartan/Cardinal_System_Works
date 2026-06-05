@@ -2,10 +2,10 @@
 
 // =============================================================================
 // Cardinal core — Stopwatch + RepeatableTimer — modern C++20 port of
-// Pearl Abyss PaTimer.h.
+// the stopwatch surface.
 //
 // Stopwatch — std::chrono::steady_clock-backed elapsed-time meter; the
-// minimal "QueryPerformanceCounter + diff" pattern most Pa call sites want.
+// minimal "QueryPerformanceCounter + diff" pattern most call sites want.
 // Coexists with cardinal::core::time (the mono-clock surface backing
 // FrameScope / FramePacer).
 //
@@ -57,7 +57,7 @@ private:
 // Default tick functor — milliseconds since process start (steady_clock).
 // Templated so RepeatableTimer can be re-targeted onto a virtual clock
 // (server simulation tick, replay-driven tick) by injecting a different
-// TickCountFunctor — matches the original Pa template knob.
+// TickCountFunctor — matches the original template knob.
 // ---------------------------------------------------------------------------
 struct DefaultTickCountFunctor {
     [[nodiscard]] u64 operator()() const noexcept {

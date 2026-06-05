@@ -1,19 +1,19 @@
 #pragma once
 
 // =============================================================================
-// Cardinal core — Directory — modern C++20 port of Pearl Abyss
-// PaDirectory.h.
+// Cardinal core — Directory enumeration wrapper.
 //
-// Wraps std::filesystem::directory_iterator into the begin()/next()/end()/
-// get() iteration shape PA's code expects. Static helpers (Make / Move /
-// Copy / Remove / Rename / ChangeCurrentDirectory) are thin wrappers around
-// the std::filesystem equivalents — they propagate the error_code as the
-// returned i32 (Windows error-style: 0 = success).
+// Wraps std::filesystem::directory_iterator into a begin()/next()/end()/get()
+// iteration shape. Static helpers (Make / Move / Copy / Remove / Rename /
+// ChangeCurrentDirectory) are thin wrappers around the std::filesystem
+// equivalents — they propagate the error_code as the returned i32
+// (Windows error-style: 0 = success).
 //
-// Wildcard support: PA uses Win32 FindFirstFile wildcards (`*`, `?`) in the
-// begin() path. We honour that by splitting the input into a parent directory
-// + filename pattern and filtering directory_iterator results with a small
-// glob matcher. Simpler than the regex route and matches the FFI semantics.
+// Wildcard support: Win32-FindFirstFile-style wildcards (`*`, `?`) are
+// honoured by splitting the input path into a parent directory + filename
+// pattern and filtering directory_iterator results with a small glob
+// matcher. Simpler than a regex route and matches the FFI semantics most
+// callers already expect.
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
@@ -25,7 +25,7 @@
 namespace cardinal::core {
 
 // ---------------------------------------------------------------------------
-// Entry — minimal stand-in for WIN32_FIND_DATAW (the fields PA call sites
+// Entry — minimal stand-in for WIN32_FIND_DATAW (the fields call sites
 // actually touch). Returned by Directory::get().
 // ---------------------------------------------------------------------------
 struct DirectoryEntry {

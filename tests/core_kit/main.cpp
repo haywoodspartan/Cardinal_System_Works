@@ -1,10 +1,22 @@
 // =============================================================================
-// Cardinal — * regression suite. Exercises every modernised port of the
-// Pearl Abyss PaLock / PaFile / PaDirectory / PaQueue / PaSeh / PaString /
-// PaThread / PaTime / PaTimer surfaces. Exit 0 = all pass.
+// Cardinal — core kit regression suite. Exercises every primitive in
+// cardinal::core's recently-grouped subdirs: InterLock + ThreadLock + Access
+// + lock guards, fixed-capacity stack strings, concurrent / waitable /
+// circular / priority queues, Time / CpuTime / CpuUsage, Stopwatch +
+// RepeatableTimer, Directory + File round-trip, worker Thread + cooperative
+// stop, SehManager + minidump. Exit 0 = all pass.
 // =============================================================================
 
-#include <cardinal/core/pa.hpp>
+#include <cardinal/core/sync/lock.hpp>
+#include <cardinal/core/sync/access.hpp>
+#include <cardinal/core/sync/worker_thread.hpp>
+#include <cardinal/core/container/queue.hpp>
+#include <cardinal/core/clock/wall_time.hpp>
+#include <cardinal/core/clock/stopwatch.hpp>
+#include <cardinal/core/os/file.hpp>
+#include <cardinal/core/os/directory.hpp>
+#include <cardinal/core/os/seh.hpp>
+#include <cardinal/core/string/fixed_string.hpp>
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/utility.hpp>
 
@@ -20,7 +32,7 @@ void check_impl(bool ok, const char* expr, int line) {
     ++g_checks;
     if (!ok) {
         ++g_fail;
-        cardinal::log::errorf("pa", "FAIL  L%d  %s", line, expr);
+        cardinal::log::errorf("core_kit", "FAIL  L%d  %s", line, expr);
     }
 }
 #define CHECK(x) ::check_impl(static_cast<bool>(x), #x, __LINE__)
@@ -28,7 +40,7 @@ void check_impl(bool ok, const char* expr, int line) {
 using namespace cardinal::core;
 
 // ---------------------------------------------------------------------------
-// PaLock / InterLock / ThreadLock / NullLock / lock guards
+// InterLock / ThreadLock / NullLock / lock guards
 // ---------------------------------------------------------------------------
 void test_interlock() {
     cardinal::i32 v32 = 0;
@@ -71,7 +83,7 @@ void test_thread_lock() {
 }
 
 // ---------------------------------------------------------------------------
-// PaAccess — attach/detach gate with embedded lock + AccessGuard RAII.
+// Access — attach/detach gate with embedded lock + AccessGuard RAII.
 // ---------------------------------------------------------------------------
 void test_access() {
     Access<ThreadLock> acc;
@@ -110,7 +122,7 @@ void test_access() {
     CHECK(acc.attach_count() == 0);
 
     // AccessGuard — RAII detach. Caller checks the attach() result before
-    // constructing the guard (PA convention).
+    // constructing the guard .
     {
         const bool got = acc.attach();
         CHECK(got);
@@ -130,7 +142,7 @@ void test_access() {
 }
 
 // ---------------------------------------------------------------------------
-// PaString
+// fixed-capacity stack strings
 // ---------------------------------------------------------------------------
 void test_string() {
     StringA<32> a;
@@ -166,7 +178,7 @@ void test_string() {
 }
 
 // ---------------------------------------------------------------------------
-// PaQueue — SyncQueue / WaitableQueue / StaticCircularQueue / PriorityQueue
+// queue suite — SyncQueue / WaitableQueue / StaticCircularQueue / PriorityQueue
 // ---------------------------------------------------------------------------
 void test_sync_queue() {
     SyncQueue<int> q;
@@ -253,7 +265,7 @@ void test_priority_queue() {
 }
 
 // ---------------------------------------------------------------------------
-// PaTime / CpuTime / CpuUsage
+// CpuTime / CpuUsage
 // ---------------------------------------------------------------------------
 void test_time() {
     const cardinal::u64 utc = get_utc_64();
@@ -343,7 +355,7 @@ void test_time() {
 }
 
 // ---------------------------------------------------------------------------
-// PaTimer — Stopwatch + RepeatableTimer
+// stopwatch + timer — Stopwatch + RepeatableTimer
 // ---------------------------------------------------------------------------
 void test_stopwatch() {
     Stopwatch sw;
@@ -393,7 +405,7 @@ void test_repeatable_timer() {
 }
 
 // ---------------------------------------------------------------------------
-// PaDirectory — create / list / remove
+// Directory — create / list / remove
 // ---------------------------------------------------------------------------
 void test_directory_make_and_remove() {
     // Use a unique tmp path inside cwd.
@@ -421,7 +433,7 @@ void test_directory_make_and_remove() {
 }
 
 // ---------------------------------------------------------------------------
-// PaFile — write + read round-trip
+// File — write + read round-trip
 // ---------------------------------------------------------------------------
 void test_file_round_trip() {
     const wchar_t* path = L"./.pa_test_file.bin";
@@ -456,11 +468,11 @@ void test_file_round_trip() {
 }
 
 // ---------------------------------------------------------------------------
-// PaThread — start + cooperative stop
+// worker Thread — start + cooperative stop
 // ---------------------------------------------------------------------------
 class TestThread : public Thread {
 public:
-    TestThread() : Thread(L"PaTestThread", 0, false), counter_(0) {}
+    TestThread() : Thread(L"CoreKitTestThread", 0, false), counter_(0) {}
     cardinal::atomic<cardinal::i32> counter_;
 protected:
     cardinal::i32 run() noexcept override {
@@ -484,7 +496,7 @@ void test_thread() {
 }
 
 // ---------------------------------------------------------------------------
-// PaSeh — set_handler / dump_mini (Windows only; non-Windows is no-op stub)
+// SehManager — set_handler / dump_mini (Windows only; non-Windows is no-op stub)
 // ---------------------------------------------------------------------------
 void test_seh() {
 #if CARDINAL_PLATFORM_WINDOWS
@@ -506,7 +518,7 @@ void test_seh() {
 }  // namespace
 
 int main() {
-    cardinal::log::infof("pa", "* regression suite");
+    cardinal::log::infof("core_kit", "core kit regression suite");
 
     test_interlock();
     test_thread_lock();
@@ -525,6 +537,6 @@ int main() {
     test_thread();
     test_seh();
 
-    cardinal::log::infof("pa", "checks=%d  failures=%d", g_checks, g_fail);
+    cardinal::log::infof("core_kit", "checks=%d  failures=%d", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

@@ -10,7 +10,7 @@
 // flat_map adds the std::map key-value API: operator[], at, try_emplace,
 // insert_or_assign, find/erase by key.
 //
-// Storage choice: single vector<pair<K, V>> (Pearl Abyss BinaryMap
+// Storage choice: single vector<pair<K, V>> (BinaryMap
 // convention). The C++23 std::flat_map parallel-arrays layout (vector<K>
 // + vector<V>) is faster for key-only scans but breaks API compat with
 // std::map iterators — defer until a real consumer needs it.

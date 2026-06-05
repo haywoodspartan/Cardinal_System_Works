@@ -19,16 +19,16 @@
 //   * Unknown max count — pool exhausts and acquire returns nullptr.
 //   * Single-threaded sequential alloc + drop — LinearAllocator is faster.
 //
-// Modernisations vs. Pearl Abyss PACustomPoolAllocator:
+// Modernisations vs. the legacy CRITICAL_SECTION-locked pool:
 //   * Single std::mutex instead of CRITICAL_SECTION (consistent with
 //     cardinal's std-vocabulary policy; same behaviour on Win10+ SRW).
 //   * Template on T — sizeof / alignment derived at compile time.
 //     Caller doesn't pass element size at construction.
 //   * make<T>(args...) / destroy(T*) — type-aware lifecycle, perfect
-//     forwarded ctor args (PA was untyped, hand-managed dtor calls).
+//     forwarded ctor args (untyped surfaces require hand-managed dtor calls).
 //   * Intrusive free list — zero per-slot bookkeeping bytes
 //     (slot storage is reused as next-pointer when free).
-//     PA used an external uint32 bitmap which costs O(N) scans on
+//     external uint32-bitmap pools take which costs O(N) scans on
 //     exhaustion lookup and 4 bytes / slot.
 //
 // Concurrency note: the v1 implementation is mutex-protected. A

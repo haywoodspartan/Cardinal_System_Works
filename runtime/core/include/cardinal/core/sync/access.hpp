@@ -2,7 +2,7 @@
 
 // =============================================================================
 // Cardinal core — Access<TLock> + AccessGuard<TAccess> — modern
-// C++20 port of Pearl Abyss PaAccess.h.
+// C++20 port of the Access surface.
 //
 // Why this exists:
 //   Access is a "graceful-shutdown ref-count gate" that sits in front
@@ -16,10 +16,10 @@
 //
 //   Modern C++ would usually replace this with std::shared_ptr or a
 //   weak/strong-handle pair, but the explicit attach/detach interface
-//   matters because PaAccess is paired with a thread-local AccessManager
+//   matters because Access is paired with a thread-local AccessManager
 //   that diagnoses leaks (attach without matching detach) and double-
 //   detach mistakes at debug time. The port preserves the surface so
-//   CrimsonDesert code can keep using it without behavioural change.
+//   downstream code can keep using it without behavioural change.
 //
 // Modernisation:
 //   * mAttachCount is std::atomic<i16> — GetAttachCount is now lock-free.
@@ -35,7 +35,7 @@
 // AccessManager (debug-time leak detector) is intentionally NOT ported
 // here — Cardinal's diagnostic story is FrameScope / trace_export and
 // adding a per-thread attach-count TLS would duplicate that. If a real
-// CrimsonDesert consumer needs it, we can add a compile-time-gated
+// consumer needs it, we can add a compile-time-gated
 // `CARDINAL_PA_CHECK_ACCESS` variant later.
 // =============================================================================
 
@@ -121,7 +121,7 @@ public:
     }
 
     // ---- lock pass-through (delegate to embedded TLock) ---------------
-    // Matches PA's surface where Access<T> presents the lock interface
+    // Exposes the lock surface where Access<T> presents the lock interface
     // directly so it can stand in for a ThreadLock at every use site.
     void lock_shared()    const noexcept { lock_.lock_shared(); }
     void lock_exclusive() const noexcept { lock_.lock_exclusive(); }
@@ -136,7 +136,7 @@ public:
     void unlock_exclusive_without_checking_deadlock() const noexcept { lock_.unlock_exclusive_without_checking_deadlock(); }
 
     // Escape hatch — do NOT call unless you know exactly what you're doing.
-    // Matches PA's similarly-named accessor.
+    // Escape-hatch accessor.
     [[nodiscard]] TLock& raw_lock_dont_call_directly() noexcept { return lock_; }
 
 private:
@@ -147,7 +147,7 @@ private:
 
 // ---------------------------------------------------------------------------
 // AccessGuard<TAccess> — RAII attach/detach pair. Caller is responsible
-// for the initial attach() success check (PA convention — the guard
+// for the initial attach() success check (— the guard
 // asserts you've already attached so the destructor's detach is balanced).
 // ---------------------------------------------------------------------------
 template <class TAccess>

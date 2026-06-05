@@ -2,10 +2,10 @@
 
 // =============================================================================
 // Cardinal core — Time / CpuTime / CpuUsage — modern C++20 port
-// of Pearl Abyss PaTime.h's wall-clock + CPU-accounting surface.
+// of the wall-clock surface's wall-clock + CPU-accounting surface.
 //
 // Mapping vs. original:
-//   * Time wraps std::chrono::system_clock + the calendar fields the Pa
+//   * Time wraps std::chrono::system_clock + the calendar fields the engine
 //     code base treats as the canonical local-time struct (Year/Month/Day/
 //     Hour/Minute/Second/MillSecond/DayOfWeek). Internally we keep two
 //     representations side-by-side: a system_clock::time_point for math and
@@ -37,8 +37,8 @@ enum class DayOfWeek : u16 {
 };
 
 // ---------------------------------------------------------------------------
-// Free clock helpers — Pa-style globals folded under cardinal::core.
-// GetUtc32/64 return seconds since the Unix epoch (PA convention).
+// Free clock helpers — globals folded under cardinal::core.
+// GetUtc32/64 return seconds since the Unix epoch .
 // ---------------------------------------------------------------------------
 [[nodiscard]] u32 get_utc_32() noexcept;   // truncates to u32 (good until 2106)
 [[nodiscard]] u64 get_utc_64() noexcept;
@@ -126,7 +126,7 @@ private:
 
 // ---------------------------------------------------------------------------
 // CpuUsage — rolling busy-rate (%) based on CpuTime deltas. Keeps the last
-// two samples in a small circular buffer and averages them — matches PA's
+// two samples in a small circular buffer and averages them — matches the documented
 // 0..100 % output range.
 // ---------------------------------------------------------------------------
 class CpuUsage {

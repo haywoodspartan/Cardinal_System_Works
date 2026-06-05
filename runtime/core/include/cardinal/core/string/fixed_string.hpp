@@ -2,11 +2,11 @@
 
 // =============================================================================
 // Cardinal core — StringA<N> / StringW<N> — modern C++20 port of
-// Pearl Abyss PaString.h's fixed-capacity stack strings.
+// the fixed-string surface's fixed-capacity stack strings.
 //
 // Design: stack-allocated N+1 buffers (room for NUL), no heap, never throws.
-// Truncates silently on overflow (Pa semantics — matches strcpy_s with
-// _TRUNCATE). Used heavily by Pa-style code for short identifiers / labels /
+// Truncates silently on overflow (matches — matches strcpy_s with
+// _TRUNCATE). Used by code paths for short identifiers / labels /
 // log fragments where heap traffic is unwanted.
 //
 // Modernisation notes:
@@ -15,7 +15,7 @@
 //     format strings.
 //   * char↔wchar conversion via MultiByteToWideChar on Windows; on Linux
 //     uses std::mbstowcs (UTF-8 locale assumed — matches engine convention).
-//   * Operator overloads `operator=`/`operator+=` keep the Pa porting feel.
+//   * Operator overloads `operator=`/`operator+=` keep a familiar string-class feel.
 //   * Conversion operators to `const char*` / `const wchar_t*` so the string
 //     drops straight into printf/wprintf / NT API calls.
 // =============================================================================

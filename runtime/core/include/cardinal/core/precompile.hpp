@@ -5,7 +5,7 @@
 //
 // Lives in cardinal::core so EVERY engine module (render, lighting,
 // physics, particles, scene, etc.) shares one canonical pre-include.
-// The Pearl Abyss / CrimsonDesert convention is one stdafx-style header
+// The stdafx-style convention is one stdafx-style header
 // per module; this is the same idea but unified at the foundation
 // layer — modules don't restate this set in their own headers; they
 // opt-in via CMake:

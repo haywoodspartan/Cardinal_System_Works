@@ -2,11 +2,11 @@
 
 // =============================================================================
 // Cardinal core — Thread / ThreadManager — modern C++20 port of
-// Pearl Abyss PaThread.h.
+// the worker thread surface.
 //
 // Design:
-//   * Thread is a "base class with virtual Run()" — the Pa pattern many
-//     CrimsonDesert subsystems are built on. Subclass overrides Run(), calls
+//   * Thread is a "base class with virtual Run()" — the pattern many
+//     long-running engine subsystems are built on. Subclass overrides Run(), calls
 //     Start(stackSize), Stop() to cooperatively cancel.
 //   * Under the hood we own a cardinal::jthread (std::jthread): cooperative
 //     cancellation via stop_token, automatic join on destruction.

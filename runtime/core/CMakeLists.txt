@@ -68,39 +68,29 @@ set(CARDINAL_CORE_HEADERS
     include/cardinal/core/container/flat_set.hpp
     include/cardinal/core/container/flat_map.hpp
     include/cardinal/core/container/queue.hpp
-    # sync/ — concurrency primitives ported from PA + new abstractions.
+    # sync/ — concurrency primitives (lock, access gate, worker thread).
     include/cardinal/core/sync/lock.hpp
     include/cardinal/core/sync/access.hpp
     include/cardinal/core/sync/worker_thread.hpp
-    # clock/ — wall-clock + interval timers (modernised PaTime / PaTimer).
+    # clock/ — wall-clock + interval timers (Time / Stopwatch /
+    # RepeatableTimer / CpuTime / CpuUsage).
     include/cardinal/core/clock/wall_time.hpp
     include/cardinal/core/clock/stopwatch.hpp
-    # os/ — file I/O, directory enumeration, SEH minidump (Pa-port subset).
+    # os/ — file I/O, directory enumeration, SEH minidump bridge.
     include/cardinal/core/os/file.hpp
     include/cardinal/core/os/directory.hpp
     include/cardinal/core/os/seh.hpp
-    # string/ — fixed-capacity stack strings (Pa StringA/W).
+    # string/ — fixed-capacity stack strings (StringA<N> / StringW<N>).
     include/cardinal/core/string/fixed_string.hpp
     # service/ — service locator + shared_object intern cache.
     include/cardinal/core/service/global_object_manager.hpp
     include/cardinal/core/service/shared_object.hpp
     # ---------------------------------------------------------------------
-    # pa.hpp umbrella + forwarding stubs at the OLD pa/* and old root-level
-    # paths. Stubs are 5-line `#pragma once + #include` files that let
-    # existing engine #includes resolve to the new canonical locations
-    # without code churn. Remove the stubs once consumers migrate.
+    # Backwards-compat forwarding stubs at the OLD root-level paths for
+    # the recently-grouped headers — 5-line `#pragma once + #include` files
+    # that let pre-reorg engine #includes resolve to the new canonical
+    # locations without code churn. Remove once consumers migrate.
     # ---------------------------------------------------------------------
-    include/cardinal/core/pa.hpp
-    include/cardinal/core/pa/lock.hpp
-    include/cardinal/core/pa/access.hpp
-    include/cardinal/core/pa/string.hpp
-    include/cardinal/core/pa/queue.hpp
-    include/cardinal/core/pa/wall_time.hpp
-    include/cardinal/core/pa/stopwatch.hpp
-    include/cardinal/core/pa/file.hpp
-    include/cardinal/core/pa/directory.hpp
-    include/cardinal/core/pa/thread.hpp
-    include/cardinal/core/pa/seh.hpp
     include/cardinal/core/linear_allocator.hpp
     include/cardinal/core/pool_allocator.hpp
     include/cardinal/core/arena_allocator.hpp
@@ -138,17 +128,15 @@ set(CARDINAL_CORE_SOURCES
     # gate (Windows path = full impl over OBJECT_ATTRIBUTES; non-Windows path =
     # no-op stubs so the symbol set is identical across platforms).
     src/kernel_object_attribute.cpp
-    # Pa* port — non-template TUs (lock-process / file-IO / directory-fs /
-    # thread-impl / wall-time / SEH-minidump) relocated by the folder reorg
-    # into semantic subdirs alongside their headers.
-    src/sync/lock.cpp
-    src/sync/worker_thread.cpp
-    src/os/file.cpp
-    src/os/directory.cpp
-    src/os/seh.cpp
-    src/clock/wall_time.cpp
-    # GlobalObjectManager — service locator for engine-wide singletons.
-    src/service/global_object_manager.cpp
+    # Non-template TUs grouped alongside their headers under the semantic
+    # subdirs (sync / clock / os / service).
+    src/sync/lock.cpp                       # ProcessLock cross-process named mutex
+    src/sync/worker_thread.cpp              # Thread + ThreadManager
+    src/clock/wall_time.cpp                 # Time / CpuTime / CpuUsage
+    src/os/file.cpp                         # File / SyncReadFile / SyncWriteFile
+    src/os/directory.cpp                    # Directory enumeration
+    src/os/seh.cpp                          # SehManager + minidump bridge
+    src/service/global_object_manager.cpp   # Engine-wide singleton registry
 )
 
 if(WIN32)

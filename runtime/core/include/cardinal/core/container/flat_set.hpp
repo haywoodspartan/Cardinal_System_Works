@@ -19,10 +19,10 @@
 // id→entity lookups), small/medium N (<10k), and any code path iterated
 // frequently. Wrong fit: fast-churn workloads where insert/erase dominate.
 //
-// Modernisations vs. the Pearl Abyss BinarySet reference:
+// Modernisations vs. the sorted-vector reference:
 //   * std::lower_bound — no `(first + last) / 2` overflow bug.
 //   * Comparator stored as [[no_unique_address]] member (EBO for stateless
-//     compares; PA reconstructed a fresh _COMPARE() on every loop iter).
+//     compares; the original reconstructed a fresh _COMPARE() on every loop iter).
 //   * C++17/20 API: contains, emplace, equal_range, node-style insert hint,
 //     bulk_insert(range) for amortised batch loads.
 //   * Allocator-aware (defaults to cardinal::vector's allocator).

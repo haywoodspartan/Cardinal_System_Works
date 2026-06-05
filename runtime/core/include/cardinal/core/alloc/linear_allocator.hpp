@@ -26,10 +26,10 @@
 // frame loop has a single point that resets the arena between frames).
 // make<T>() is thus thread-safe, but Marker / rewind is a barrier point.
 //
-// Modernisations vs. Pearl Abyss PALinearAllocator:
+// Modernisations vs. the legacy CRITICAL_SECTION-locked arena:
 //   * std::atomic<usize> bump pointer instead of CRITICAL_SECTION — single
 //     fetch_add per allocation, no kernel transition on contention.
-//   * make<T>(...) supports forwarded variadic args (PA capped at 4
+//   * make<T>(...) supports forwarded variadic args (earlier variants capped at 4
 //     non-perfect-forwarded parameter packs).
 //   * RAII ScopedMarker — scoped rewind via destructor, removes the
 //     "did I remember to rewind?" footgun.

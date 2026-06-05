@@ -2,12 +2,12 @@
 
 // =============================================================================
 // Cardinal core — SehCallback / SehManager — modern C++20 port of
-// Pearl Abyss PaSeh.h.
+// the SEH surface.
 //
 // Wraps Windows SEH (SetUnhandledExceptionFilter + MiniDumpWriteDump) into
-// the PA call-vocabulary. Coexists with cardinal::core::crash (which already
+// the call-vocabulary used here. Coexists with cardinal::core::crash (which already
 // owns the engine's unhandled-exception filter); SehManager is the
-// alternate API surface PA-style code uses.
+// alternate API surface for callers that need explicit set_handler / dump_mini control.
 //
 // Compiles to a stub on non-Windows (set_handler returns ENOSYS-equivalent;
 // dump_mini does nothing). Cross-platform callers can hold a SehManager

@@ -191,7 +191,7 @@ void Thread::set_thread_name(const wchar_t* name) noexcept {
 
 TrGroupId Thread::current_group_id() noexcept {
     // No TLS lookup yet — would require a thread_local registry indexed by
-    // OS thread id. Returns 0 for now; matches PA's "unknown group" default.
+    // OS thread id. Returns 0 for now; the "unknown group" default.
     return 0;
 }
 

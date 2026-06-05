@@ -1,22 +1,19 @@
 #pragma once
 
 // =============================================================================
-// Cardinal core — lock vocabulary, modern C++20 port of Pearl Abyss
-// CrimsonDesert's PaLock.h (InterLock + ThreadLock + ProcessLock +
-// NullLock + Shared/Exclusive/TryShared/TryExclusive lock guards).
+// Cardinal core — lock vocabulary. InterLock atomic helpers + ThreadLock
+// (shared/exclusive in-process lock) + ProcessLock (cross-process named
+// mutex) + NullLock (no-op for compile-time disable) + the matching
+// Shared/Exclusive/TryShared/TryExclusive lock guards.
 //
-// Why the port:
-//   * Pa-style code expresses concurrency in a fixed vocabulary that is
-//     friendly to porting CrimsonDesert subsystems into Cardinal — keep the
-//     names, but back them with std::atomic / std::shared_mutex / std::scoped_lock
-//     so the implementation is portable, exception-safe and ABI-clean.
-//   * `cardinal::core` lives alongside (not inside) the foundation
-//     vocabulary so a call site can pull `using namespace cardinal::core;`
-//     without shadowing cardinal::mutex / cardinal::shared_mutex / cardinal::atomic.
+// Built on std::atomic / std::shared_mutex / std::scoped_lock — portable,
+// exception-safe, ABI-clean. Lives in cardinal::core directly so call
+// sites can `using namespace cardinal::core;` without shadowing
+// cardinal::mutex / cardinal::shared_mutex / cardinal::atomic.
 //
-// Modernisation notes vs. original PaLock.h:
+// Design notes:
 //   * InterLock atomics use std::atomic_ref so they bind to a caller-owned
-//     i32/i64 (matches the Pa signature `Increment(int32&)`) but do not
+//     i32/i64 (matches the `Increment(int32&)` signature) but do not
 //     require the value to be a member of an atomic<> type. Memory order is
 //     seq_cst by default (matches the Win32 Interlocked* semantics on x86/x64).
 //   * ThreadLock — shared/exclusive lock backed by std::shared_mutex on Win+
@@ -26,15 +23,14 @@
 //     CreateMutexW + WaitForSingleObject; Linux path uses sem_open
 //     (POSIX named semaphore). The shared-vs-exclusive semantics collapse to
 //     mutual exclusion (NT's named-mutex doesn't differentiate readers vs
-//     writers — same as PA's implementation).
+//     writers — matches the Win32 named-mutex behavior).
 //   * NullLock — no-op stub for compile-time selection of "no sync needed".
 //   * Lock guards are header-only templates over the lock concept
 //     (lockShared/lockExclusive/unlock*). Concept-checked at use site so a
 //     misuse (e.g. SharedLockGuard<int>) fails with a readable error.
 //
 // Coexistence: This does NOT replace cardinal::mutex / cardinal::shared_mutex
-// — those remain the canonical engine surface. lock exists for the
-// CrimsonDesert porting bridge.
+// — those remain the canonical engine surface. .
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
@@ -47,7 +43,7 @@ namespace cardinal::core {
 
 // ---------------------------------------------------------------------------
 // InterLock — atomic primitive helpers over caller-owned integers.
-// Mirrors PA's InterLock static-method surface; uses std::atomic_ref so
+// Provides an InterLock static-method surface; uses std::atomic_ref so
 // the caller's int32/int64 stays a regular variable.
 // ---------------------------------------------------------------------------
 class InterLock {
@@ -96,7 +92,7 @@ public:
 // ThreadLock — shared/exclusive lock for in-process synchronisation.
 // Backed by cardinal::shared_mutex (= std::shared_mutex). The SpinCount,
 // FileName + VariableName constructor arguments are kept for source
-// compatibility with the Pa surface; SpinCount is advisory only (the
+// source compatibility; SpinCount is advisory only (the
 // underlying SRW/futex auto-spins) and the names feed telemetry (deadlock
 // detector). They have no semantic effect today.
 // ---------------------------------------------------------------------------
@@ -122,7 +118,7 @@ public:
     void unlock_exclusive()   const noexcept { mutex_.unlock(); }
     [[nodiscard]] bool try_lock_exclusive() const noexcept { return mutex_.try_lock(); }
 
-    // Pa-style "skip the deadlock checker" variants — same as the regular
+    // "skip the deadlock checker" variants — same as the regular
     // ones here since we don't ship a deadlock checker.
     void lock_shared_without_checking_deadlock()   const noexcept { lock_shared(); }
     void unlock_shared_without_checking_deadlock() const noexcept { unlock_shared(); }
@@ -169,7 +165,7 @@ public:
 // ProcessLock — cross-process named mutex. Out-of-line impl in lock.cpp.
 // Single primitive: Win path uses CreateMutexW; Linux path uses sem_open.
 // Shared- and exclusive-lock both reduce to the same OS primitive (named
-// mutexes do not distinguish reader/writer) — semantically identical to PA.
+// mutexes do not distinguish reader/writer) — matches the Win32 named-mutex semantics.
 // ---------------------------------------------------------------------------
 class ProcessLock {
 public:
@@ -199,7 +195,7 @@ private:
 // ---------------------------------------------------------------------------
 // Lock guards — RAII templates over any type satisfying the lock concept
 // (lock_shared/unlock_shared/lock_exclusive/unlock_exclusive). Cardinal
-// already has std::scoped_lock; these mirror the Pa naming for porting.
+// already has std::scoped_lock; these provide RAII shared/exclusive guards.
 // ---------------------------------------------------------------------------
 template <class TLock>
 class SharedLockGuard {
