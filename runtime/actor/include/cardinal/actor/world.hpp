@@ -64,6 +64,15 @@ public:
     Actor*       find_by_name(const cardinal::string& name);
     cardinal::vector<Actor*> find_by_tag(const cardinal::string& tag);
 
+    // Substring name search over ALIVE actors (the Outliner search box +
+    // any "find everything called X" query). Case-insensitive by default.
+    // An empty `substr` returns every alive actor (the "no filter" case).
+    cardinal::vector<Actor*> find_all_by_name(const cardinal::string& substr,
+                                              bool case_insensitive = true);
+    // Alive-filtered tag query (find_by_tag does NOT skip dead actors;
+    // this one does — what the editor wants).
+    cardinal::vector<Actor*> find_all_by_tag(const cardinal::string& tag);
+
     const cardinal::vector<cardinal::unique_ptr<Actor>>& actors() const noexcept { return actors_; }
     usize actor_count() const noexcept;
 

@@ -572,6 +572,41 @@ void test_builtin_prefabs() {
     CHECK(mine->get_component<ac::LightComponent>() == nullptr);   // not the builtin
 }
 
+// ---- actor search queries (find_all_by_name / _by_tag) ------------
+void test_find_all_queries() {
+    ac::World w;
+    ac::Actor* crate1 = w.spawn("Crate");
+    ac::Actor* crate2 = w.spawn("crate_big");      // lowercase + substring
+    ac::Actor* lamp   = w.spawn("Lamp");
+    w.spawn("Wall");
+    crate1->add_component<ac::TagComponent>()->add("pickup");
+    lamp->add_component<ac::TagComponent>()->add("light");
+
+    // Case-insensitive substring: "crate" matches "Crate" + "crate_big".
+    auto by_name = w.find_all_by_name("crate");
+    CHECK(by_name.size() == sz(2));
+    // Case-sensitive variant: "Crate" matches only "Crate".
+    auto cs = w.find_all_by_name("Crate", /*case_insensitive=*/false);
+    CHECK(cs.size() == sz(1) && cs[0] == crate1);
+
+    // Empty substring -> all alive actors (the "no filter" case).
+    CHECK(w.find_all_by_name("").size() == sz(4));
+
+    // No match -> empty.
+    CHECK(w.find_all_by_name("zzz").empty());
+
+    // Tag query, alive-filtered.
+    auto pick = w.find_all_by_tag("pickup");
+    CHECK(pick.size() == sz(1) && pick[0] == crate1);
+    CHECK(w.find_all_by_tag("light").size() == sz(1));
+    CHECK(w.find_all_by_tag("none").empty());
+
+    // Dead actors drop out of both queries (alive-filtered).
+    w.destroy(crate2->id());                         // mark dead (not yet swept)
+    CHECK(w.find_all_by_name("crate").size() == sz(1));   // only "Crate" now
+    CHECK(w.find_all_by_name("").size() == sz(3));        // 4 - 1 dead
+}
+
 // ---- has_component / remove_component -----------------------------
 void test_has_remove_component() {
     ac::World w;
@@ -1074,6 +1109,7 @@ int main() {
     test_blueprints();
     test_prefabs();
     test_builtin_prefabs();
+    test_find_all_queries();
     test_prefab_link_revert_apply();
     test_has_remove_component();
     test_enable_disable();

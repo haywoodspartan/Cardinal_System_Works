@@ -9,6 +9,7 @@
 
 #include <cardinal/core/algorithm.hpp>
 #include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/cstring.hpp>
 
 namespace cardinal::ui::panels::actor_outliner_panel {
 
@@ -156,7 +157,32 @@ void draw(cardinal::actor::World* world,
         }
     }
 
-    ImGui::Text("Actors: %zu", world->actor_count());
+    // ---- Search / filter ---------------------------------------------
+    // Plain text filters by name substring (case-insensitive); a "tag:foo"
+    // prefix filters by tag. Backed by the World query API so the match
+    // rule is the engine's, not a UI re-implementation.
+    static char s_search[128] = "";
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputTextWithHint("##actor_search", "filter by name, or tag:foo",
+                             s_search, sizeof(s_search));
+    const bool filtering = s_search[0] != '\0';
+
+    cardinal::vector<cardinal::u32> match_ids;
+    if (filtering) {
+        cardinal::vector<cardinal::actor::Actor*> matches;
+        if (cardinal::strncmp(s_search, "tag:", 4) == 0) {
+            matches = world->find_all_by_tag(s_search + 4);
+        } else {
+            matches = world->find_all_by_name(s_search);
+        }
+        match_ids.reserve(matches.size());
+        for (auto* m : matches) match_ids.push_back(m->id());
+        cardinal::sort(match_ids.begin(), match_ids.end());
+        ImGui::Text("Actors: %zu shown / %zu total",
+                    match_ids.size(), world->actor_count());
+    } else {
+        ImGui::Text("Actors: %zu", world->actor_count());
+    }
     ImGui::Separator();
 
     const float h = cardinal::max(120.0f, ImGui::GetContentRegionAvail().y * 0.45f);
@@ -164,6 +190,9 @@ void draw(cardinal::actor::World* world,
     {
         for (const auto& a : world->actors()) {
             if (!a->alive()) continue;
+            if (filtering &&
+                !cardinal::binary_search(match_ids.begin(), match_ids.end(), a->id()))
+                continue;
             ImGui::PushID(static_cast<int>(a->id()));
             // Per-row active checkbox — toggles the actor on/off in the sim
             // without deleting it.

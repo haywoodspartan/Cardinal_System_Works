@@ -90,6 +90,53 @@ Actor* World::find_by_name(const cardinal::string& name) {
     return nullptr;
 }
 
+namespace {
+// ASCII lower — locale-independent, enough for actor names.
+char ascii_lower(char c) {
+    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+}
+// Case-insensitive substring test (needle already lowered when ci).
+bool contains_ci(const cardinal::string& hay, const cardinal::string& needle_lc,
+                 bool case_insensitive) {
+    if (needle_lc.empty()) return true;
+    if (hay.size() < needle_lc.size()) return false;
+    const usize last = hay.size() - needle_lc.size();
+    for (usize i = 0; i <= last; ++i) {
+        bool ok = true;
+        for (usize j = 0; j < needle_lc.size(); ++j) {
+            const char h = case_insensitive ? ascii_lower(hay[i + j]) : hay[i + j];
+            if (h != needle_lc[j]) { ok = false; break; }
+        }
+        if (ok) return true;
+    }
+    return false;
+}
+}  // namespace
+
+cardinal::vector<Actor*> World::find_all_by_name(const cardinal::string& substr,
+                                                 bool case_insensitive) {
+    cardinal::string needle = substr;
+    if (case_insensitive)
+        for (auto& ch : needle) ch = ascii_lower(ch);
+    cardinal::vector<Actor*> r;
+    for (auto& a : actors_) {
+        if (!a->alive()) continue;
+        if (contains_ci(a->name(), needle, case_insensitive)) r.push_back(a.get());
+    }
+    return r;
+}
+
+cardinal::vector<Actor*> World::find_all_by_tag(const cardinal::string& tag) {
+    cardinal::vector<Actor*> r;
+    for (auto& a : actors_) {
+        if (!a->alive()) continue;
+        if (auto* tc = a->get_component<TagComponent>()) {
+            if (tc->has(tag)) r.push_back(a.get());
+        }
+    }
+    return r;
+}
+
 cardinal::vector<Actor*> World::find_by_tag(const cardinal::string& tag) {
     cardinal::vector<Actor*> r;
     for (auto& a : actors_) {
