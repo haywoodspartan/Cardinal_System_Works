@@ -212,6 +212,15 @@ public:
     void   remove_group_prefab(const cardinal::string& name);
     cardinal::vector<cardinal::string> group_prefab_names() const;
     u32    group_prefab_member_count(const cardinal::string& name) const;
+    // Member access for serialization: the idx-th member's component-snapshot
+    // prototype + its anchor-relative position (nullptr / zero if out of
+    // range). add_group_member is the load sink — appends a member to the
+    // (created-on-first-call) named group.
+    const Actor*          group_member_proto(const cardinal::string& name, u32 idx) const;
+    cardinal::scene::Vec3 group_member_rel(const cardinal::string& name, u32 idx) const;
+    void   add_group_member(const cardinal::string& name,
+                            cardinal::unique_ptr<Actor> proto,
+                            const cardinal::scene::Vec3& rel);
 
     // Library management — round out prefab CRUD.
     //   rename_prefab(old, new) — move a prototype to a new key. Fails

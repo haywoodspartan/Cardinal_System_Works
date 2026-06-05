@@ -682,6 +682,28 @@ u32 World::group_prefab_member_count(const cardinal::string& name) const {
          : static_cast<u32>(it->second.members.size());
 }
 
+const Actor* World::group_member_proto(const cardinal::string& name, u32 idx) const {
+    auto it = group_prefabs_.find(name);
+    if (it == group_prefabs_.end() || idx >= it->second.members.size()) return nullptr;
+    return it->second.members[idx].proto.get();
+}
+
+cardinal::scene::Vec3 World::group_member_rel(const cardinal::string& name, u32 idx) const {
+    auto it = group_prefabs_.find(name);
+    if (it == group_prefabs_.end() || idx >= it->second.members.size()) return {0, 0, 0};
+    return it->second.members[idx].rel;
+}
+
+void World::add_group_member(const cardinal::string& name,
+                             cardinal::unique_ptr<Actor> proto,
+                             const cardinal::scene::Vec3& rel) {
+    if (!proto) return;
+    GroupMember_ m;
+    m.proto = cardinal::move(proto);
+    m.rel = rel;
+    group_prefabs_[name].members.push_back(cardinal::move(m));
+}
+
 cardinal::string World::prefab_of(ActorId id) const {
     const Actor* a = find(id);
     if (a == nullptr) return {};

@@ -336,6 +336,58 @@ void test_world_full_components(const std::filesystem::path& dir) {
     }
 }
 
+// ---- group prefab disk round-trip (capture cluster -> save -> load) ---
+void test_group_prefab_roundtrip(const std::filesystem::path& dir) {
+    namespace ac = cardinal::actor;
+    const cardinal::string path = (dir / "lib_groups.cardinalprefab").string();
+
+    // Source world: a single prefab AND a 2-member group, both saved together.
+    {
+        ac::World w;
+        // single prefab (regression: must still round-trip alongside groups)
+        ac::Actor* p = w.spawn("Box");
+        p->add_component<ac::MeshComponent>()->asset_id = "box";
+        CHECK(w.create_prefab("Box", p->id()));
+        // group: base at (5,0,0) + light at (5,2,1)
+        ac::Actor* base = w.spawn("Base");
+        base->get_component<ac::TransformComponent>()->translation = { 5.0f, 0.0f, 0.0f };
+        base->add_component<ac::MeshComponent>()->asset_id = "turret_base";
+        ac::Actor* lamp = w.spawn("Lamp");
+        lamp->get_component<ac::TransformComponent>()->translation = { 5.0f, 2.0f, 1.0f };
+        auto* lc = lamp->add_component<ac::LightComponent>();
+        lc->kind = ac::LightKind::Spot; lc->intensity = 7.0f;
+        CHECK(w.create_group_prefab("Turret", { base->id(), lamp->id() }));
+
+        const auto ss = ser::save_prefabs(w, path);
+        CHECK(ss.prefabs_written == 2u);          // 1 prefab + 1 group
+        CHECK(ss.bytes_written > 0u);
+    }
+
+    // Fresh world: load -> single prefab + group both restored.
+    {
+        ac::World w2;
+        const auto ls = ser::load_prefabs(w2, path);
+        CHECK(ls.components_loaded >= 3u);
+        // Single prefab survived.
+        CHECK(w2.has_prefab("Box"));
+        ac::Actor* boxi = w2.spawn_prefab("Box");
+        CHECK(boxi != nullptr && boxi->get_component<ac::MeshComponent>()->asset_id == "box");
+        // Group survived with its members + relative layout.
+        CHECK(w2.has_group_prefab("Turret"));
+        CHECK(w2.group_prefab_member_count("Turret") == 2u);
+        auto inst = w2.spawn_group_prefab("Turret", { 100.0f, 0.0f, 0.0f });
+        CHECK(inst.size() == sz(2));
+        // member 0 = base (anchor) -> at (100,0,0); member 1 = lamp -> +0,2,1.
+        auto t0 = inst[0]->get_component<ac::TransformComponent>()->translation;
+        CHECK(approx(t0.x, 100.0f, 1e-3f) && approx(t0.y, 0.0f, 1e-3f));
+        CHECK(inst[0]->get_component<ac::MeshComponent>()->asset_id == "turret_base");
+        auto t1 = inst[1]->get_component<ac::TransformComponent>()->translation;
+        CHECK(approx(t1.x, 100.0f, 1e-3f) && approx(t1.y, 2.0f, 1e-3f) && approx(t1.z, 1.0f, 1e-3f));
+        auto* l = inst[1]->get_component<ac::LightComponent>();
+        CHECK(l != nullptr && l->kind == ac::LightKind::Spot && approx(l->intensity, 7.0f, 1e-3f));
+    }
+}
+
 // ---- world load: unknown component block must not truncate the actor
 // Forward-compat: a save written by a newer build can contain a component
 // type this build doesn't know. The loader must SKIP the unknown block's
@@ -544,6 +596,7 @@ int main() {
     test_sky_roundtrip(dir);
     test_sky_failures(dir);
     test_prefab_roundtrip(dir);
+    test_group_prefab_roundtrip(dir);
     test_world_full_components(dir);
     test_world_load_unknown_component();
     test_play_snapshot_restore(dir);

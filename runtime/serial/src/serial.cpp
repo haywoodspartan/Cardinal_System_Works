@@ -506,6 +506,33 @@ LoadStats deserialize_world(cardinal::game::Game& game,
 // ---------------------------------------------------------------------------
 // Prefab library save / load
 // ---------------------------------------------------------------------------
+// Emit one component block per component on `proto` into `out`, at the given
+// indent. Shared by single-prefab + group-member serialization.
+static u32 emit_proto_components_(cardinal::string& out,
+                                  const cardinal::actor::Actor& proto,
+                                  const char* indent) {
+    u32 n = 0;
+    for (const auto& c : proto.components()) {
+        const cardinal::string type = c->type_name();
+        out += indent; out += "component \""; out += type; out += "\" {\n";
+        if (type == "GameActor") {
+            const auto* ga = static_cast<const cardinal::game::GameActor*>(c.get());
+            out += indent; out += "  class = "; out += ga->class_name(); out += "\n";
+            const auto* def =
+                cardinal::game::ClassRegistry::instance().find(ga->class_name());
+            if (def && def->describe_properties) {
+                auto* mut = const_cast<cardinal::game::GameActor*>(ga);
+                for (auto& p : def->describe_properties(mut)) emit_prop(out, p);
+            }
+        } else {
+            c->serialize_fields(out);   // "  key = val" lines
+        }
+        out += indent; out += "}\n";
+        ++n;
+    }
+    return n;
+}
+
 PrefabSaveStats save_prefabs(const cardinal::actor::World& world,
                              const cardinal::string& path,
                              cardinal::string* error_out)
@@ -518,38 +545,32 @@ PrefabSaveStats save_prefabs(const cardinal::actor::World& world,
     for (const auto& name : world.prefab_names()) {
         const cardinal::actor::Actor* proto = world.prefab_prototype(name);
         if (proto == nullptr) continue;
-
         out += "prefab \""; out += name; out += "\" {\n";
-        for (const auto& c : proto->components()) {
-            const cardinal::string type = c->type_name();
-            out += "  component \""; out += type; out += "\" {\n";
-
-            if (type == "GameActor") {
-                // Game class: emit class name + reflected props (same path
-                // as save_world). describe_properties needs a non-const
-                // GameActor*; the const_cast only reads field addresses.
-                const auto* ga = static_cast<const cardinal::game::GameActor*>(c.get());
-                out += "    class = "; out += ga->class_name(); out += "\n";
-                const auto* def =
-                    cardinal::game::ClassRegistry::instance().find(ga->class_name());
-                if (def && def->describe_properties) {
-                    auto* mut = const_cast<cardinal::game::GameActor*>(ga);
-                    for (auto& p : def->describe_properties(mut)) {
-                        // emit_prop writes a "  prop ..." line; the extra
-                        // indent here is cosmetic (parser strips leading ws).
-                        emit_prop(out, p);
-                    }
-                }
-            } else {
-                // Built-in component: its own field serializer ("  key = val").
-                c->serialize_fields(out);
-            }
-
-            out += "  }\n";
-            ++s.components_written;
-        }
+        s.components_written += emit_proto_components_(out, *proto, "  ");
         out += "}\n\n";
         ++s.prefabs_written;
+    }
+
+    // Group prefabs — each a `group` block of `member "Name" rel x y z { ... }`
+    // sub-blocks (each member is a prototype, same component format).
+    for (const auto& gname : world.group_prefab_names()) {
+        out += "group \""; out += gname; out += "\" {\n";
+        const u32 mc = world.group_prefab_member_count(gname);
+        for (u32 mi = 0; mi < mc; ++mi) {
+            const cardinal::actor::Actor* mp = world.group_member_proto(gname, mi);
+            if (mp == nullptr) continue;
+            const cardinal::scene::Vec3 rel = world.group_member_rel(gname, mi);
+            char hdr[160];
+            cardinal::snprintf(hdr, sizeof(hdr),
+                "  member \"%s\" rel %.6g %.6g %.6g {\n",
+                mp->name().c_str(), static_cast<double>(rel.x),
+                static_cast<double>(rel.y), static_cast<double>(rel.z));
+            out += hdr;
+            s.components_written += emit_proto_components_(out, *mp, "    ");
+            out += "  }\n";
+        }
+        out += "}\n\n";
+        ++s.prefabs_written;   // groups count toward the saved-template tally
     }
 
     cardinal::ofstream f(path, cardinal::ios::binary | cardinal::ios::trunc);
@@ -587,6 +608,13 @@ PrefabLoadStats load_prefabs(cardinal::actor::World& world,
     cardinal::actor::Component*  cur_comp = nullptr;       // built-in being filled
     cardinal::game::GameActor*   cur_ga   = nullptr;       // game-class being filled
     cardinal::vector<cardinal::game::PropertyDef> cur_props;
+    // Group-prefab state: `proto` doubles as the member-being-built; in_member
+    // routes its close `}` to add_group_member, in_group tracks the enclosing
+    // group block so a group's own close doesn't get mistaken for a prefab.
+    cardinal::string         cur_group_name;
+    bool                     in_group  = false;
+    bool                     in_member = false;
+    cardinal::scene::Vec3    cur_member_rel{0, 0, 0};
 
     auto finish_component = [&]() {
         cur_comp = nullptr; cur_ga = nullptr; cur_comp_type.clear();
@@ -599,6 +627,13 @@ PrefabLoadStats load_prefabs(cardinal::actor::World& world,
         }
         proto.reset();
         cur_prefab_name.clear();
+    };
+    auto finish_member = [&]() {
+        if (proto && !cur_group_name.empty()) {
+            world.add_group_member(cur_group_name, cardinal::move(proto), cur_member_rel);
+        }
+        proto.reset();
+        in_member = false;
     };
 
     auto strip = [](const cardinal::string& l, usize& i) {
@@ -616,10 +651,16 @@ PrefabLoadStats load_prefabs(cardinal::actor::World& world,
         usize i = 0; strip(line, i);
         if (i >= line.size() || line[i] == '#') continue;
 
-        // Close brace — closes whichever level is innermost.
+        // Close brace — closes whichever level is innermost: component,
+        // then member, then group, then single prefab.
         if (line[i] == '}') {
             if (cur_comp != nullptr || cur_ga != nullptr || !cur_comp_type.empty()) {
                 finish_component();
+            } else if (in_member) {
+                finish_member();
+            } else if (in_group) {
+                in_group = false;
+                cur_group_name.clear();
             } else {
                 finish_prefab();
             }
@@ -633,6 +674,34 @@ PrefabLoadStats load_prefabs(cardinal::actor::World& world,
             proto = cardinal::make_unique<cardinal::actor::Actor>(0u, cur_prefab_name);
             if (replace_existing && world.has_prefab(cur_prefab_name)) {
                 world.remove_prefab(cur_prefab_name);
+            }
+            continue;
+        }
+
+        // group "Name" {  — opens a multi-actor group block.
+        if (line.compare(i, 6, "group ") == 0) {
+            finish_prefab();
+            cur_group_name = extract_quoted(line, i);
+            in_group = true;
+            if (replace_existing && world.has_group_prefab(cur_group_name)) {
+                world.remove_group_prefab(cur_group_name);
+            }
+            continue;
+        }
+
+        // member "Name" rel x y z {  — one actor inside the current group.
+        if (in_group && line.compare(i, 7, "member ") == 0) {
+            finish_member();   // safety: close any unterminated prior member
+            const cardinal::string mname = extract_quoted(line, i);
+            proto = cardinal::make_unique<cardinal::actor::Actor>(0u, mname);
+            in_member = true;
+            // Parse "rel x y z" after the closing quote.
+            cur_member_rel = {0, 0, 0};
+            const auto rel = line.find("rel", i);
+            if (rel != cardinal::string::npos) {
+                float x = 0, y = 0, z = 0;
+                cardinal::sscanf(line.c_str() + rel + 3, " %f %f %f", &x, &y, &z);
+                cur_member_rel = { x, y, z };
             }
             continue;
         }
@@ -726,7 +795,9 @@ PrefabLoadStats load_prefabs(cardinal::actor::World& world,
             }
         }
     }
-    finish_prefab();   // close trailing block at EOF
+    // Close any trailing block at EOF.
+    if (in_member) finish_member();
+    finish_prefab();
 
     cardinal::log::infof("serial",
         "loaded prefab library: %u prefabs, %u components (%u skipped) <- %s",
