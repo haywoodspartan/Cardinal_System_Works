@@ -330,6 +330,14 @@ void ScriptComponent::deserialize_field(const cardinal::string& k, const cardina
     else if (k == "enabled")     enabled = parse_b(v);
 }
 
+// ---- PrefabLink ----
+void PrefabLinkComponent::serialize_fields(cardinal::string& out) const {
+    emit_s(out, "prefab_name", prefab_name);
+}
+void PrefabLinkComponent::deserialize_field(const cardinal::string& k, const cardinal::string& v) {
+    if (k == "prefab_name") prefab_name = v;
+}
+
 // ---- PlayerController (authored tunables only) ----
 void PlayerControllerComponent::serialize_fields(cardinal::string& out) const {
     emit_f(out, "move_speed",        move_speed);
@@ -369,6 +377,7 @@ cardinal::unique_ptr<Component> make_component_by_name(const cardinal::string& t
     if (type_name == "Tag")              return cardinal::make_unique<TagComponent>();
     if (type_name == "Script")           return cardinal::make_unique<ScriptComponent>();
     if (type_name == "PlayerController") return cardinal::make_unique<PlayerControllerComponent>();
+    if (type_name == "PrefabLink")       return cardinal::make_unique<PrefabLinkComponent>();
     // "GameActor" is intentionally NOT handled here — the game module
     // reconstructs game classes via its ClassRegistry.
     return nullptr;

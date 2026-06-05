@@ -60,6 +60,37 @@ void draw(State& state,
             ImGui::SetTooltip("Snapshot the selected actor's components into "
                               "a reusable prefab template.");
         }
+
+        // ---- Prefab instance linkage (Revert / Apply) -----------------
+        // When the selected actor is an INSTANCE of a prefab, offer the
+        // Unity-style edit loop: revert local edits, or push them up.
+        const cardinal::string linked = world->prefab_of(sel);
+        if (!linked.empty()) {
+            ImGui::Spacing();
+            ImGui::Text("Instance of prefab: %s", linked.c_str());
+            if (ImGui::Button("Revert to Prefab")) {
+                if (world->revert_to_prefab(sel)) {
+                    cardinal::snprintf(state.status, sizeof(state.status),
+                                       "Reverted to prefab '%s'.", linked.c_str());
+                }
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Discard this instance's local edits and "
+                                  "restore the prefab's component values.");
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Apply to Prefab")) {
+                if (world->apply_to_prefab(sel)) {
+                    cardinal::snprintf(state.status, sizeof(state.status),
+                                       "Applied edits to prefab '%s'.", linked.c_str());
+                }
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Push this instance's current component "
+                                  "values back into the prefab — every future "
+                                  "spawn + revert inherits them.");
+            }
+        }
     } else {
         ImGui::TextDisabled("(select an actor in the Outliner to capture it)");
         // Reset the staged name when nothing is selected.

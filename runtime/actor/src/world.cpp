@@ -122,8 +122,17 @@ bool World::create_prefab(const cardinal::string& name, ActorId source) {
     }
     // Detached prototype: id 0, never pushed to actors_, never ticked.
     auto proto = cardinal::make_unique<Actor>(0u, name);
-    u32 skipped = 0;
-    const u32 cloned = src->clone_components_into(*proto, &skipped);
+    u32 cloned = 0, skipped = 0;
+    // Filtered capture: clone every component EXCEPT a PrefabLink (a prefab
+    // must not carry a link to another prefab — capturing an instance bakes
+    // its config, not its lineage).
+    for (const auto& c : src->components()) {
+        if (cardinal::strcmp(c->type_name(), "PrefabLink") == 0) continue;
+        auto copy = c->clone();
+        if (!copy) { ++skipped; continue; }
+        proto->adopt_component(cardinal::move(copy));
+        ++cloned;
+    }
     if (cloned == 0) {
         cardinal::log::warnf("actor/world",
             "create_prefab('%s'): source actor %u had no cloneable components "
@@ -153,6 +162,10 @@ Actor* World::spawn_prefab(const cardinal::string& name,
     // Bare actor — no auto-Transform; the prototype carries its own.
     Actor* a = spawn_bare_(cardinal::move(inst));
     it->second->clone_components_into(*a, nullptr);
+    // Tag the instance with its prefab lineage for revert / apply.
+    auto link = cardinal::make_unique<PrefabLinkComponent>();
+    link->prefab_name = name;
+    a->adopt_component(cardinal::move(link));
     return a;
 }
 
@@ -186,6 +199,47 @@ const Actor* World::prefab_prototype(const cardinal::string& name) const {
 void World::add_prefab(cardinal::string name, cardinal::unique_ptr<Actor> prototype) {
     if (!prototype) return;
     prefabs_[cardinal::move(name)] = cardinal::move(prototype);
+}
+
+cardinal::string World::prefab_of(ActorId id) const {
+    const Actor* a = find(id);
+    if (a == nullptr) return {};
+    if (const auto* link = a->get_component<PrefabLinkComponent>())
+        return link->prefab_name;
+    return {};
+}
+
+bool World::revert_to_prefab(ActorId id) {
+    Actor* a = find(id);
+    if (a == nullptr) return false;
+    auto* link = a->get_component<PrefabLinkComponent>();
+    if (link == nullptr) return false;
+    const cardinal::string pname = link->prefab_name;
+    auto it = prefabs_.find(pname);
+    if (it == prefabs_.end()) {
+        cardinal::log::warnf("actor/world",
+            "revert_to_prefab(%u): linked prefab '%s' no longer exists",
+            id, pname.c_str());
+        return false;
+    }
+    // Wipe local edits, re-clone the prototype, restore the link. on_detach
+    // fires for the discarded components via clear_components -> dtors.
+    a->clear_components();
+    it->second->clone_components_into(*a, nullptr);
+    auto relink = cardinal::make_unique<PrefabLinkComponent>();
+    relink->prefab_name = pname;
+    a->adopt_component(cardinal::move(relink));
+    return true;
+}
+
+bool World::apply_to_prefab(ActorId id) {
+    const cardinal::string pname = prefab_of(id);
+    if (pname.empty()) return false;
+    if (prefabs_.find(pname) == prefabs_.end()) return false;
+    // create_prefab re-captures the instance's CURRENT components into the
+    // prototype (replacing it), excluding the PrefabLink. Every future
+    // spawn + revert now inherits this instance's edits.
+    return create_prefab(pname, id);
 }
 
 World::HandlerId World::subscribe(const cardinal::string& event, EventFn fn) {

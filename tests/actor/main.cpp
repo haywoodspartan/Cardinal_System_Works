@@ -470,8 +470,10 @@ void test_prefabs() {
     CHECK(inst != nullptr);
     CHECK(inst->id() != src->id());
     CHECK(inst->name() == "Crate (instance)");
-    // Exactly the 4 captured components — no duplicate auto-Transform.
-    CHECK(inst->components().size() == sz(4));
+    // The 4 captured components + 1 PrefabLink (spawn_prefab tags every
+    // instance with its lineage) — and no duplicate auto-Transform.
+    CHECK(inst->components().size() == sz(5));
+    CHECK(inst->get_component<ac::PrefabLinkComponent>() != nullptr);
 
     auto* it = inst->get_component<ac::TransformComponent>();
     CHECK(it != nullptr);
@@ -518,6 +520,67 @@ void test_prefabs() {
     CHECK(w.create_prefab("MovingCrate", src->id()));
     ac::Actor* rest = w.spawn_prefab("MovingCrate");
     CHECK(rest->get_component<ac::RigidBodyComponent>()->velocity.x == 0.0f);
+}
+
+// ---- prefab instance linkage (revert / apply edit loop) -----------
+void test_prefab_link_revert_apply() {
+    ac::World w;
+
+    // Build + capture a "Box" prefab (Transform + Mesh).
+    ac::Actor* src = w.spawn("Box");
+    src->get_component<ac::TransformComponent>()->translation = { 1.0f, 0.0f, 0.0f };
+    auto* sm = src->add_component<ac::MeshComponent>();
+    sm->asset_id = "box.mesh";
+    CHECK(w.create_prefab("Box", src->id()));
+    // The source actor is NOT a prefab instance (no link).
+    CHECK(w.prefab_of(src->id()).empty());
+    // The prototype does NOT carry a PrefabLink (filtered on capture).
+    const ac::Actor* proto = w.prefab_prototype("Box");
+    CHECK(proto != nullptr);
+    if (proto) {
+        bool proto_has_link = false;
+        for (const auto& c : proto->components())
+            if (cardinal::strcmp(c->type_name(), "PrefabLink") == 0) proto_has_link = true;
+        CHECK(!proto_has_link);
+        CHECK(proto->components().size() == sz(2));   // Transform + Mesh only
+    }
+
+    // Stamp an instance — it IS linked to "Box".
+    ac::Actor* inst = w.spawn_prefab("Box");
+    CHECK(inst != nullptr);
+    CHECK(w.prefab_of(inst->id()) == "Box");
+    // Components: Transform + Mesh + PrefabLink = 3.
+    CHECK(inst->components().size() == sz(3));
+    CHECK(inst->get_component<ac::PrefabLinkComponent>() != nullptr);
+    CHECK(inst->get_component<ac::PrefabLinkComponent>()->prefab_name == "Box");
+
+    // Edit the instance locally.
+    inst->get_component<ac::TransformComponent>()->translation = { 99.0f, 9.0f, 9.0f };
+    inst->get_component<ac::MeshComponent>()->asset_id = "edited.mesh";
+
+    // Revert — local edits discarded, prefab values restored, link kept.
+    CHECK(w.revert_to_prefab(inst->id()));
+    CHECK(ap(inst->get_component<ac::TransformComponent>()->translation.x, 1.0f));
+    CHECK(inst->get_component<ac::MeshComponent>()->asset_id == "box.mesh");
+    CHECK(w.prefab_of(inst->id()) == "Box");                 // link survived
+    CHECK(inst->components().size() == sz(3));                // no dup link
+
+    // Apply — edit the instance, push up into the prefab; new spawns inherit.
+    inst->get_component<ac::TransformComponent>()->translation = { 5.0f, 5.0f, 5.0f };
+    inst->get_component<ac::MeshComponent>()->asset_id = "v2.mesh";
+    CHECK(w.apply_to_prefab(inst->id()));
+    // Prototype updated (still 2 components, link excluded on capture).
+    CHECK(w.prefab_component_count("Box") == sz(2));
+    ac::Actor* inst2 = w.spawn_prefab("Box");
+    CHECK(ap(inst2->get_component<ac::TransformComponent>()->translation.x, 5.0f));
+    CHECK(inst2->get_component<ac::MeshComponent>()->asset_id == "v2.mesh");
+
+    // Edge cases: non-instance actor + missing-prefab revert both fail clean.
+    CHECK(!w.revert_to_prefab(src->id()));        // src has no link
+    CHECK(!w.apply_to_prefab(src->id()));
+    w.remove_prefab("Box");
+    CHECK(!w.revert_to_prefab(inst->id()));       // prefab gone
+    CHECK(w.prefab_of(inst->id()) == "Box");      // link string still readable
 }
 
 // ---- component serialization (round-trip via factory) -------------
@@ -771,6 +834,7 @@ int main() {
     test_world_lifecycle();
     test_blueprints();
     test_prefabs();
+    test_prefab_link_revert_apply();
     test_component_serialization();
     test_event_bus();
     test_event_bus_reentrant();

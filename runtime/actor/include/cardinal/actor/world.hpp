@@ -109,6 +109,27 @@ public:
     // existing prefab of the same name.
     void   add_prefab(cardinal::string name, cardinal::unique_ptr<Actor> prototype);
 
+    // ---- Prefab instance linkage (Unity-style edit loop) -------------
+    //
+    // spawn_prefab tags each instance with a PrefabLinkComponent naming
+    // its source prefab. These three operate on that link:
+    //
+    //   prefab_of(id)        — the prefab this actor instances ("" if none).
+    //   revert_to_prefab(id) — discard the instance's local edits: clear
+    //                          its components + re-clone from the prototype
+    //                          (the link is preserved). Returns false if
+    //                          the actor isn't a linked instance or the
+    //                          prefab is gone.
+    //   apply_to_prefab(id)  — push the instance's CURRENT components up
+    //                          into the prototype so every future spawn
+    //                          (and revert) inherits the edits. The link
+    //                          component is excluded from the captured
+    //                          prototype. Returns false on the same
+    //                          conditions.
+    cardinal::string prefab_of(ActorId id) const;
+    bool             revert_to_prefab(ActorId id);
+    bool             apply_to_prefab(ActorId id);
+
     // ---- Event bus ---------------------------------------------------
     using EventFn = cardinal::function<void(const cardinal::any& payload)>;
     using HandlerId = u32;

@@ -316,4 +316,23 @@ struct ScriptComponent : Component {
     void deserialize_field(const cardinal::string& key, const cardinal::string& value) override;
 };
 
+// PrefabLink — marks an actor as an INSTANCE of a named prefab. Added by
+// World::spawn_prefab; read by World::prefab_of / revert_to_prefab /
+// apply_to_prefab to implement the Unity-style prefab editing loop (revert
+// local edits back to the prefab, or push them up into the prefab so all
+// future spawns inherit them). create_prefab strips this when capturing so
+// a prefab prototype never contains a link to another prefab.
+struct PrefabLinkComponent : Component {
+    cardinal::string prefab_name;
+    const char* type_name() const noexcept override { return "PrefabLink"; }
+
+    cardinal::unique_ptr<Component> clone() const override {
+        auto c = cardinal::make_unique<PrefabLinkComponent>();
+        c->prefab_name = prefab_name;
+        return c;
+    }
+    void serialize_fields(cardinal::string& out) const override;
+    void deserialize_field(const cardinal::string& key, const cardinal::string& value) override;
+};
+
 }  // namespace cardinal::actor
