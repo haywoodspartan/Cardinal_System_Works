@@ -2391,7 +2391,7 @@ public:
         cardinal::vector<u32>& sel =
             (selection_inout != nullptr) ? *selection_inout : selection_;
         if (!ImGui::Begin(title ? title : "Hierarchy", p_open,
-                          ImGuiWindowFlags_NoMove)) {
+                          0)) {
             ImGui::End();
             return;
         }
@@ -2468,7 +2468,7 @@ public:
     // -------------------------------------------------------------------
     void draw_asset_browser(const char* root_path, const char* title, bool* p_open) override {
         if (!ImGui::Begin(title ? title : "Assets", p_open,
-                          ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
+                          0)) { ImGui::End(); return; }
 
         if (root_path == nullptr || *root_path == '\0') {
             ImGui::TextDisabled("(no asset root provided)");
@@ -2544,7 +2544,7 @@ public:
                             const char* title, bool* p_open) override
     {
         if (!ImGui::Begin(title ? title : "Asset Palette", p_open,
-                          ImGuiWindowFlags_NoMove)) {
+                          0)) {
             ImGui::End(); return;
         }
 
@@ -2842,7 +2842,7 @@ public:
         if (state == nullptr) return;
         state->evict_all_clicked = false;
         if (!ImGui::Begin(title ? title : "World", p_open,
-                          ImGuiWindowFlags_NoMove)) {
+                          0)) {
             ImGui::End(); return;
         }
 
@@ -3200,7 +3200,7 @@ public:
     // -------------------------------------------------------------------
     void draw_stack_tracer_panel(const char* title, bool* p_open) override {
         if (!ImGui::Begin(title ? title : "Stack Tracer", p_open,
-                          ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
+                          0)) { ImGui::End(); return; }
 
         if (ImGui::Button("Capture now")) {
             captured_stack_ = cardinal::trace::capture(/*skip*/ 1, /*max_depth*/ 64);
@@ -3249,7 +3249,7 @@ public:
     // -------------------------------------------------------------------
     void draw_function_tracer_panel(const char* title, bool* p_open) override {
         if (!ImGui::Begin(title ? title : "Function Tracer", p_open,
-                          ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
+                          0)) { ImGui::End(); return; }
 
         if (ImGui::Button("Snapshot")) {
             cardinal::trace::Timeline::instance().snapshot(trace_view_);
@@ -3331,7 +3331,7 @@ public:
     void draw_script_debugger_panel(script::Engine& engine,
                                     const char* title, bool* p_open) override {
         if (!ImGui::Begin(title ? title : "Script Debugger", p_open,
-                          ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
+                          0)) { ImGui::End(); return; }
 
         // Toolbar.
         bool dbg = engine.debug_enabled();
@@ -3411,7 +3411,7 @@ public:
                                     const char* title, bool* p_open) override
     {
         if (!ImGui::Begin(title ? title : "Render Pipeline", p_open,
-                          ImGuiWindowFlags_NoMove)) {
+                          0)) {
             ImGui::End(); return;
         }
 
