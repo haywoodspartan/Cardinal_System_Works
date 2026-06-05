@@ -153,6 +153,74 @@ u32 World::bulk_remove_tag(const cardinal::vector<ActorId>& ids, const cardinal:
     return n;
 }
 
+// ---- Alignment / distribution -----------------------------------------
+namespace {
+float& axis_ref(cardinal::scene::Vec3& v, World::Axis a) {
+    switch (a) {
+        case World::Axis::X: return v.x;
+        case World::Axis::Y: return v.y;
+        default:             return v.z;
+    }
+}
+}  // namespace
+
+u32 World::align_actors(const cardinal::vector<ActorId>& ids, Axis axis, AlignMode mode) {
+    // Gather the transforms that exist.
+    cardinal::vector<TransformComponent*> trs;
+    trs.reserve(ids.size());
+    for (ActorId id : ids) {
+        if (Actor* a = find(id)) {
+            if (auto* t = a->get_component<TransformComponent>()) trs.push_back(t);
+        }
+    }
+    if (trs.empty()) return 0;
+
+    float lo = axis_ref(trs[0]->translation, axis);
+    float hi = lo;
+    for (auto* t : trs) {
+        const float v = axis_ref(t->translation, axis);
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+    }
+    const float target = (mode == AlignMode::Min)    ? lo
+                       : (mode == AlignMode::Max)    ? hi
+                       : 0.5f * (lo + hi);            // Center
+
+    u32 n = 0;
+    for (auto* t : trs) { axis_ref(t->translation, axis) = target; ++n; }
+    if (n) ++revision_;
+    return n;
+}
+
+u32 World::distribute_actors(const cardinal::vector<ActorId>& ids, Axis axis) {
+    cardinal::vector<TransformComponent*> trs;
+    trs.reserve(ids.size());
+    for (ActorId id : ids) {
+        if (Actor* a = find(id)) {
+            if (auto* t = a->get_component<TransformComponent>()) trs.push_back(t);
+        }
+    }
+    if (trs.size() < 3) return 0;   // endpoints + ≥1 interior needed
+
+    // Sort by axis position so the extremes are the ends.
+    cardinal::sort(trs.begin(), trs.end(),
+        [axis](TransformComponent* a, TransformComponent* b) {
+            return axis_ref(a->translation, axis) < axis_ref(b->translation, axis);
+        });
+    const usize last = trs.size() - 1;
+    const float lo = axis_ref(trs[0]->translation, axis);
+    const float hi = axis_ref(trs[last]->translation, axis);
+
+    u32 n = 0;
+    for (usize i = 1; i < last; ++i) {
+        const float f = static_cast<float>(i) / static_cast<float>(last);
+        axis_ref(trs[i]->translation, axis) = lo + (hi - lo) * f;
+        ++n;
+    }
+    if (n) ++revision_;
+    return n;
+}
+
 Actor* World::find(ActorId id) {
     for (auto& a : actors_) if (a->id() == id) return a.get();
     return nullptr;

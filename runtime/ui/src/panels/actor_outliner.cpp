@@ -220,6 +220,25 @@ void draw(cardinal::actor::World* world,
             ImGui::SameLine();
             if (ImGui::SmallButton("-Tag")) world->bulk_remove_tag(match_ids, s_bulk_tag);
             if (!has_tag) ImGui::EndDisabled();
+
+            // Align (to set center) + distribute (evenly) along an axis.
+            using Ax = cardinal::actor::World::Axis;
+            using Mode = cardinal::actor::World::AlignMode;
+            ImGui::TextUnformatted("Align:");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("X")) world->align_actors(match_ids, Ax::X, Mode::Center);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Y")) world->align_actors(match_ids, Ax::Y, Mode::Center);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Z")) world->align_actors(match_ids, Ax::Z, Mode::Center);
+            ImGui::SameLine();
+            ImGui::TextUnformatted(" Distribute:");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("X##d")) world->distribute_actors(match_ids, Ax::X);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Y##d")) world->distribute_actors(match_ids, Ax::Y);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Z##d")) world->distribute_actors(match_ids, Ax::Z);
         }
     } else {
         ImGui::Text("Actors: %zu", world->actor_count());

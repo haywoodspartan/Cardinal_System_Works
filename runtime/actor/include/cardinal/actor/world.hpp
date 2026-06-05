@@ -84,6 +84,24 @@ public:
     u32 bulk_add_tag    (const cardinal::vector<ActorId>& ids, const cardinal::string& tag);
     u32 bulk_remove_tag (const cardinal::vector<ActorId>& ids, const cardinal::string& tag);
 
+    // ---- Alignment / distribution (level layout) ---------------------
+    //
+    // Operate on a set of actors' TransformComponent translations along one
+    // world axis — the "align these props to the same Z" / "space these
+    // evenly" tools every level editor has. Actors without a Transform are
+    // skipped. Both bump the revision (so they're undoable) when they move
+    // anything.
+    enum class Axis      : u32 { X = 0, Y = 1, Z = 2 };
+    enum class AlignMode : u32 { Min, Center, Max };
+
+    // Snap every actor's `axis` coordinate to the set's min / center / max.
+    // Returns the number of actors moved.
+    u32 align_actors(const cardinal::vector<ActorId>& ids, Axis axis, AlignMode mode);
+    // Space actors evenly along `axis` between the two extremes (which stay
+    // put). Needs ≥3 actors to do anything. Returns the number repositioned
+    // (the interior actors).
+    u32 distribute_actors(const cardinal::vector<ActorId>& ids, Axis axis);
+
     // ---- Lookup / iteration ------------------------------------------
     Actor*       find(ActorId id);
     const Actor* find(ActorId id) const;

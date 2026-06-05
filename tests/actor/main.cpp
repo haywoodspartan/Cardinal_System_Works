@@ -883,6 +883,66 @@ void test_copy_paste_component() {
     CHECK(ac::paste_component(*dst, "Bogus\n  x = 1\n") == nullptr);
 }
 
+// ---- alignment / distribution (level layout) ----------------------
+void test_align_distribute() {
+    using Ax = ac::World::Axis;
+    using Mode = ac::World::AlignMode;
+    ac::World w;
+
+    auto at = [&](const char* n, float x, float y, float z) {
+        ac::Actor* a = w.spawn(n);
+        a->get_component<ac::TransformComponent>()->translation = { x, y, z };
+        return a;
+    };
+    auto tx = [](ac::Actor* a) { return a->get_component<ac::TransformComponent>()->translation; };
+
+    // Three actors at different Y.
+    ac::Actor* a = at("A", 0.0f, 2.0f, 0.0f);
+    ac::Actor* b = at("B", 0.0f, 6.0f, 0.0f);
+    ac::Actor* c = at("C", 0.0f, 10.0f, 0.0f);
+    cardinal::vector<cardinal::u32> ids = { a->id(), b->id(), c->id() };
+
+    // Align Y center -> all share (2+10)/2 = 6.
+    CHECK(w.align_actors(ids, Ax::Y, Mode::Center) == 3u);
+    CHECK(ap(tx(a).y, 6.0f) && ap(tx(b).y, 6.0f) && ap(tx(c).y, 6.0f));
+    // Align Y min -> all 6 now, so min == 6.
+    at("reset", 0, 0, 0);                              // unrelated actor, not in set
+    a->get_component<ac::TransformComponent>()->translation.y = 1.0f;
+    c->get_component<ac::TransformComponent>()->translation.y = 9.0f;
+    CHECK(w.align_actors(ids, Ax::Y, Mode::Min) == 3u);
+    CHECK(ap(tx(a).y, 1.0f) && ap(tx(b).y, 1.0f) && ap(tx(c).y, 1.0f));   // min was 1
+    // Align Y max.
+    a->get_component<ac::TransformComponent>()->translation.y = 1.0f;
+    c->get_component<ac::TransformComponent>()->translation.y = 9.0f;
+    CHECK(w.align_actors(ids, Ax::Y, Mode::Max) == 3u);
+    CHECK(ap(tx(a).y, 9.0f) && ap(tx(c).y, 9.0f));    // max was 9
+
+    // Distribute along X: 0, 5, 7, 30 (unsorted) -> 0, 10, 20, 30 (even).
+    ac::World w2;
+    auto at2 = [&](const char* n, float x) {
+        ac::Actor* z = w2.spawn(n);
+        z->get_component<ac::TransformComponent>()->translation.x = x;
+        return z;
+    };
+    ac::Actor* p0 = at2("P0", 0.0f);
+    ac::Actor* p1 = at2("P1", 5.0f);
+    ac::Actor* p2 = at2("P2", 7.0f);
+    ac::Actor* p3 = at2("P3", 30.0f);
+    cardinal::vector<cardinal::u32> ids2 = { p0->id(), p1->id(), p2->id(), p3->id() };
+    // Only the 2 interior actors move (endpoints stay).
+    CHECK(w2.distribute_actors(ids2, Ax::X) == 2u);
+    auto x = [](ac::Actor* z) { return z->get_component<ac::TransformComponent>()->translation.x; };
+    CHECK(ap(x(p0), 0.0f) && ap(x(p3), 30.0f));       // extremes unchanged
+    CHECK(ap(x(p1), 10.0f) && ap(x(p2), 20.0f));      // evenly spaced
+
+    // Distribute needs >=3.
+    cardinal::vector<cardinal::u32> two = { p0->id(), p3->id() };
+    CHECK(w2.distribute_actors(two, Ax::X) == 0u);
+
+    // Empty set / no-transform safety.
+    CHECK(w.align_actors({}, Ax::X, Mode::Center) == 0u);
+}
+
 // ---- prefab instance linkage (revert / apply edit loop) -----------
 void test_prefab_link_revert_apply() {
     ac::World w;
@@ -1281,6 +1341,7 @@ int main() {
     test_builtin_prefabs();
     test_find_all_queries();
     test_bulk_ops();
+    test_align_distribute();
     test_prefab_link_revert_apply();
     test_has_remove_component();
     test_enable_disable();
