@@ -843,6 +843,56 @@ void test_revision() {
     CHECK(w.revision() == r8);               // no bump
 }
 
+// ---- O(1) id index: find() correctness across spawn/destroy/sweep -
+void test_world_index() {
+    ac::World w;
+
+    // find on an empty world / id 0 (kInvalidActor) -> null.
+    CHECK(w.find(0u) == nullptr);
+    CHECK(w.find(123u) == nullptr);
+
+    // Spawn a batch; every id resolves to the right actor.
+    cardinal::vector<cardinal::u32> ids;
+    for (int i = 0; i < 500; ++i) ids.push_back(w.spawn("A")->id());
+    for (cardinal::u32 id : ids) {
+        ac::Actor* a = w.find(id);
+        CHECK(a != nullptr && a->id() == id);
+    }
+    CHECK(w.find(99999u) == nullptr);        // unknown id
+
+    // destroy marks dead but find STILL returns it (unswept contract).
+    ac::Actor* victim = w.find(ids[100]);
+    w.destroy(ids[100]);
+    CHECK(w.find(ids[100]) == victim);       // present until sweep
+    CHECK(!victim->alive());
+
+    // sweep removes the dead actor from the index.
+    w.sweep();
+    CHECK(w.find(ids[100]) == nullptr);
+    // ...and leaves the rest intact.
+    CHECK(w.find(ids[0]) != nullptr);
+    CHECK(w.find(ids[499]) != nullptr);
+
+    // Interleaved churn keeps the index consistent + ids are never reused.
+    cardinal::u32 last = ids.back();
+    for (int round = 0; round < 50; ++round) {
+        ac::Actor* fresh = w.spawn("B");
+        CHECK(fresh->id() > last);            // monotonic, never reused
+        last = fresh->id();
+        CHECK(w.find(fresh->id()) == fresh);
+        w.destroy(fresh->id());
+        w.sweep();
+        CHECK(w.find(fresh->id()) == nullptr);   // gone after sweep
+    }
+
+    // Duplicate / array (which spawn via spawn_bare_) are indexed too.
+    ac::Actor* src = w.spawn("Src");
+    ac::Actor* dup = w.duplicate(src->id());
+    CHECK(dup != nullptr && w.find(dup->id()) == dup);
+    auto arr = w.array_actor(src->id(), 3, { 1.0f, 0.0f, 0.0f });
+    for (auto* x : arr) CHECK(w.find(x->id()) == x);
+}
+
 // ---- component copy / paste (clipboard) ---------------------------
 void test_copy_paste_component() {
     ac::World w;
@@ -1653,6 +1703,7 @@ int main() {
     test_has_remove_component();
     test_enable_disable();
     test_revision();
+    test_world_index();
     test_copy_paste_component();
     test_duplicate();
     test_spawn_placement();

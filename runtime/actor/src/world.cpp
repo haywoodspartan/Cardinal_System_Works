@@ -17,6 +17,7 @@ World::~World() = default;
 Actor* World::spawn_bare_(cardinal::string name) {
     auto a = cardinal::make_unique<Actor>(next_id_++, cardinal::move(name));
     Actor* raw = a.get();
+    by_id_[raw->id()] = raw;        // index for O(1) find (ids never reused)
     actors_.push_back(cardinal::move(a));
     ++revision_;   // creation is an authored-scene change (covers spawn /
                    // spawn_prefab / duplicate, which all route through here)
@@ -148,6 +149,10 @@ void World::destroy(ActorId id) {
 
 void World::sweep() {
     const usize before = actors_.size();
+    // Drop the swept actors' ids from the index first (the unique_ptrs — and
+    // thus the Actor objects the map points at — are about to be destroyed).
+    for (const auto& a : actors_)
+        if (!a->alive()) by_id_.erase(a->id());
     actors_.erase(
         cardinal::remove_if(actors_.begin(), actors_.end(),
                        [](const cardinal::unique_ptr<Actor>& a){ return !a->alive(); }),
@@ -302,11 +307,12 @@ u32 World::snap_actors_to_grid(const cardinal::vector<ActorId>& ids, float step)
 }
 
 Actor* World::find(ActorId id) {
-    for (auto& a : actors_) if (a->id() == id) return a.get();
-    return nullptr;
+    auto it = by_id_.find(id);   // O(1) — was a linear scan over actors_
+    return it == by_id_.end() ? nullptr : it->second;
 }
 const Actor* World::find(ActorId id) const {
-    return const_cast<World*>(this)->find(id);
+    auto it = by_id_.find(id);
+    return it == by_id_.end() ? nullptr : it->second;
 }
 
 Actor* World::find_by_name(const cardinal::string& name) {

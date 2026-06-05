@@ -245,6 +245,13 @@ private:
 
     ActorId                                                  next_id_{1};
     cardinal::vector<cardinal::unique_ptr<Actor>>                      actors_;
+    // id -> live Actor* index for O(1) find(id). Maintained in exactly two
+    // places: spawn_bare_ inserts, sweep erases the actors it removes.
+    // (destroy only marks dead — the actor stays in actors_ + this map until
+    // sweep, matching find()'s "returns dead-but-unswept" contract.) The
+    // Actor objects are heap-stable unique_ptr pointees, so these raw
+    // pointers survive actors_ reallocation.
+    cardinal::unordered_map<ActorId, Actor*>                 by_id_;
     cardinal::unordered_map<cardinal::string, Blueprint>               blueprints_;
     // Prefab prototypes — detached actors (id 0, never in actors_/never
     // ticked) whose components are the captured snapshot. spawn_prefab
