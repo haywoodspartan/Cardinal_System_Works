@@ -45,9 +45,13 @@ WorldStats compute_world_stats(const World& world) {
             const cardinal::string type = c->type_name();
             tally(s.by_component, type);
             if (type == "PrefabLink") is_instance = true;
-            // Tag breakdown — count each tag string across the world.
+            // Tag breakdown — count each tag string across the world. Tally
+            // from THIS component (c), not get_component<TagComponent>()
+            // which returns only the first: an actor may legally hold more
+            // than one TagComponent, and the first-match query would count
+            // its tags once per Tag component while dropping the rest.
             if (type == "Tag") {
-                if (const auto* tc = a.get_component<TagComponent>()) {
+                if (const auto* tc = static_cast<const TagComponent*>(c.get())) {
                     for (const auto& t : tc->tags) tally(s.by_tag, t);
                 }
             }

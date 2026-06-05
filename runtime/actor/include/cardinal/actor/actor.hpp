@@ -136,9 +136,15 @@ public:
         return cloned;
     }
 
-    // Remove all components (used before stamping a prefab over a bare
-    // actor so the auto-Transform doesn't duplicate the prefab's own).
-    void clear_components() noexcept { components_.clear(); }
+    // Remove all components, firing each one's on_detach (matching
+    // ~Actor + remove_component lifecycle semantics) before destruction —
+    // so a component that releases a subsystem handle on detach does so
+    // here too. Used by World::revert_to_prefab to wipe an instance's
+    // local edits before re-cloning the prototype.
+    void clear_components() noexcept {
+        for (auto& c : components_) c->on_detach(*this);
+        components_.clear();
+    }
 
     // Adopt an already-constructed component (e.g. from the deserializer's
     // make_component_by_name factory or a game-class ClassRegistry::create).

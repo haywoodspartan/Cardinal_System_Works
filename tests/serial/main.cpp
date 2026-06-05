@@ -336,6 +336,55 @@ void test_world_full_components(const std::filesystem::path& dir) {
     }
 }
 
+// ---- world load: unknown component block must not truncate the actor
+// Forward-compat: a save written by a newer build can contain a component
+// type this build doesn't know. The loader must SKIP the unknown block's
+// fields, not tear down the actor (which would drop everything after it).
+void test_world_load_unknown_component() {
+    namespace ac = cardinal::actor;
+    cardinal::sim::SimWorld sw{cardinal::sim::SimDesc{}};
+    cardinal::game::Game game{sw};
+
+    // Hand-crafted world text: an unknown component block sits BEFORE a known
+    // Mesh block, and `enabled = false` + the close all follow it.
+    const cardinal::string text =
+        "# Cardinal save v1\n"
+        "actor \"Thing\" {\n"
+        "  class = \n"
+        "  position = (1.000000, 2.000000, 3.000000)\n"
+        "  component \"FutureWidget\" {\n"      // unknown type — must be skipped
+        "    foo = 5\n"
+        "    payload = some text\n"
+        "  }\n"
+        "  component \"Mesh\" {\n"              // known — must survive
+        "    asset_id = real.mesh\n"
+        "    tint = 0.5 0.6 0.7\n"
+        "    visible = 0\n"
+        "  }\n"
+        "  enabled = false\n"
+        "}\n";
+
+    const auto ls = ser::deserialize_world(game, text, /*replace_existing=*/true);
+    CHECK(ls.actors_spawned >= 1u);
+    CHECK(ls.errors >= 1u);                    // the unknown block was reported
+
+    ac::Actor* a = game.world().find_by_name("Thing");
+    CHECK(a != nullptr);
+    if (a != nullptr) {
+        // Everything AFTER the unknown block survived (the bug truncated it):
+        auto* m = a->get_component<ac::MeshComponent>();
+        CHECK(m != nullptr);                   // Mesh block after the unknown one
+        if (m != nullptr) {
+            CHECK(m->asset_id == "real.mesh");
+            CHECK(approx(m->tint.x, 0.5f, 1e-3f) && approx(m->tint.z, 0.7f, 1e-3f));
+            CHECK(m->visible == false);
+        }
+        CHECK(!a->enabled());                  // the trailing `enabled = false`
+        // The unknown component's fields did NOT leak onto the actor.
+        CHECK(a->get_component<ac::TransformComponent>() != nullptr);
+    }
+}
+
 // ---- play-mode snapshot / restore (the PIE contract) --------------
 // game_bar snapshots the world on Play (serialize_world -> string) and
 // restores it on Stop (deserialize_world replace). Verify that contract
@@ -496,6 +545,7 @@ int main() {
     test_sky_failures(dir);
     test_prefab_roundtrip(dir);
     test_world_full_components(dir);
+    test_world_load_unknown_component();
     test_play_snapshot_restore(dir);
     test_world_history();
 

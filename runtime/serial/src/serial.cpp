@@ -296,8 +296,14 @@ static LoadStats parse_world_stream_(cardinal::game::Game& game,
     cardinal::vector<cardinal::game::PropertyDef> cur_props;
     // Full-component-set extension: when inside a `component "Type" {` block,
     // field lines route to this component's deserialize_field instead of the
-    // actor-level handlers. nullptr = not in a component block.
+    // actor-level handlers. `in_comp` is the in-block sentinel (set whenever a
+    // `component "..." {` is consumed, regardless of whether a component was
+    // built); `cur_serialized_comp` is the target (null for a skipped /
+    // unknown / GameActor / Transform-less block). Closing on the POINTER
+    // alone would mis-route a skipped block's `}` to close the ACTOR and
+    // silently truncate the rest of it — so close on the sentinel.
     cardinal::actor::Component*        cur_serialized_comp = nullptr;
+    bool                              in_comp = false;
     auto refresh_props = [&]() {
         cur_props.clear();
         if (cur_ga == nullptr) return;
@@ -325,13 +331,16 @@ static LoadStats parse_world_stream_(cardinal::game::Game& game,
             cur_actor_name = name;
             cur_ga         = nullptr;
             cur_serialized_comp = nullptr;
+            in_comp        = false;
             cur_props.clear();
             continue;
         }
         if (line[i] == '}') {
             // A `}` closes the innermost open block: a component sub-block
-            // first, otherwise the actor block.
-            if (cur_serialized_comp != nullptr) {
+            // first (tracked by `in_comp`, true even for a skipped block),
+            // otherwise the actor block.
+            if (in_comp) {
+                in_comp = false;
                 cur_serialized_comp = nullptr;
             } else {
                 cur_actor = nullptr; cur_ga = nullptr; cur_props.clear();
@@ -351,6 +360,7 @@ static LoadStats parse_world_stream_(cardinal::game::Game& game,
                 ? cardinal::string::npos : line.find('"', q1 + 1);
             cardinal::string ctype = (q1 != cardinal::string::npos && q2 != cardinal::string::npos)
                 ? line.substr(q1 + 1, q2 - q1 - 1) : cardinal::string{};
+            in_comp = true;   // sentinel: we are inside a component block now
             // Transform / GameActor are emitted via the legacy lines, never
             // as component blocks — but be defensive: route a Transform
             // block to the existing component, skip a GameActor block.
@@ -372,10 +382,15 @@ static LoadStats parse_world_stream_(cardinal::game::Game& game,
         }
 
         // Inside a component block: route "key = value" to the component.
-        if (cur_serialized_comp != nullptr) {
-            cardinal::string key, val;
-            if (text::parse_kv(line.substr(i), &key, &val)) {
-                cur_serialized_comp->deserialize_field(key, val);
+        // A skipped/unknown block (in_comp but no target) drops its field
+        // lines here instead of letting them fall through to the
+        // actor-level class/enabled/position/prop handlers.
+        if (in_comp) {
+            if (cur_serialized_comp != nullptr) {
+                cardinal::string key, val;
+                if (text::parse_kv(line.substr(i), &key, &val)) {
+                    cur_serialized_comp->deserialize_field(key, val);
+                }
             }
             continue;
         }
@@ -688,6 +703,13 @@ PrefabLoadStats load_prefabs(cardinal::actor::World& world,
                 cardinal::string val   = rest.substr(eq + 1);
                 usize v0 = 0; while (v0 < val.size() && val[v0] == ' ') ++v0;
                 val = val.substr(v0);
+                // Strip trailing CR/whitespace (mirrors the world loader) so
+                // a CRLF-terminated value doesn't leave apply_prop's quote
+                // strip seeing '\r' as the last char — which would store a
+                // string prop with literal quotes + a carriage return.
+                while (!val.empty() &&
+                       (val.back() == '\r' || val.back() == ' ' || val.back() == '\t'))
+                    val.pop_back();
                 for (auto& p : cur_props) {
                     if (p.name == pname) { apply_prop(p, kind, val); break; }
                 }

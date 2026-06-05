@@ -49,6 +49,12 @@ float parse_f(const cardinal::string& s) {
 int parse_i(const cardinal::string& s) {
     return static_cast<int>(cardinal::strtol(s.c_str(), nullptr, 10));
 }
+// Unsigned parse — u32 fields (flags, channel) emit_u()'s the FULL 0..2^32-1
+// range; parse_i would saturate any value >= 2^31 at INT_MAX (long is 32-bit
+// on the Win/MSVC target), corrupting high-bit flag masks. strtoul covers it.
+cardinal::u32 parse_u(const cardinal::string& s) {
+    return static_cast<cardinal::u32>(cardinal::strtoul(s.c_str(), nullptr, 10));
+}
 bool parse_b(const cardinal::string& s) {
     return !s.empty() && (s[0] == '1' || s[0] == 't' || s[0] == 'T');
 }
@@ -280,7 +286,7 @@ void AudioEmitterComponent::deserialize_field(const cardinal::string& k, const c
     else if (k == "loop")          loop = parse_b(v);
     else if (k == "is_3d")         is_3d = parse_b(v);
     else if (k == "play_on_spawn") play_on_spawn = parse_b(v);
-    else if (k == "channel")       channel = static_cast<u32>(parse_i(v));
+    else if (k == "channel")       channel = parse_u(v);
 }
 
 // ---- RigidBody ----
@@ -310,7 +316,7 @@ void TagComponent::serialize_fields(cardinal::string& out) const {
     }
 }
 void TagComponent::deserialize_field(const cardinal::string& k, const cardinal::string& v) {
-    if (k == "flags") { flags = static_cast<u32>(parse_i(v)); return; }
+    if (k == "flags") { flags = parse_u(v); return; }
     if (k == "tag_count") return;   // size is implicit from the tag_N lines
     if (k.size() > 4 && k.compare(0, 4, "tag_") == 0) {
         // tag_N → append (dedup via add()).

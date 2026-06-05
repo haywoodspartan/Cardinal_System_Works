@@ -209,7 +209,12 @@ void draw(cardinal::actor::World* world,
             ImGui::SameLine();
             if (ImGui::SmallButton("Delete all")) {
                 world->bulk_destroy(match_ids);
-                if (sel != 0 && world->find(sel) == nullptr) sel = 0;   // cleared if gone
+                // bulk_destroy only kills (defers sweep), so find(sel) still
+                // returns the now-DEAD actor — test liveness, not presence.
+                if (sel != 0) {
+                    auto* s = world->find(sel);
+                    if (s == nullptr || !s->alive()) sel = 0;
+                }
             }
             // Bulk tag add/remove on the shown set.
             static char s_bulk_tag[64] = "";
@@ -257,6 +262,10 @@ void draw(cardinal::actor::World* world,
     }
     ImGui::Separator();
 
+    // Duplicate push_backs to actors_, which can REALLOCATE the vector we're
+    // range-iterating — a use-after-free. Defer it (and any spawn-producing
+    // action) until after the loop, mirroring the inspector's to_remove.
+    cardinal::u32 to_duplicate = 0;
     const float h = cardinal::max(120.0f, ImGui::GetContentRegionAvail().y * 0.45f);
     if (ImGui::BeginChild("##actor_list", ImVec2(0, h), ImGuiChildFlags_FrameStyle))
     {
@@ -287,16 +296,23 @@ void draw(cardinal::actor::World* world,
                     a->set_enabled(!a->enabled());
                     world->bump_revision();
                 }
-                if (ImGui::MenuItem("Duplicate")) {
-                    if (auto* dup = world->duplicate(a->id())) sel = dup->id();
+                if (ImGui::MenuItem("Duplicate")) to_duplicate = a->id();   // deferred
+                if (ImGui::MenuItem("Destroy")) {
+                    world->destroy(a->id());
+                    if (sel == a->id()) sel = 0;     // clear selection of the destroyed actor
                 }
-                if (ImGui::MenuItem("Destroy")) world->destroy(a->id());
                 ImGui::EndPopup();
             }
             ImGui::PopID();
         }
     }
     ImGui::EndChild();
+
+    // Apply the deferred duplicate now that iteration is done (safe to
+    // reallocate actors_).
+    if (to_duplicate != 0) {
+        if (auto* dup = world->duplicate(to_duplicate)) sel = dup->id();
+    }
 
     if (selected_actor_id_inout) *selected_actor_id_inout = sel;
 
@@ -363,7 +379,9 @@ void draw(cardinal::actor::World* world,
     ImGui::Separator();
     ImGui::Text("Inspector");
 
+    // Don't inspect a dead-but-unswept actor (find() ignores alive()).
     cardinal::actor::Actor* a = world->find(sel);
+    if (a != nullptr && !a->alive()) a = nullptr;
     if (a == nullptr) {
         ImGui::TextDisabled("(no actor selected)");
     } else {

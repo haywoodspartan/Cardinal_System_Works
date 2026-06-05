@@ -99,27 +99,51 @@ cardinal::vector<Actor*> World::array_actor(ActorId src_id, u32 count,
     Actor* src = find(src_id);
     if (src == nullptr || count == 0) return out;
 
-    // Source position (origin if it somehow lacks a Transform).
+    // Clamp to a sane maximum: an unbounded count would reserve a huge
+    // vector and, at count == 0xFFFFFFFF, make `i <= count` always true so
+    // `++i` wraps and the loop never terminates.
+    constexpr u32 kMaxArray = 4096u;   // e.g. a 64x64 grid
+    if (count > kMaxArray) count = kMaxArray;
+
+    // Source position + state, captured BEFORE any spawn (the spawns below
+    // push_back to actors_, which can reallocate and invalidate `src`).
     cardinal::scene::Vec3 base{0, 0, 0};
     if (auto* st = src->get_component<TransformComponent>()) base = st->translation;
+    const bool src_enabled = src->enabled();
+    // Snapshot the source's components ONCE into a detached prototype, then
+    // stamp each copy from it — O(count) instead of re-cloning the (moving)
+    // source per copy. Strip a trailing "(copy...)" so array names are clean.
+    auto proto = cardinal::make_unique<Actor>(0u, src->name());
+    src->clone_components_into(*proto, nullptr);
+    cardinal::string nm = src->name();
+    const auto paren = nm.rfind(" (copy");
+    if (paren != cardinal::string::npos && !nm.empty() && nm.back() == ')')
+        nm = nm.substr(0, paren);
 
     out.reserve(count);
     for (u32 i = 1; i <= count; ++i) {
-        Actor* dup = duplicate(src_id);   // full clone: name, components, link, enabled
-        if (dup == nullptr) continue;
-        if (auto* t = dup->get_component<TransformComponent>()) {
+        char suffix[40];
+        cardinal::snprintf(suffix, sizeof(suffix), " (copy %u)", i);
+        Actor* dst = spawn_bare_(nm + suffix);   // no auto-Transform; clone carries it
+        proto->clone_components_into(*dst, nullptr);
+        dst->set_enabled(src_enabled);
+        if (auto* t = dst->get_component<TransformComponent>()) {
             const float fi = static_cast<float>(i);
             t->translation = { base.x + step.x * fi,
                                base.y + step.y * fi,
                                base.z + step.z * fi };
         }
-        out.push_back(dup);
+        out.push_back(dst);
     }
     return out;
 }
 
 void World::destroy(ActorId id) {
-    for (auto& a : actors_) if (a->id() == id) { a->kill(); ++revision_; return; }
+    // Only bump the revision on a genuine alive->dead transition (mirrors
+    // bulk_destroy) — destroying an already-dead-but-unswept actor is a
+    // no-op and must not spawn a spurious undo checkpoint.
+    for (auto& a : actors_)
+        if (a->id() == id) { if (a->alive()) { a->kill(); ++revision_; } return; }
 }
 
 void World::sweep() {
@@ -223,12 +247,20 @@ u32 World::distribute_actors(const cardinal::vector<ActorId>& ids, Axis axis) {
     trs.reserve(ids.size());
     for (ActorId id : ids) {
         if (Actor* a = find(id)) {
-            if (auto* t = a->get_component<TransformComponent>()) trs.push_back(t);
+            if (auto* t = a->get_component<TransformComponent>()) {
+                // Skip non-finite axis values: a NaN breaks the sort
+                // comparator's strict-weak-ordering, which is UB for
+                // cardinal::sort (can corrupt the heap). A corrupt
+                // transform simply isn't distributed.
+                if (cardinal::isfinite(axis_ref(t->translation, axis)))
+                    trs.push_back(t);
+            }
         }
     }
     if (trs.size() < 3) return 0;   // endpoints + ≥1 interior needed
 
-    // Sort by axis position so the extremes are the ends.
+    // Sort by axis position so the extremes are the ends. All values are
+    // finite here, so the predicate is a valid strict-weak-ordering.
     cardinal::sort(trs.begin(), trs.end(),
         [axis](TransformComponent* a, TransformComponent* b) {
             return axis_ref(a->translation, axis) < axis_ref(b->translation, axis);
@@ -429,7 +461,11 @@ Actor* World::spawn_prefab(const cardinal::string& name,
     // Bare actor — no auto-Transform; the prototype carries its own.
     Actor* a = spawn_bare_(cardinal::move(inst));
     it->second->clone_components_into(*a, nullptr);
-    // Tag the instance with its prefab lineage for revert / apply.
+    // Drop any PrefabLink that came from the prototype (create_prefab strips
+    // it on capture, but a prototype installed via add_prefab — e.g. a
+    // hand-edited prefab file — could carry one), then tag this instance
+    // with exactly one fresh link to its source prefab.
+    a->remove_component("PrefabLink");
     auto link = cardinal::make_unique<PrefabLinkComponent>();
     link->prefab_name = name;
     a->adopt_component(cardinal::move(link));
@@ -532,7 +568,8 @@ bool World::revert_to_prefab(ActorId id) {
         return false;
     }
     // Wipe local edits, re-clone the prototype, restore the link. on_detach
-    // fires for the discarded components via clear_components -> dtors.
+    // clear_components fires on_detach for each discarded component before
+    // destroying it (matching destroy/remove semantics).
     a->clear_components();
     it->second->clone_components_into(*a, nullptr);
     auto relink = cardinal::make_unique<PrefabLinkComponent>();

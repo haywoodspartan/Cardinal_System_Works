@@ -54,6 +54,10 @@ void draw(cardinal::game::Game* game, const char* title, bool* p_open) {
 
     // Debounced auto-checkpoint (editor mode only — never during Play, whose
     // mutations are the live sim, not authored edits).
+    // KNOWN LIMITATION: this debounce only advances while the Game panel is
+    // drawn — if it's closed or a viewport is maximized, edits made then get
+    // no auto-checkpoint (the manual Checkpoint button still works). Hoisting
+    // this into an always-called host update is a follow-up.
     if (state == cardinal::game::GameState::Stopped) {
         const cardinal::u64 rev = game->world().revision();
         if (rev == s_seen_rev) {
@@ -62,7 +66,8 @@ void draw(cardinal::game::Game* game, const char* title, bool* p_open) {
             s_seen_rev = rev;
             s_stable_frames = 0;
         }
-        if (s_stable_frames == 30 && rev != s_captured_rev) {   // ~0.5s settle
+        // >= (not ==) so a skipped frame near the threshold still captures.
+        if (s_stable_frames >= 30 && rev != s_captured_rev) {   // ~0.5s settle
             s_history.capture(game->world());
             s_captured_rev = rev;
         }
@@ -171,14 +176,12 @@ void draw(cardinal::game::Game* game, const char* title, bool* p_open) {
             else if (state == cardinal::game::GameState::Paused)  game->resume_play();
             // In Stopped state ESC is a no-op (Studio is already idle).
         }
-        // Ctrl+Z undo / Ctrl+Y (or Ctrl+Shift+Z) redo — editor mode only.
-        if (state == cardinal::game::GameState::Stopped && io.KeyCtrl) {
-            if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
-                if (io.KeyShift) { if (s_history.redo(*game)) sync_rev(); }
-                else             { if (s_history.undo(*game)) sync_rev(); }
-            }
-            if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) { if (s_history.redo(*game)) sync_rev(); }
-        }
+        // NOTE: Ctrl+Z / Ctrl+Y are intentionally NOT bound here. The host
+        // (Studio sample) owns the global undo chord for its command stack;
+        // binding them here too made a single Ctrl+Z fire BOTH undo systems
+        // on the same frame (a double-undo that clobbered state). The
+        // WorldHistory snapshot undo is driven by the Undo/Redo buttons above
+        // instead. (Unifying the two undo systems is a follow-up.)
     }
 
     ImGui::End();

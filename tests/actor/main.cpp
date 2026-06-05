@@ -29,6 +29,7 @@
 #include <cardinal/core/log.hpp>
 
 #include <any>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -820,6 +821,11 @@ void test_revision() {
     const cardinal::u64 r4 = w.revision();
     w.destroy(b->id());
     CHECK(w.revision() > r4);
+    // Destroying an ALREADY-dead (unswept) actor must NOT bump again — no
+    // spurious undo checkpoint for a no-op.
+    const cardinal::u64 r4b = w.revision();
+    w.destroy(b->id());
+    CHECK(w.revision() == r4b);
     const cardinal::u64 r5 = w.revision();
     w.sweep();
     CHECK(w.revision() > r5);                 // removed b
@@ -943,6 +949,28 @@ void test_align_distribute() {
 
     // Empty set / no-transform safety.
     CHECK(w.align_actors({}, Ax::X, Mode::Center) == 0u);
+
+    // NaN-safety: a NaN axis value must NOT reach the sort comparator
+    // (strict-weak-ordering violation = std::sort UB / heap corruption).
+    // The NaN actor is skipped; the finite ones still distribute.
+    ac::World w3;
+    auto mk = [&](float x) {
+        ac::Actor* z = w3.spawn("n");
+        z->get_component<ac::TransformComponent>()->translation.x = x;
+        return z;
+    };
+    ac::Actor* q0 = mk(0.0f);
+    ac::Actor* qn = mk(std::numeric_limits<float>::quiet_NaN());   // poison
+    ac::Actor* q1 = mk(5.0f);
+    ac::Actor* q2 = mk(10.0f);
+    cardinal::vector<cardinal::u32> qids = { q0->id(), qn->id(), q1->id(), q2->id() };
+    // 3 finite actors (0,5,10) distribute; the NaN one is excluded. Endpoints
+    // 0 and 10 stay; the single interior (5) lands at the midpoint 5. No crash.
+    const cardinal::u32 moved = w3.distribute_actors(qids, Ax::X);
+    CHECK(moved == 1u);
+    CHECK(ap(q0->get_component<ac::TransformComponent>()->translation.x, 0.0f));
+    CHECK(ap(q2->get_component<ac::TransformComponent>()->translation.x, 10.0f));
+    CHECK(ap(q1->get_component<ac::TransformComponent>()->translation.x, 5.0f));
 }
 
 // ---- scene validation ---------------------------------------------
@@ -1117,6 +1145,18 @@ void test_world_stats() {
     ac::World empty;
     auto es = ac::compute_world_stats(empty);
     CHECK(es.actors == 0u && es.by_component.empty() && es.by_tag.empty());
+
+    // Multi-Tag actor: an actor legally holding TWO TagComponents must have
+    // BOTH components' tags counted (the tally reads the iterated component,
+    // not get_component which returns only the first).
+    ac::World mt;
+    ac::Actor* m = mt.spawn("Multi");
+    m->add_component<ac::TagComponent>()->add("alpha");
+    m->add_component<ac::TagComponent>()->add("beta");   // second Tag component
+    auto ms = ac::compute_world_stats(mt);
+    CHECK(ms.component_count("Tag") == 2u);
+    CHECK(ms.tag_count("alpha") == 1u);
+    CHECK(ms.tag_count("beta") == 1u);                   // not dropped
 }
 
 // ---- grid snapping ------------------------------------------------
@@ -1319,6 +1359,17 @@ void test_array_actor() {
     CHECK(w.array_actor(src->id(), 0, { 1, 0, 0 }).empty());
     CHECK(w.array_actor(99999u, 5, { 1, 0, 0 }).empty());
     CHECK(w.actor_count() == before);
+
+    // A pathological count is CLAMPED (not an infinite loop / u32 wrap):
+    // 0xFFFFFFFF would make `i <= count` always true. Clamp keeps it finite.
+    ac::World big;
+    ac::Actor* one = big.spawn("U");
+    auto huge = big.array_actor(one->id(), 0xFFFFFFFFu, { 1.0f, 0.0f, 0.0f });
+    CHECK(huge.size() == sz(4096));       // clamped to kMaxArray
+    CHECK(big.actor_count() == sz(4097)); // source + 4096 copies
+    // The far end is placed correctly (efficient stamping still positions).
+    CHECK(ap(huge.back()->get_component<ac::TransformComponent>()->translation.x,
+             4096.0f));
 }
 
 // ---- component serialization (round-trip via factory) -------------
@@ -1416,6 +1467,23 @@ void test_component_serialization() {
         CHECK(rtg->has("pickup"));
         CHECK(rtg->has("high value"));
         CHECK(rtg->tags.size() == sz(2));
+    }
+    // Tag flags with the HIGH BIT set must round-trip (u32, not signed
+    // strtol which would saturate 0x80000000 at INT_MAX).
+    {
+        ac::TagComponent tg;
+        tg.flags = 0x80000001u;     // bit 31 + bit 0
+        auto r = round_trip(tg);
+        auto* rtg = static_cast<ac::TagComponent*>(r.get());
+        CHECK(rtg->flags == 0x80000001u);
+    }
+    // AudioEmitter channel high-bit round-trip (also u32).
+    {
+        ac::AudioEmitterComponent ae;
+        ae.cue_id = "c"; ae.channel = 0xFFFFFFF0u;
+        auto r = round_trip(ae);
+        auto* rae = static_cast<ac::AudioEmitterComponent*>(r.get());
+        CHECK(rae->channel == 0xFFFFFFF0u);
     }
     // Camera.
     {
