@@ -180,6 +180,29 @@ void draw(cardinal::actor::World* world,
         cardinal::sort(match_ids.begin(), match_ids.end());
         ImGui::Text("Actors: %zu shown / %zu total",
                     match_ids.size(), world->actor_count());
+
+        // ---- Bulk actions on the filtered set ------------------------
+        if (!match_ids.empty()) {
+            if (ImGui::SmallButton("Enable all"))  world->bulk_set_enabled(match_ids, true);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Disable all")) world->bulk_set_enabled(match_ids, false);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Delete all")) {
+                world->bulk_destroy(match_ids);
+                if (sel != 0 && world->find(sel) == nullptr) sel = 0;   // cleared if gone
+            }
+            // Bulk tag add/remove on the shown set.
+            static char s_bulk_tag[64] = "";
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::InputTextWithHint("##bulk_tag", "tag", s_bulk_tag, sizeof(s_bulk_tag));
+            ImGui::SameLine();
+            const bool has_tag = s_bulk_tag[0] != '\0';
+            if (!has_tag) ImGui::BeginDisabled();
+            if (ImGui::SmallButton("+Tag")) world->bulk_add_tag(match_ids, s_bulk_tag);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("-Tag")) world->bulk_remove_tag(match_ids, s_bulk_tag);
+            if (!has_tag) ImGui::EndDisabled();
+        }
     } else {
         ImGui::Text("Actors: %zu", world->actor_count());
     }

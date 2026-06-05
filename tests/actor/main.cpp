@@ -607,6 +607,51 @@ void test_find_all_queries() {
     CHECK(w.find_all_by_name("").size() == sz(3));        // 4 - 1 dead
 }
 
+// ---- bulk operations (on a set of ids, e.g. a filter result) ------
+void test_bulk_ops() {
+    ac::World w;
+    ac::Actor* a = w.spawn("A");
+    ac::Actor* b = w.spawn("B");
+    ac::Actor* c = w.spawn("C");
+    cardinal::vector<cardinal::u32> ids = { a->id(), b->id() };   // not c
+
+    // Bulk disable -> only the listed actors flip; unknown ids skipped.
+    cardinal::vector<cardinal::u32> with_bogus = { a->id(), b->id(), 9999u };
+    CHECK(w.bulk_set_enabled(with_bogus, false) == 2u);          // 9999 skipped
+    CHECK(!a->enabled() && !b->enabled());
+    CHECK(c->enabled());                                          // untouched
+    CHECK(w.bulk_set_enabled(ids, true) == 2u);
+    CHECK(a->enabled() && b->enabled());
+
+    // Bulk add tag -> adds a TagComponent where missing, dedupes.
+    CHECK(w.bulk_add_tag(ids, "enemy") == 2u);
+    CHECK(a->get_component<ac::TagComponent>() != nullptr);
+    CHECK(a->get_component<ac::TagComponent>()->has("enemy"));
+    CHECK(b->get_component<ac::TagComponent>()->has("enemy"));
+    CHECK(c->get_component<ac::TagComponent>() == nullptr);       // not in set
+    // The tagged set is now queryable via find_all_by_tag.
+    CHECK(w.find_all_by_tag("enemy").size() == sz(2));
+    // Re-add dedupes (still one "enemy" tag each).
+    w.bulk_add_tag(ids, "enemy");
+    CHECK(a->get_component<ac::TagComponent>()->tags.size() == sz(1));
+    // Empty tag is a no-op.
+    CHECK(w.bulk_add_tag(ids, "") == 0u);
+
+    // Bulk remove tag -> only affects actors that have it.
+    CHECK(w.bulk_remove_tag(ids, "enemy") == 2u);
+    CHECK(!a->get_component<ac::TagComponent>()->has("enemy"));
+    CHECK(w.find_all_by_tag("enemy").empty());
+    CHECK(w.bulk_remove_tag(ids, "enemy") == 0u);                // already gone
+
+    // Bulk destroy -> kills listed actors (deferred), counts live kills.
+    CHECK(w.bulk_destroy(ids) == 2u);
+    CHECK(!a->alive() && !b->alive());
+    CHECK(c->alive());
+    CHECK(w.bulk_destroy(ids) == 0u);                            // already dead
+    w.sweep();
+    CHECK(w.actor_count() == sz(1));                             // only C remains
+}
+
 // ---- has_component / remove_component -----------------------------
 void test_has_remove_component() {
     ac::World w;
@@ -1110,6 +1155,7 @@ int main() {
     test_prefabs();
     test_builtin_prefabs();
     test_find_all_queries();
+    test_bulk_ops();
     test_prefab_link_revert_apply();
     test_has_remove_component();
     test_enable_disable();

@@ -77,6 +77,50 @@ void World::sweep() {
         actors_.end());
 }
 
+// ---- Bulk operations --------------------------------------------------
+u32 World::bulk_set_enabled(const cardinal::vector<ActorId>& ids, bool enabled) {
+    u32 n = 0;
+    for (ActorId id : ids) {
+        if (Actor* a = find(id)) { a->set_enabled(enabled); ++n; }
+    }
+    return n;
+}
+
+u32 World::bulk_destroy(const cardinal::vector<ActorId>& ids) {
+    u32 n = 0;
+    for (ActorId id : ids) {
+        if (Actor* a = find(id)) { if (a->alive()) { a->kill(); ++n; } }
+    }
+    return n;
+}
+
+u32 World::bulk_add_tag(const cardinal::vector<ActorId>& ids, const cardinal::string& tag) {
+    if (tag.empty()) return 0;
+    u32 n = 0;
+    for (ActorId id : ids) {
+        Actor* a = find(id);
+        if (a == nullptr) continue;
+        auto* tc = a->get_component<TagComponent>();
+        if (tc == nullptr) tc = a->add_component<TagComponent>();
+        tc->add(tag);            // add() dedupes
+        ++n;
+    }
+    return n;
+}
+
+u32 World::bulk_remove_tag(const cardinal::vector<ActorId>& ids, const cardinal::string& tag) {
+    if (tag.empty()) return 0;
+    u32 n = 0;
+    for (ActorId id : ids) {
+        Actor* a = find(id);
+        if (a == nullptr) continue;
+        if (auto* tc = a->get_component<TagComponent>()) {
+            if (tc->has(tag)) { tc->remove(tag); ++n; }
+        }
+    }
+    return n;
+}
+
 Actor* World::find(ActorId id) {
     for (auto& a : actors_) if (a->id() == id) return a.get();
     return nullptr;

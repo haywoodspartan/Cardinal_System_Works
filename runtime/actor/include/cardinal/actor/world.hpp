@@ -58,6 +58,20 @@ public:
     void    destroy(ActorId id);
     void    sweep();   // physically remove dead actors
 
+    // ---- Bulk operations ---------------------------------------------
+    //
+    // Apply an edit across a set of actors at once — the amplifier for the
+    // Outliner's search/filter (e.g. "disable everything matching 'debug'",
+    // "tag all shown as 'enemy'"). Each takes a list of ids (typically the
+    // ids of a find_all_* result) and returns the number actually affected
+    // (unknown ids are skipped). bulk_add_tag adds a TagComponent to any
+    // actor lacking one; bulk_remove_tag is a no-op on actors without the
+    // tag.
+    u32 bulk_set_enabled(const cardinal::vector<ActorId>& ids, bool enabled);
+    u32 bulk_destroy    (const cardinal::vector<ActorId>& ids);
+    u32 bulk_add_tag    (const cardinal::vector<ActorId>& ids, const cardinal::string& tag);
+    u32 bulk_remove_tag (const cardinal::vector<ActorId>& ids, const cardinal::string& tag);
+
     // ---- Lookup / iteration ------------------------------------------
     Actor*       find(ActorId id);
     const Actor* find(ActorId id) const;
