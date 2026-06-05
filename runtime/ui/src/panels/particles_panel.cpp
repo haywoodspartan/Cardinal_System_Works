@@ -64,7 +64,7 @@ void edit_emitter(cardinal::particles::Emitter& e) {
 
 void draw(cardinal::particles::System* sys, const char* title, bool* p_open) {
     if (!ImGui::Begin(title ? title : "Particles", p_open,
-                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
+                      0)) { ImGui::End(); return; }
     if (sys == nullptr) {
         ImGui::TextDisabled("(no particles::System bound)");
         ImGui::End();

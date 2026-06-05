@@ -17,7 +17,7 @@ void draw(cardinal::scene::Scene& scene,
           bool* p_open)
 {
     if (!ImGui::Begin(title ? title : "Inspector", p_open,
-                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
+                      0)) { ImGui::End(); return; }
 
     if (selected_id == 0) {
         ImGui::TextDisabled("(no selection)");

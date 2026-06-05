@@ -51,7 +51,7 @@ LevelStyle level_style(cardinal::log::Level l) {
 
 void draw(const char* title, bool* p_open, State& state) {
     if (!ImGui::Begin(title ? title : "Log", p_open,
-                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
+                      0)) { ImGui::End(); return; }
 
     if (ImGui::Button("Clear")) state.cstore.clear();
     ImGui::SameLine(); ImGui::Checkbox("Auto-scroll", &state.auto_scroll);

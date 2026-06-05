@@ -18,7 +18,7 @@ Action draw(cardinal::shared_ptr<cardinal::project::Project>* current_project,
 {
     Action act{};
     if (!ImGui::Begin(title ? title : "Project", p_open,
-                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return act; }
+                      0)) { ImGui::End(); return act; }
 
     static char         new_root[1024]   = "G:/CardinalProjects/MyGame";
     static char         new_name[256]    = "MyGame";

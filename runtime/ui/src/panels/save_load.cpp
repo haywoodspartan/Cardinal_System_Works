@@ -17,7 +17,7 @@ void draw(cardinal::game::Game* game, cardinal::sky::Sky* sky,
           const char* title, bool* p_open)
 {
     if (!ImGui::Begin(title ? title : "Save / Load", p_open,
-                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
+                      0)) { ImGui::End(); return; }
     if (game == nullptr) {
         ImGui::TextDisabled("(no game::Game bound)");
         ImGui::End();

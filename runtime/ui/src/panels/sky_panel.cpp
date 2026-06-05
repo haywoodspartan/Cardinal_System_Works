@@ -39,7 +39,7 @@ void color_swatch(const char* label, const cardinal::scene::Vec3& c) {
 
 void draw(cardinal::sky::Sky* sky, const char* title, bool* p_open) {
     if (!ImGui::Begin(title ? title : "Sky / Time of Day", p_open,
-                      ImGuiWindowFlags_NoMove)) {
+                      0)) {
         ImGui::End();
         return;
     }

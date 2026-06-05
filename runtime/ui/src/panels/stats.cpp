@@ -11,7 +11,7 @@ namespace cardinal::ui::panels::stats_panel {
 
 void draw(const char* title, bool* p_open, const Inputs& in) {
     if (!ImGui::Begin(title ? title : "Stats", p_open,
-                      ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
+                      0)) { ImGui::End(); return; }
 
     if (in.device == nullptr) {
         ImGui::TextDisabled("(no device)");

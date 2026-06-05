@@ -12,7 +12,7 @@ namespace cardinal::ui::panels::editor_modes_panel {
 
 void draw(cardinal::edit::EditorState* state, const char* title, bool* p_open) {
     if (!ImGui::Begin(title ? title : "Modes", p_open,
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove)) { ImGui::End(); return; }
+                      ImGuiWindowFlags_NoScrollbar)) { ImGui::End(); return; }
     if (state == nullptr) {
         ImGui::TextDisabled("(no EditorState bound)");
         ImGui::End();

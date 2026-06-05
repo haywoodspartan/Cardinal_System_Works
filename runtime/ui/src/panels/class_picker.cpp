@@ -66,7 +66,7 @@ void draw(cardinal::game::Game* game, cardinal::u32* selected_actor_id_inout,
           const char* title, bool* p_open)
 {
     if (!ImGui::Begin(title ? title : "Game Classes", p_open,
-                      ImGuiWindowFlags_NoMove)) {
+                      0)) {
         ImGui::End();
         return;
     }
