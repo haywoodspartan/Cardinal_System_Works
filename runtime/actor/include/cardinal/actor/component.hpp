@@ -42,7 +42,30 @@ public:
     // cached look angles, grounded flags) is intentionally NOT copied — a
     // freshly stamped instance starts from a clean runtime baseline.
     virtual cardinal::unique_ptr<Component> clone() const { return nullptr; }
+
+    // ---- Persistence (symmetric with clone) --------------------------
+    //
+    // serialize_fields appends this component's AUTHORED fields as
+    // "  <key> = <value>\n" lines (same line shape as the rest of the
+    // serial text format). deserialize_field applies one parsed key/value
+    // pair back. Runtime-only state is omitted (it resets, like clone).
+    // Defaults are no-ops so a component with no override round-trips as an
+    // empty block. Reconstruct the right concrete type first via the
+    // make_component_by_name factory (below), THEN feed each field line
+    // through deserialize_field.
+    virtual void serialize_fields(cardinal::string& /*out*/) const {}
+    virtual void deserialize_field(const cardinal::string& /*key*/,
+                                   const cardinal::string& /*value*/) {}
 };
+
+// ---------------------------------------------------------------------------
+// Component factory — construct a built-in component by its type_name()
+// string. Returns nullptr for unknown names (e.g. a GameActor, which the
+// game module reconstructs via its ClassRegistry instead). Used by the
+// prefab / scene deserializer to rebuild a component before its
+// deserialize_field calls apply the stored values.
+// ---------------------------------------------------------------------------
+cardinal::unique_ptr<Component> make_component_by_name(const cardinal::string& type_name);
 
 // ---------------------------------------------------------------------------
 // Built-in components.
@@ -63,6 +86,8 @@ struct TransformComponent : Component {
         c->scale = scale;
         return c;
     }
+    void serialize_fields(cardinal::string& out) const override;
+    void deserialize_field(const cardinal::string& key, const cardinal::string& value) override;
 };
 
 // Optional — points at a scene::Mesh asset that the renderer should draw.
@@ -78,6 +103,8 @@ struct MeshComponent : Component {
         c->asset_id = asset_id; c->tint = tint; c->visible = visible;
         return c;
     }
+    void serialize_fields(cardinal::string& out) const override;
+    void deserialize_field(const cardinal::string& key, const cardinal::string& value) override;
 };
 
 // Camera component — when attached, the actor can be selected as the
@@ -95,6 +122,8 @@ struct CameraComponent : Component {
         c->active = active;
         return c;
     }
+    void serialize_fields(cardinal::string& out) const override;
+    void deserialize_field(const cardinal::string& key, const cardinal::string& value) override;
 };
 
 enum class LightKind : u32 { Directional = 0, Point = 1, Spot = 2 };
@@ -114,6 +143,8 @@ struct LightComponent : Component {
         c->spot_outer_cos = spot_outer_cos;
         return c;
     }
+    void serialize_fields(cardinal::string& out) const override;
+    void deserialize_field(const cardinal::string& key, const cardinal::string& value) override;
 };
 
 // Audio emitter — speaks to cardinal::audio. Loop, volume, pitch, channel.
@@ -138,6 +169,8 @@ struct AudioEmitterComponent : Component {
         // silent until something triggers it. Don't copy them.
         return c;
     }
+    void serialize_fields(cardinal::string& out) const override;
+    void deserialize_field(const cardinal::string& key, const cardinal::string& value) override;
 };
 
 // Rigid body — velocity / mass / drag. SimWorld's PrePhysics/Physics groups
@@ -161,6 +194,8 @@ struct RigidBodyComponent : Component {
         c->use_gravity = use_gravity; c->kinematic = kinematic;
         return c;
     }
+    void serialize_fields(cardinal::string& out) const override;
+    void deserialize_field(const cardinal::string& key, const cardinal::string& value) override;
 };
 
 // Tag set — string tags + bit flags. Used for queries (find_by_tag) and
@@ -178,6 +213,8 @@ struct TagComponent : Component {
         c->tags = tags; c->flags = flags;
         return c;
     }
+    void serialize_fields(cardinal::string& out) const override;
+    void deserialize_field(const cardinal::string& key, const cardinal::string& value) override;
 };
 
 // ---------------------------------------------------------------------------
@@ -232,6 +269,8 @@ struct PlayerControllerComponent : Component {
         c->max_pitch_rad = max_pitch_rad; c->fly_mode = fly_mode;
         return c;
     }
+    void serialize_fields(cardinal::string& out) const override;
+    void deserialize_field(const cardinal::string& key, const cardinal::string& value) override;
 
     // Seed yaw/pitch from a forward vector so possession is seamless from
     // wherever the editor camera was looking.
@@ -273,6 +312,8 @@ struct ScriptComponent : Component {
         c->enabled = enabled;
         return c;
     }
+    void serialize_fields(cardinal::string& out) const override;
+    void deserialize_field(const cardinal::string& key, const cardinal::string& value) override;
 };
 
 }  // namespace cardinal::actor

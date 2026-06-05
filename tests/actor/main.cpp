@@ -520,6 +520,131 @@ void test_prefabs() {
     CHECK(rest->get_component<ac::RigidBodyComponent>()->velocity.x == 0.0f);
 }
 
+// ---- component serialization (round-trip via factory) -------------
+void test_component_serialization() {
+    // Local near-zero check (delta already subtracted at the call sites).
+    auto fz = [](float d) { return (d < 0 ? -d : d) <= 1e-4f; };
+    // Helper: feed every "key = value" line of a serialized block into a
+    // freshly-made component of the same type, then compare.
+    auto round_trip = [](const ac::Component& src) -> cardinal::unique_ptr<ac::Component> {
+        cardinal::string blob;
+        src.serialize_fields(blob);
+        auto dst = ac::make_component_by_name(src.type_name());
+        if (!dst) return dst;
+        // Parse "  key = value\n" lines (leading 2 spaces, " = " sep).
+        cardinal::usize i = 0;
+        while (i < blob.size()) {
+            cardinal::usize eol = blob.find('\n', i);
+            if (eol == cardinal::string::npos) eol = blob.size();
+            cardinal::string line = blob.substr(i, eol - i);
+            i = eol + 1;
+            // strip leading spaces
+            cardinal::usize s = 0; while (s < line.size() && line[s] == ' ') ++s;
+            const cardinal::usize eq = line.find(" = ", s);
+            if (eq == cardinal::string::npos) continue;
+            cardinal::string key = line.substr(s, eq - s);
+            cardinal::string val = line.substr(eq + 3);
+            dst->deserialize_field(key, val);
+        }
+        return dst;
+    };
+
+    // Factory returns the right type_name for each builtin; unknown → null.
+    CHECK(ac::make_component_by_name("Transform") != nullptr);
+    CHECK(ac::make_component_by_name("Mesh")      != nullptr);
+    CHECK(ac::make_component_by_name("Bogus")     == nullptr);
+    CHECK(ac::make_component_by_name("GameActor") == nullptr);  // game-module job
+
+    // Transform.
+    {
+        ac::TransformComponent t;
+        t.translation = { 1.5f, -2.0f, 3.25f };
+        t.rotation_euler = { 0.1f, 0.2f, 0.3f };
+        t.scale = { 2.0f, 4.0f, 8.0f };
+        auto r = round_trip(t);
+        auto* rt = static_cast<ac::TransformComponent*>(r.get());
+        CHECK(rt != nullptr);
+        CHECK(fz(rt->translation.x - 1.5f) && fz(rt->translation.z - 3.25f));
+        CHECK(fz(rt->rotation_euler.y - 0.2f));
+        CHECK(fz(rt->scale.z - 8.0f));
+    }
+    // Mesh.
+    {
+        ac::MeshComponent m;
+        m.asset_id = "rocks/granite";
+        m.tint = { 0.2f, 0.4f, 0.6f };
+        m.visible = false;
+        auto r = round_trip(m);
+        auto* rm = static_cast<ac::MeshComponent*>(r.get());
+        CHECK(rm->asset_id == "rocks/granite");
+        CHECK(fz(rm->tint.y - 0.4f));
+        CHECK(rm->visible == false);
+    }
+    // Light (enum kind + scalars).
+    {
+        ac::LightComponent l;
+        l.kind = ac::LightKind::Spot;
+        l.color = { 1.0f, 0.5f, 0.25f };
+        l.intensity = 7.5f;
+        l.range = 42.0f;
+        auto r = round_trip(l);
+        auto* rl = static_cast<ac::LightComponent*>(r.get());
+        CHECK(rl->kind == ac::LightKind::Spot);
+        CHECK(fz(rl->intensity - 7.5f) && fz(rl->range - 42.0f));
+        CHECK(fz(rl->color.z - 0.25f));
+    }
+    // RigidBody (authored params only).
+    {
+        ac::RigidBodyComponent rb;
+        rb.mass = 9.0f; rb.linear_damping = 0.2f;
+        rb.use_gravity = false; rb.kinematic = true;
+        auto r = round_trip(rb);
+        auto* rr = static_cast<ac::RigidBodyComponent*>(r.get());
+        CHECK(fz(rr->mass - 9.0f) && fz(rr->linear_damping - 0.2f));
+        CHECK(rr->use_gravity == false && rr->kinematic == true);
+    }
+    // Tag (count + tag_N lines, spaces allowed in tag text).
+    {
+        ac::TagComponent tg;
+        tg.flags = 0x5u;
+        tg.add("pickup");
+        tg.add("high value");      // contains a space
+        auto r = round_trip(tg);
+        auto* rtg = static_cast<ac::TagComponent*>(r.get());
+        CHECK(rtg->flags == 0x5u);
+        CHECK(rtg->has("pickup"));
+        CHECK(rtg->has("high value"));
+        CHECK(rtg->tags.size() == sz(2));
+    }
+    // Camera.
+    {
+        ac::CameraComponent c;
+        c.fov_y_rad = 1.2f; c.z_near = 0.1f; c.z_far = 250.0f; c.active = true;
+        auto r = round_trip(c);
+        auto* rc = static_cast<ac::CameraComponent*>(r.get());
+        CHECK(fz(rc->fov_y_rad - 1.2f) && fz(rc->z_far - 250.0f) && rc->active);
+    }
+    // Script.
+    {
+        ac::ScriptComponent s;
+        s.entry_name = "onSpawn"; s.source_path = "ai/turret.lua"; s.enabled = false;
+        auto r = round_trip(s);
+        auto* rs = static_cast<ac::ScriptComponent*>(r.get());
+        CHECK(rs->entry_name == "onSpawn" && rs->source_path == "ai/turret.lua");
+        CHECK(rs->enabled == false);
+    }
+    // PlayerController (authored tunables; runtime state stays default).
+    {
+        ac::PlayerControllerComponent p;
+        p.move_speed = 12.0f; p.jump_speed = 9.5f; p.fly_mode = true;
+        auto r = round_trip(p);
+        auto* rp = static_cast<ac::PlayerControllerComponent*>(r.get());
+        CHECK(fz(rp->move_speed - 12.0f) && fz(rp->jump_speed - 9.5f));
+        CHECK(rp->fly_mode == true);
+        CHECK(rp->grounded() == true);   // runtime default, not serialized
+    }
+}
+
 // ---- event bus ----------------------------------------------------
 void test_event_bus() {
     ac::World w;
@@ -646,6 +771,7 @@ int main() {
     test_world_lifecycle();
     test_blueprints();
     test_prefabs();
+    test_component_serialization();
     test_event_bus();
     test_event_bus_reentrant();
     test_transform_matrix();
