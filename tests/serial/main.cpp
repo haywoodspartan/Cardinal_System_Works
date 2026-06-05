@@ -21,6 +21,8 @@
 #include <cardinal/serial/serial.hpp>
 #include <cardinal/sky/sky.hpp>
 #include <cardinal/actor/world.hpp>
+#include <cardinal/game/game.hpp>
+#include <cardinal/sim/sim.hpp>
 #include <cardinal/core/log.hpp>
 
 #include <filesystem>
@@ -272,6 +274,65 @@ void test_prefab_roundtrip(const std::filesystem::path& dir) {
     }
 }
 
+// ---- full-component world save / load (level fidelity) ------------
+// save_world now persists the COMPLETE component set, not just Transform +
+// GameActor props. Verify a plain actor (no game class, so no registry
+// dependency) carrying Mesh + Light + Tag round-trips all three through a
+// save -> fresh-world load.
+void test_world_full_components(const std::filesystem::path& dir) {
+    namespace ac = cardinal::actor;
+    const cardinal::string path = (dir / "level.cardinalworld").string();
+
+    // Save: one richly-componented anonymous actor.
+    {
+        cardinal::sim::SimWorld sw{cardinal::sim::SimDesc{}};
+        cardinal::game::Game game{sw};
+        ac::Actor* a = game.world().spawn("Crate");        // class="" (no GameActor)
+        a->get_component<ac::TransformComponent>()->translation = { 2.0f, 3.0f, 4.0f };
+        auto* m = a->add_component<ac::MeshComponent>();
+        m->asset_id = "props/crate"; m->tint = { 0.9f, 0.8f, 0.7f }; m->visible = false;
+        auto* l = a->add_component<ac::LightComponent>();
+        l->kind = ac::LightKind::Spot; l->intensity = 6.0f; l->range = 25.0f;
+        auto* tg = a->add_component<ac::TagComponent>();
+        tg->add("trigger"); tg->add("zone a");
+
+        const auto ss = ser::save_world(game.world(), path);
+        CHECK(ss.actors_written >= 1u);
+        CHECK(ss.bytes_written > 0u);
+    }
+
+    // Load into a fresh world + verify every component survived.
+    {
+        cardinal::sim::SimWorld sw{cardinal::sim::SimDesc{}};
+        cardinal::game::Game game{sw};
+        const auto ls = ser::load_world(game, path, /*replace_existing=*/true);
+        CHECK(ls.actors_spawned >= 1u);
+
+        ac::Actor* a = game.world().find_by_name("Crate");
+        CHECK(a != nullptr);
+        if (a != nullptr) {
+            auto* t = a->get_component<ac::TransformComponent>();
+            CHECK(t != nullptr && approx(t->translation.y, 3.0f, 1e-3f));
+            auto* m = a->get_component<ac::MeshComponent>();
+            CHECK(m != nullptr);
+            if (m) {
+                CHECK(m->asset_id == "props/crate");
+                CHECK(approx(m->tint.x, 0.9f, 1e-3f));
+                CHECK(m->visible == false);
+            }
+            auto* l = a->get_component<ac::LightComponent>();
+            CHECK(l != nullptr);
+            if (l) {
+                CHECK(l->kind == ac::LightKind::Spot);
+                CHECK(approx(l->intensity, 6.0f, 1e-3f) && approx(l->range, 25.0f, 1e-3f));
+            }
+            auto* tg = a->get_component<ac::TagComponent>();
+            CHECK(tg != nullptr);
+            if (tg) { CHECK(tg->has("trigger") && tg->has("zone a")); }
+        }
+    }
+}
+
 int main() {
     std::error_code ec;
     std::filesystem::path dir =
@@ -288,6 +349,7 @@ int main() {
     test_sky_roundtrip(dir);
     test_sky_failures(dir);
     test_prefab_roundtrip(dir);
+    test_world_full_components(dir);
 
     const auto removed = std::filesystem::remove_all(dir, ec);
     (void)removed;

@@ -218,6 +218,21 @@ SaveStats save_world(const cardinal::actor::World& world,
             }
         }
 
+        // Full component set — every component EXCEPT Transform (already
+        // emitted as position/rotation/scale) and GameActor (emitted as
+        // class + reflected props). This is what makes a world save a
+        // complete LEVEL save: Mesh / Light / RigidBody / Tag / Camera /
+        // AudioEmitter / Script / PlayerController / PrefabLink all
+        // round-trip via Component::serialize_fields. Older saves without
+        // these blocks still load (the loader only adds what it sees).
+        for (const auto& c : aptr->components()) {
+            const cardinal::string ctype = c->type_name();
+            if (ctype == "Transform" || ctype == "GameActor") continue;
+            out += "  component \""; out += ctype; out += "\" {\n";
+            c->serialize_fields(out);
+            out += "  }\n";
+        }
+
         out += "}\n\n";
         ++s.actors_written;
     }
@@ -264,6 +279,10 @@ LoadStats load_world(cardinal::game::Game& game,
     cardinal::game::GameActor*         cur_ga    = nullptr;
     cardinal::string                       cur_actor_name;
     cardinal::vector<cardinal::game::PropertyDef> cur_props;
+    // Full-component-set extension: when inside a `component "Type" {` block,
+    // field lines route to this component's deserialize_field instead of the
+    // actor-level handlers. nullptr = not in a component block.
+    cardinal::actor::Component*        cur_serialized_comp = nullptr;
     auto refresh_props = [&]() {
         cur_props.clear();
         if (cur_ga == nullptr) return;
@@ -290,16 +309,61 @@ LoadStats load_world(cardinal::game::Game& game,
             cur_actor      = game.world().spawn(name);
             cur_actor_name = name;
             cur_ga         = nullptr;
+            cur_serialized_comp = nullptr;
             cur_props.clear();
             continue;
         }
         if (line[i] == '}') {
-            cur_actor = nullptr; cur_ga = nullptr; cur_props.clear();
-            cur_actor_name.clear();
+            // A `}` closes the innermost open block: a component sub-block
+            // first, otherwise the actor block.
+            if (cur_serialized_comp != nullptr) {
+                cur_serialized_comp = nullptr;
+            } else {
+                cur_actor = nullptr; cur_ga = nullptr; cur_props.clear();
+                cur_actor_name.clear();
+            }
             continue;
         }
 
         if (cur_actor == nullptr) continue;
+
+        // component "Type" { — opens a full-component-set sub-block. Build
+        // the component via the factory + adopt it onto the actor; field
+        // lines until the matching `}` go through deserialize_field.
+        if (line.compare(i, 10, "component ") == 0) {
+            const auto q1 = line.find('"', i);
+            const auto q2 = (q1 == cardinal::string::npos)
+                ? cardinal::string::npos : line.find('"', q1 + 1);
+            cardinal::string ctype = (q1 != cardinal::string::npos && q2 != cardinal::string::npos)
+                ? line.substr(q1 + 1, q2 - q1 - 1) : cardinal::string{};
+            // Transform / GameActor are emitted via the legacy lines, never
+            // as component blocks — but be defensive: route a Transform
+            // block to the existing component, skip a GameActor block.
+            if (ctype == "Transform") {
+                cur_serialized_comp = cur_actor->get_component<cardinal::actor::TransformComponent>();
+            } else if (ctype == "GameActor" || ctype.empty()) {
+                cur_serialized_comp = nullptr;   // unknown / handled elsewhere
+            } else {
+                auto made = cardinal::actor::make_component_by_name(ctype);
+                if (made) {
+                    cur_serialized_comp = cur_actor->adopt_component(cardinal::move(made));
+                } else {
+                    cur_serialized_comp = nullptr;   // unknown type: skip its fields
+                    ++st.errors;
+                    st.warnings.push_back("unknown component type: " + ctype);
+                }
+            }
+            continue;
+        }
+
+        // Inside a component block: route "key = value" to the component.
+        if (cur_serialized_comp != nullptr) {
+            cardinal::string key, val;
+            if (text::parse_kv(line.substr(i), &key, &val)) {
+                cur_serialized_comp->deserialize_field(key, val);
+            }
+            continue;
+        }
 
         // Property lines start with "prop <kind> <name> = <value>".
         if (line.compare(i, 5, "prop ") == 0) {
