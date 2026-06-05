@@ -24,6 +24,7 @@
 
 #include <cardinal/actor/world.hpp>
 #include <cardinal/actor/builtin_prefabs.hpp>
+#include <cardinal/actor/validation.hpp>
 #include <cardinal/core/log.hpp>
 
 #include <any>
@@ -943,6 +944,77 @@ void test_align_distribute() {
     CHECK(w.align_actors({}, Ax::X, Mode::Center) == 0u);
 }
 
+// ---- scene validation ---------------------------------------------
+void test_validation() {
+    ac::World w;
+
+    auto has_issue = [](const cardinal::vector<ac::ValidationIssue>& v,
+                        ac::Severity sev, const char* substr) {
+        for (const auto& i : v) {
+            if (i.severity == sev && i.message.find(substr) != cardinal::string::npos)
+                return true;
+        }
+        return false;
+    };
+
+    // A clean actor with a real mesh + a lit light: no issues from it.
+    ac::Actor* ok = w.spawn("Ground");
+    ok->add_component<ac::MeshComponent>()->asset_id = "ground.mesh";
+
+    // Empty actor (only Transform) -> Info.
+    w.spawn("EmptyOne");
+
+    // Mesh with no asset -> Warning.
+    ac::Actor* badmesh = w.spawn("Crate");
+    badmesh->add_component<ac::MeshComponent>();          // asset_id empty
+
+    // Zero-intensity light -> Warning.
+    ac::Actor* dark = w.spawn("DeadLight");
+    dark->add_component<ac::LightComponent>()->intensity = 0.0f;
+
+    // Out-of-bounds position -> Warning.
+    ac::Actor* lost = w.spawn("Lost");
+    lost->get_component<ac::TransformComponent>()->translation.x = 1.0e7f;
+
+    // Zero-scale axis -> Warning.
+    ac::Actor* flat = w.spawn("Flat");
+    flat->get_component<ac::TransformComponent>()->scale.y = 0.0f;
+
+    // Two active cameras -> scene-level Warning.
+    w.spawn("CamA")->add_component<ac::CameraComponent>()->active = true;
+    w.spawn("CamB")->add_component<ac::CameraComponent>()->active = true;
+
+    // Duplicate names -> scene-level Info.
+    w.spawn("Twin");
+    w.spawn("Twin");
+
+    const auto issues = ac::validate_world(w);
+    CHECK(!issues.empty());
+    CHECK(has_issue(issues, ac::Severity::Info,    "no components beyond Transform"));
+    CHECK(has_issue(issues, ac::Severity::Warning, "no asset_id"));
+    CHECK(has_issue(issues, ac::Severity::Warning, "zero or negative intensity"));
+    CHECK(has_issue(issues, ac::Severity::Warning, "far outside the world bounds"));
+    CHECK(has_issue(issues, ac::Severity::Warning, "zero scale axis"));
+    CHECK(has_issue(issues, ac::Severity::Warning, "cameras are marked active"));
+    CHECK(has_issue(issues, ac::Severity::Info,    "share the name 'Twin'"));
+
+    // count_issues by severity threshold.
+    const cardinal::u32 warns = ac::count_issues(issues, ac::Severity::Warning);
+    CHECK(warns >= 5u);                                   // the warnings above
+    CHECK(ac::count_issues(issues, ac::Severity::Error) == 0u);
+
+    // The "Ground" actor (valid mesh) produced no per-actor issue.
+    for (const auto& i : issues) {
+        if (i.actor == ok->id())
+            CHECK(false && "clean actor should have no issues");
+    }
+
+    // A pristine world validates clean (one spawned actor with a mesh).
+    ac::World clean;
+    clean.spawn("Hero")->add_component<ac::MeshComponent>()->asset_id = "hero";
+    CHECK(ac::validate_world(clean).empty());
+}
+
 // ---- grid snapping ------------------------------------------------
 void test_snap_grid() {
     // The pure helper rounds to the nearest multiple.
@@ -1402,6 +1474,7 @@ int main() {
     test_bulk_ops();
     test_align_distribute();
     test_snap_grid();
+    test_validation();
     test_prefab_link_revert_apply();
     test_has_remove_component();
     test_enable_disable();

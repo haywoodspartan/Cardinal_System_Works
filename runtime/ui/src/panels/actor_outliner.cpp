@@ -4,6 +4,7 @@
 #include "actor_outliner.hpp"
 
 #include <cardinal/actor/world.hpp>
+#include <cardinal/actor/validation.hpp>
 
 #include <cardinal/ui/imgui.hpp>
 
@@ -297,6 +298,39 @@ void draw(cardinal::actor::World* world,
     ImGui::EndChild();
 
     if (selected_actor_id_inout) *selected_actor_id_inout = sel;
+
+    // ---- Scene validation (problems panel) ---------------------------
+    if (ImGui::CollapsingHeader("Validate Scene")) {
+        const auto issues = cardinal::actor::validate_world(*world);
+        const cardinal::u32 warns =
+            cardinal::actor::count_issues(issues, cardinal::actor::Severity::Warning);
+        if (issues.empty()) {
+            ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.4f, 1.0f), "No issues found.");
+        } else {
+            ImGui::Text("%zu issue(s), %u warning+",  issues.size(), warns);
+            if (ImGui::BeginChild("##issues", ImVec2(0, 120.0f), ImGuiChildFlags_FrameStyle)) {
+                for (cardinal::usize i = 0; i < issues.size(); ++i) {
+                    const auto& iss = issues[i];
+                    ImVec4 col = iss.severity == cardinal::actor::Severity::Error
+                                     ? ImVec4(0.95f, 0.40f, 0.40f, 1.0f)
+                                 : iss.severity == cardinal::actor::Severity::Warning
+                                     ? ImVec4(0.95f, 0.80f, 0.35f, 1.0f)
+                                     : ImVec4(0.70f, 0.70f, 0.70f, 1.0f);
+                    ImGui::PushID(static_cast<int>(i));
+                    char line[256];
+                    cardinal::snprintf(line, sizeof(line), "[%s] %s: %s",
+                        cardinal::actor::severity_name(iss.severity),
+                        iss.actor_name.c_str(), iss.message.c_str());
+                    ImGui::PushStyleColor(ImGuiCol_Text, col);
+                    if (ImGui::Selectable(line) && iss.actor != 0) sel = iss.actor;
+                    ImGui::PopStyleColor();
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndChild();
+            if (selected_actor_id_inout) *selected_actor_id_inout = sel;
+        }
+    }
 
     ImGui::Separator();
     ImGui::Text("Inspector");
