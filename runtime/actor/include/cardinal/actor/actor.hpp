@@ -39,6 +39,14 @@ public:
     bool alive()   const noexcept { return alive_; }
     void kill()    noexcept { alive_ = false; }
 
+    // Enabled = "active in the scene". A disabled actor stays alive (still
+    // listed, selectable, editable, saved) but is SKIPPED by the sim tick
+    // groups — no Update tick, no physics integration. The authoring
+    // primitive for toggling an actor's behaviour on/off without deleting
+    // it (every editor's actor "active" checkbox). Default on.
+    bool enabled() const noexcept { return enabled_; }
+    void set_enabled(bool e) noexcept { enabled_ = e; }
+
     ActorId parent() const noexcept { return parent_; }
     void set_parent(ActorId p) noexcept { parent_ = p; }
 
@@ -150,6 +158,7 @@ private:
     cardinal::string                              name_;
     ActorId                                  parent_{0};
     bool                                     alive_{true};
+    bool                                     enabled_{true};
     cardinal::vector<cardinal::unique_ptr<Component>>  components_;
 };
 

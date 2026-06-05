@@ -295,6 +295,7 @@ void test_world_full_components(const std::filesystem::path& dir) {
         l->kind = ac::LightKind::Spot; l->intensity = 6.0f; l->range = 25.0f;
         auto* tg = a->add_component<ac::TagComponent>();
         tg->add("trigger"); tg->add("zone a");
+        a->set_enabled(false);                             // disabled — must persist
 
         const auto ss = ser::save_world(game.world(), path);
         CHECK(ss.actors_written >= 1u);
@@ -329,6 +330,7 @@ void test_world_full_components(const std::filesystem::path& dir) {
             auto* tg = a->get_component<ac::TagComponent>();
             CHECK(tg != nullptr);
             if (tg) { CHECK(tg->has("trigger") && tg->has("zone a")); }
+            CHECK(!a->enabled());                  // disabled state round-tripped
         }
     }
 }

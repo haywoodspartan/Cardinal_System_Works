@@ -196,6 +196,14 @@ SaveStats save_world(const cardinal::actor::World& world,
         }
         text::emit_kv(out, "class", cls.c_str());
 
+        // Enabled — emitted AFTER class (load re-creates classed actors on
+        // the `class =` line, so an earlier flag would be lost) and ONLY
+        // when disabled (absent = enabled, so old saves load active + new
+        // saves stay compact).
+        if (!aptr->enabled()) {
+            text::emit_kv(out, "enabled", "false");
+        }
+
         // Transform.
         if (auto* tr = aptr->get_component<cardinal::actor::TransformComponent>()) {
             text::emit_kv3(out, "position",
@@ -427,6 +435,11 @@ LoadStats load_world(cardinal::game::Game& game,
             } else {
                 ++st.actors_spawned;   // anonymous transform-only actor counts too
             }
+            continue;
+        }
+
+        if (key == "enabled") {
+            cur_actor->set_enabled(!(val == "false" || val == "0"));
             continue;
         }
 

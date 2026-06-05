@@ -566,6 +566,53 @@ void test_has_remove_component() {
     CHECK(s_live == 0);                             // on_detach ran
 }
 
+// ---- actor enable / disable (sim gating) --------------------------
+void test_enable_disable() {
+    ac::World w;
+    ac::Actor* a = w.spawn("Mover");
+    CHECK(a->enabled());                          // default on
+
+    // A component that counts its ticks.
+    static int s_ticks = 0;
+    struct Ticker : ac::Component {
+        const char* type_name() const noexcept override { return "Ticker"; }
+        void on_tick(ac::Actor&, float) override { ++s_ticks; }
+    };
+    a->add_component<Ticker>();
+
+    // Enabled: World::tick drives the component.
+    s_ticks = 0;
+    w.tick(0.016f);
+    CHECK(s_ticks == 1);
+
+    // Disabled: World::tick SKIPS the actor entirely.
+    a->set_enabled(false);
+    CHECK(!a->enabled());
+    s_ticks = 0;
+    w.tick(0.016f);
+    CHECK(s_ticks == 0);                          // gated out
+
+    // Re-enable resumes ticking.
+    a->set_enabled(true);
+    s_ticks = 0;
+    w.tick(0.016f);
+    CHECK(s_ticks == 1);
+
+    // A disabled actor stays alive + findable (not destroyed).
+    a->set_enabled(false);
+    CHECK(a->alive());
+    CHECK(w.find(a->id()) == a);
+    CHECK(w.actor_count() == sz(1));
+
+    // duplicate carries the disabled state.
+    ac::Actor* dup = w.duplicate(a->id());
+    CHECK(dup != nullptr && !dup->enabled());
+    // ...and an enabled source yields an enabled copy.
+    a->set_enabled(true);
+    ac::Actor* dup2 = w.duplicate(a->id());
+    CHECK(dup2 != nullptr && dup2->enabled());
+}
+
 // ---- component copy / paste (clipboard) ---------------------------
 void test_copy_paste_component() {
     ac::World w;
@@ -978,6 +1025,7 @@ int main() {
     test_prefabs();
     test_prefab_link_revert_apply();
     test_has_remove_component();
+    test_enable_disable();
     test_copy_paste_component();
     test_duplicate();
     test_component_serialization();

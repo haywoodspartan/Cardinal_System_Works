@@ -115,7 +115,7 @@ void SimWorld::integrate_physics_(float dt) {
     cardinal::async::FrameScope _phase(tick_group_name(TickGroup::Physics));
     constexpr float kGravity = -9.80665f;
     for (auto& aptr : world_->actors()) {
-        if (!aptr->alive()) continue;
+        if (!aptr->alive() || !aptr->enabled()) continue;   // disabled = no physics
         auto* rb = aptr->get_component<cardinal::actor::RigidBodyComponent>();
         auto* tr = aptr->get_component<cardinal::actor::TransformComponent>();
         if (rb == nullptr || tr == nullptr) continue;

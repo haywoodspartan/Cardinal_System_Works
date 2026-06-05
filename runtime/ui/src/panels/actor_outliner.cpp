@@ -165,11 +165,25 @@ void draw(cardinal::actor::World* world,
         for (const auto& a : world->actors()) {
             if (!a->alive()) continue;
             ImGui::PushID(static_cast<int>(a->id()));
+            // Per-row active checkbox — toggles the actor on/off in the sim
+            // without deleting it.
+            bool en = a->enabled();
+            if (ImGui::Checkbox("##en", &en)) a->set_enabled(en);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(en ? "Active — click to disable"
+                                     : "Disabled — click to enable");
+            ImGui::SameLine();
             char label[128];
             cardinal::snprintf(label, sizeof(label), "[%u] %s",
                 a->id(), a->name().c_str());
+            // Dim disabled actors so the scene state reads at a glance.
+            if (!en) ImGui::PushStyleColor(ImGuiCol_Text,
+                                           ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             if (ImGui::Selectable(label, sel == a->id())) sel = a->id();
+            if (!en) ImGui::PopStyleColor();
             if (ImGui::BeginPopupContextItem()) {
+                if (ImGui::MenuItem(a->enabled() ? "Disable" : "Enable"))
+                    a->set_enabled(!a->enabled());
                 if (ImGui::MenuItem("Duplicate")) {
                     if (auto* dup = world->duplicate(a->id())) sel = dup->id();
                 }

@@ -62,6 +62,7 @@ Actor* World::duplicate(ActorId id) {
 
     Actor* dst = spawn_bare_(candidate);   // no auto-Transform; clone carries it
     src->clone_components_into(*dst, nullptr);
+    dst->set_enabled(src->enabled());      // carry the active/disabled state
     return dst;
 }
 
@@ -114,7 +115,7 @@ void World::tick(float dt) {
     // begin_play-before-first-tick semantics).
     for (usize i = 0, n = actors_.size(); i < n; ++i) {
         Actor* a = actors_[i].get();
-        if (!a->alive()) continue;
+        if (!a->alive() || !a->enabled()) continue;   // disabled actors don't tick
         a->tick(dt);
     }
 }
