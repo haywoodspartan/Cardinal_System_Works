@@ -1422,6 +1422,53 @@ void test_array_actor() {
              4096.0f));
 }
 
+// ---- grid array (tile lattice) ------------------------------------
+void test_array_grid() {
+    ac::World w;
+    ac::Actor* src = w.spawn("Tile");
+    src->get_component<ac::TransformComponent>()->translation = { 0.0f, 0.0f, 0.0f };
+    src->add_component<ac::MeshComponent>()->asset_id = "tile";
+
+    // 3x1x2 grid, spacing (2,0,3): 6 cells, minus the (0,0,0) source = 5 copies.
+    auto made = w.array_grid(src->id(), 3, 1, 2, { 2.0f, 0.0f, 3.0f });
+    CHECK(made.size() == sz(5));
+    CHECK(w.actor_count() == sz(6));         // source + 5 copies
+
+    // Every copy is a full clone (carries the Mesh).
+    for (auto* m : made) CHECK(m->get_component<ac::MeshComponent>() != nullptr);
+
+    // Collect the copy positions + the source, verify they tile the lattice
+    // exactly: x in {0,2,4}, z in {0,3} (6 cells), each once.
+    auto cell_present = [&](float x, float z) {
+        // source covers (0,0)
+        if (ap(x, 0.0f) && ap(z, 0.0f)) return true;
+        for (auto* m : made) {
+            auto t = m->get_component<ac::TransformComponent>()->translation;
+            if (ap(t.x, x) && ap(t.z, z)) return true;
+        }
+        return false;
+    };
+    CHECK(cell_present(0, 0) && cell_present(2, 0) && cell_present(4, 0));
+    CHECK(cell_present(0, 3) && cell_present(2, 3) && cell_present(4, 3));
+
+    // 1x1x1 grid -> only the origin cell (the source) -> 0 copies.
+    ac::Actor* solo = w.spawn("Solo");
+    CHECK(w.array_grid(solo->id(), 1, 1, 1, { 1, 1, 1 }).empty());
+
+    // Zero dims are treated as 1 (no empty/degenerate grid).
+    CHECK(w.array_grid(solo->id(), 0, 0, 0, { 1, 1, 1 }).empty());   // -> 1x1x1
+
+    // Unknown source -> empty.
+    CHECK(w.array_grid(99999u, 3, 3, 3, { 1, 1, 1 }).empty());
+
+    // A huge grid is bounded (no runaway spawn). 100x100x100 = 1e6 cells.
+    ac::World big;
+    ac::Actor* b = big.spawn("B");
+    auto huge = big.array_grid(b->id(), 100, 100, 100, { 1, 1, 1 });
+    CHECK(huge.size() <= sz(4096));          // clamped
+    CHECK(big.actor_count() <= sz(4097));
+}
+
 // ---- component serialization (round-trip via factory) -------------
 void test_component_serialization() {
     // Local near-zero check (delta already subtracted at the call sites).
@@ -1708,6 +1755,7 @@ int main() {
     test_duplicate();
     test_spawn_placement();
     test_array_actor();
+    test_array_grid();
     test_component_serialization();
     test_event_bus();
     test_event_bus_reentrant();

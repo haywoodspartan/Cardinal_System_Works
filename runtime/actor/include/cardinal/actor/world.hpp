@@ -69,10 +69,17 @@ public:
     // Array tool — stamp `count` copies of an actor in a line, each offset
     // by `step` from the previous (copy i lands at source + step*i). Every
     // copy is a full clone (unique name, components, prefab link, enabled),
-    // so a configured prop becomes a row/grid in one action. The source is
+    // so a configured prop becomes a row in one action. The source is
     // unchanged; returns the created copies (empty if src unknown / count 0).
     cardinal::vector<Actor*> array_actor(ActorId src, u32 count,
                                          const cardinal::scene::Vec3& step);
+
+    // Grid array — fill an nx*ny*nz lattice with copies of `src`, the cell
+    // (i,j,k) at source + (i*spacing.x, j*spacing.y, k*spacing.z). The (0,0,0)
+    // cell is the source itself (left in place), so this returns nx*ny*nz - 1
+    // copies. The tile-floor / brick-wall tool. Total clamped like array.
+    cardinal::vector<Actor*> array_grid(ActorId src, u32 nx, u32 ny, u32 nz,
+                                        const cardinal::scene::Vec3& spacing);
 
     // Mark for destruction; the actual remove happens on the next sweep().
     void    destroy(ActorId id);
@@ -242,6 +249,12 @@ private:
     // default TransformComponent. spawn() layers the Transform on top;
     // spawn_prefab() skips it and clones the prefab's own components in.
     Actor* spawn_bare_(cardinal::string name);
+
+    // Shared array/grid stamping: snapshot `src` once, then place one full
+    // clone at src.translation + each offset (clamped to a sane maximum).
+    // Backs array_actor (linear offsets) + array_grid (lattice offsets).
+    cardinal::vector<Actor*> stamp_copies_(
+        Actor& src, const cardinal::vector<cardinal::scene::Vec3>& offsets);
 
     ActorId                                                  next_id_{1};
     cardinal::vector<cardinal::unique_ptr<Actor>>                      actors_;

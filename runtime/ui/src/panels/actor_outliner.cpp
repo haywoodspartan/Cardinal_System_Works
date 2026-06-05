@@ -475,22 +475,48 @@ void draw(cardinal::actor::World* world,
         // ---- Array tool — stamp a spaced line of copies --------------
         ImGui::Separator();
         if (ImGui::TreeNode("Array tool")) {
-            static int   s_count = 4;
-            static float s_step[3] = { 2.0f, 0.0f, 0.0f };
-            ImGui::SetNextItemWidth(120.0f);
-            ImGui::DragInt("Count", &s_count, 0.2f, 1, 256);
-            ImGui::SetNextItemWidth(200.0f);
-            ImGui::DragFloat3("Step", s_step, 0.1f);
-            if (ImGui::Button("Create Array")) {
-                const cardinal::scene::Vec3 step{ s_step[0], s_step[1], s_step[2] };
-                auto made = world->array_actor(a->id(),
-                                static_cast<cardinal::u32>(s_count < 1 ? 1 : s_count), step);
-                if (!made.empty() && selected_actor_id_inout)
-                    *selected_actor_id_inout = made.back()->id();
+            static bool  s_grid_mode = false;
+            ImGui::Checkbox("Grid", &s_grid_mode);
+            if (!s_grid_mode) {
+                // ---- Linear array ----
+                static int   s_count = 4;
+                static float s_step[3] = { 2.0f, 0.0f, 0.0f };
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::DragInt("Count", &s_count, 0.2f, 1, 4096);
+                ImGui::SetNextItemWidth(200.0f);
+                ImGui::DragFloat3("Step", s_step, 0.1f);
+                if (ImGui::Button("Create Array")) {
+                    const cardinal::scene::Vec3 step{ s_step[0], s_step[1], s_step[2] };
+                    auto made = world->array_actor(a->id(),
+                                    static_cast<cardinal::u32>(s_count < 1 ? 1 : s_count), step);
+                    if (!made.empty() && selected_actor_id_inout)
+                        *selected_actor_id_inout = made.back()->id();
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Stamp %d copies of this actor in a line, "
+                                      "each offset by Step from the last.", s_count);
+            } else {
+                // ---- Grid array (tile floors / brick walls) ----
+                static int   s_dim[3] = { 4, 1, 4 };
+                static float s_spacing[3] = { 2.0f, 2.0f, 2.0f };
+                ImGui::SetNextItemWidth(200.0f);
+                ImGui::DragInt3("Cells (X,Y,Z)", s_dim, 0.2f, 1, 64);
+                ImGui::SetNextItemWidth(200.0f);
+                ImGui::DragFloat3("Spacing", s_spacing, 0.1f);
+                if (ImGui::Button("Create Grid")) {
+                    const cardinal::scene::Vec3 sp{ s_spacing[0], s_spacing[1], s_spacing[2] };
+                    auto made = world->array_grid(a->id(),
+                                    static_cast<cardinal::u32>(s_dim[0] < 1 ? 1 : s_dim[0]),
+                                    static_cast<cardinal::u32>(s_dim[1] < 1 ? 1 : s_dim[1]),
+                                    static_cast<cardinal::u32>(s_dim[2] < 1 ? 1 : s_dim[2]), sp);
+                    if (!made.empty() && selected_actor_id_inout)
+                        *selected_actor_id_inout = made.back()->id();
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Fill a %dx%dx%d lattice with copies "
+                                      "(the source occupies cell 0,0,0).",
+                                      s_dim[0], s_dim[1], s_dim[2]);
             }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Stamp %d copies of this actor, each offset "
-                                  "by Step from the last.", s_count);
             ImGui::TreePop();
         }
     }

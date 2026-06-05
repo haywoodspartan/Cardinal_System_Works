@@ -94,49 +94,96 @@ Actor* World::spawn_prefab_at(const cardinal::string& name,
     return a;
 }
 
-cardinal::vector<Actor*> World::array_actor(ActorId src_id, u32 count,
-                                            const cardinal::scene::Vec3& step) {
+cardinal::vector<Actor*> World::stamp_copies_(
+    Actor& src, const cardinal::vector<cardinal::scene::Vec3>& offsets) {
     cardinal::vector<Actor*> out;
-    Actor* src = find(src_id);
-    if (src == nullptr || count == 0) return out;
 
-    // Clamp to a sane maximum: an unbounded count would reserve a huge
-    // vector and, at count == 0xFFFFFFFF, make `i <= count` always true so
-    // `++i` wraps and the loop never terminates.
+    // Clamp to a sane maximum (a huge offset list would reserve + spawn
+    // unbounded; the linear/grid generators bound their own input too).
     constexpr u32 kMaxArray = 4096u;   // e.g. a 64x64 grid
-    if (count > kMaxArray) count = kMaxArray;
+    cardinal::usize n = offsets.size();
+    if (n > kMaxArray) n = kMaxArray;
+    if (n == 0) return out;
 
     // Source position + state, captured BEFORE any spawn (the spawns below
     // push_back to actors_, which can reallocate and invalidate `src`).
     cardinal::scene::Vec3 base{0, 0, 0};
-    if (auto* st = src->get_component<TransformComponent>()) base = st->translation;
-    const bool src_enabled = src->enabled();
+    if (auto* st = src.get_component<TransformComponent>()) base = st->translation;
+    const bool src_enabled = src.enabled();
     // Snapshot the source's components ONCE into a detached prototype, then
-    // stamp each copy from it — O(count) instead of re-cloning the (moving)
+    // stamp each copy from it — O(n) instead of re-cloning the (moving)
     // source per copy. Strip a trailing "(copy...)" so array names are clean.
-    auto proto = cardinal::make_unique<Actor>(0u, src->name());
-    src->clone_components_into(*proto, nullptr);
-    cardinal::string nm = src->name();
+    auto proto = cardinal::make_unique<Actor>(0u, src.name());
+    src.clone_components_into(*proto, nullptr);
+    cardinal::string nm = src.name();
     const auto paren = nm.rfind(" (copy");
     if (paren != cardinal::string::npos && !nm.empty() && nm.back() == ')')
         nm = nm.substr(0, paren);
 
-    out.reserve(count);
-    for (u32 i = 1; i <= count; ++i) {
+    out.reserve(n);
+    for (cardinal::usize i = 0; i < n; ++i) {
         char suffix[40];
-        cardinal::snprintf(suffix, sizeof(suffix), " (copy %u)", i);
+        cardinal::snprintf(suffix, sizeof(suffix), " (copy %zu)", i + 1);
         Actor* dst = spawn_bare_(nm + suffix);   // no auto-Transform; clone carries it
         proto->clone_components_into(*dst, nullptr);
         dst->set_enabled(src_enabled);
         if (auto* t = dst->get_component<TransformComponent>()) {
-            const float fi = static_cast<float>(i);
-            t->translation = { base.x + step.x * fi,
-                               base.y + step.y * fi,
-                               base.z + step.z * fi };
+            t->translation = { base.x + offsets[i].x,
+                               base.y + offsets[i].y,
+                               base.z + offsets[i].z };
         }
         out.push_back(dst);
     }
     return out;
+}
+
+cardinal::vector<Actor*> World::array_actor(ActorId src_id, u32 count,
+                                            const cardinal::scene::Vec3& step) {
+    Actor* src = find(src_id);
+    if (src == nullptr || count == 0) return {};
+    // Linear offsets: copy i (1-based) at step*i.
+    constexpr u32 kMaxArray = 4096u;
+    if (count > kMaxArray) count = kMaxArray;
+    cardinal::vector<cardinal::scene::Vec3> offsets;
+    offsets.reserve(count);
+    for (u32 i = 1; i <= count; ++i) {
+        const float fi = static_cast<float>(i);
+        offsets.push_back({ step.x * fi, step.y * fi, step.z * fi });
+    }
+    return stamp_copies_(*src, offsets);
+}
+
+cardinal::vector<Actor*> World::array_grid(ActorId src_id, u32 nx, u32 ny, u32 nz,
+                                           const cardinal::scene::Vec3& spacing) {
+    Actor* src = find(src_id);
+    if (src == nullptr) return {};
+    if (nx == 0) nx = 1;
+    if (ny == 0) ny = 1;
+    if (nz == 0) nz = 1;
+    // Bound the product up front so the triple loop can't generate a
+    // gigantic offset list (stamp_copies_ clamps the spawn count too).
+    constexpr u32 kMaxCells = 4097u;            // 4096 copies + the origin cell
+    if (static_cast<cardinal::u64>(nx) * ny * nz > kMaxCells) {
+        // Shrink the largest axis until the product fits (keeps a usable grid).
+        while (static_cast<cardinal::u64>(nx) * ny * nz > kMaxCells) {
+            if (nx >= ny && nx >= nz && nx > 1) --nx;
+            else if (ny >= nz && ny > 1)        --ny;
+            else if (nz > 1)                    --nz;
+            else break;
+        }
+    }
+    // Lattice offsets, skipping (0,0,0) — that cell is the source itself.
+    cardinal::vector<cardinal::scene::Vec3> offsets;
+    offsets.reserve(static_cast<cardinal::usize>(nx) * ny * nz);
+    for (u32 i = 0; i < nx; ++i)
+        for (u32 j = 0; j < ny; ++j)
+            for (u32 k = 0; k < nz; ++k) {
+                if (i == 0 && j == 0 && k == 0) continue;
+                offsets.push_back({ spacing.x * static_cast<float>(i),
+                                    spacing.y * static_cast<float>(j),
+                                    spacing.z * static_cast<float>(k) });
+            }
+    return stamp_copies_(*src, offsets);
 }
 
 void World::destroy(ActorId id) {
