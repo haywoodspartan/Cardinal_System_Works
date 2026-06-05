@@ -181,6 +181,12 @@ public:
         // ImGui's draw-list pipelines work against either.
         io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
         ImGui::StyleColorsDark();
+
+        // ImGuizmo: set projection mode once at init. The engine's viewport
+        // camera is always perspective; ortho-preview panels can flip this
+        // per-Manipulate call if needed in the future.
+        ImGuizmo::SetOrthographic(false);
+
         // When viewports are enabled, ImGui style for free-floating windows
         // looks better with no rounding + opaque alpha — matches host chrome.
         ImGuiStyle& style = ImGui::GetStyle();
@@ -334,11 +340,16 @@ public:
         ImGui_ImplWin32_NewFrame();
 #endif
         ImGui::NewFrame();
-        // ImGuizmo lives on top of ImGui's draw list. Call BeginFrame right
-        // after NewFrame so subsequent ImGuizmo::Manipulate / ViewManipulate
-        // calls during panel rendering land on this frame's command stream.
-        ImGuizmo::BeginFrame();
-        ImGuizmo::SetOrthographic(false);
+        // NOTE: ImGuizmo::BeginFrame() is intentionally NOT called here.
+        // BeginFrame creates a full-screen invisible "gizmo" ImGui window —
+        // harmless on its own, but under ImGui_ConfigFlags_ViewportsEnable
+        // (multi-viewport) it can become a separate platform window and
+        // interferes with the docking layer's window-drag hit testing,
+        // breaking the user's ability to grab dockable panel title bars
+        // and move them around. We get the same gizmo functionality by
+        // calling ImGuizmo::SetDrawlist() inside draw_imguizmo_overlay_,
+        // which uses the viewport panel's draw list directly — no global
+        // window required. SetOrthographic is set once in initialize().
         ++frame_count_;
         // Pick state is populated by draw_viewport_panel(); reset at the
         // top of each frame so a stale click doesn't leak across frames.
@@ -4328,9 +4339,12 @@ private:
     bool                                     use_imguizmo_{true};
     // World vs local-space transform — drives ImGuizmo::MODE on Manipulate.
     bool                                     imguizmo_local_space_{false};
-    // ViewManipulate orbit-cube widget in the corner of the viewport. The
-    // host can toggle this off if it provides its own camera controls.
-    bool                                     imguizmo_show_view_cube_{true};
+    // ViewManipulate orbit-cube widget in the corner of the viewport. Default
+    // OFF — the cube renders a per-frame 96 x 96 input-capturing area in the
+    // viewport's top-right which can confuse hit testing on adjacent docked
+    // panels. The host opts in via set_imguizmo_show_view_cube(true) when it
+    // actually wants the orbit widget.
+    bool                                     imguizmo_show_view_cube_{false};
     int                                      gizmo_handle_active_{-1};
     // Drag-start anchors (captured on mouse-down; results derived from
     // these + the current mouse ray every frame → no integration drift).
