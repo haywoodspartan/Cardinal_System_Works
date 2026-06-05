@@ -606,6 +606,7 @@ int main(int argc, char** argv) {
     bool show_vt        = true;
     bool show_sim       = true;
     bool show_actors    = true;
+    bool show_prefabs   = true;
     bool show_curve     = false;
     bool show_sequencer = true;
     bool show_mixer     = true;
@@ -1728,6 +1729,7 @@ int main(int argc, char** argv) {
                 ImGui::MenuItem("Sky / Time of Day",   nullptr, &show_sky);
                 ImGui::MenuItem("Simulation",          nullptr, &show_sim);
                 ImGui::MenuItem("Actors",              nullptr, &show_actors);
+                ImGui::MenuItem("Prefabs",             nullptr, &show_prefabs);
                 ImGui::MenuItem("Sequencer",           nullptr, &show_sequencer);
                 ImGui::MenuItem("Mixer",               nullptr, &show_mixer);
                 ImGui::MenuItem("Curve Editor",        nullptr, &show_curve);
@@ -2306,6 +2308,7 @@ int main(int argc, char** argv) {
         if (!any_maximized && show_sky)      studio->draw_sky_panel(&sky, "Sky / Time of Day", &show_sky);
         if (!any_maximized && show_sim)      studio->draw_sim_bar_panel(&sim_world, "Simulation", &show_sim);
         if (!any_maximized && show_actors)   studio->draw_actor_outliner_panel(&aworld, &selected_actor_id, "Actors", &show_actors);
+        if (!any_maximized && show_prefabs)  studio->draw_prefab_panel(&aworld, &selected_actor_id, "Prefabs", &show_prefabs);
         if (!any_maximized && show_curve)    studio->draw_curve_editor_panel(bob_curve_handle, "Curve Editor", &show_curve);
         if (!any_maximized && show_sequencer)studio->draw_sequencer_panel(&cine_player, "Sequencer", &show_sequencer);
         if (!any_maximized && show_mixer)    studio->draw_mixer_panel(audio_engine.get(), "Mixer", &show_mixer);

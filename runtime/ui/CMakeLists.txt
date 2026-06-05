@@ -45,6 +45,7 @@ set(CARDINAL_UI_SOURCES
     src/panels/game_bar.cpp
     src/panels/hierarchy.cpp
     src/panels/inspector.cpp
+    src/panels/prefab.cpp
     src/panels/input_panel.cpp
     src/panels/log.cpp
     src/panels/memory.cpp

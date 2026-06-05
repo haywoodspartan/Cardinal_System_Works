@@ -159,6 +159,13 @@ public:
                                            u32* selected_actor_id_inout,
                                            const char* title = "Actors",
                                            bool* p_open = nullptr) = 0;
+    // Prefab Library — capture the selected actor into a reusable template
+    // + stamp out independent instances. Studio owns the panel state
+    // (in-progress name buffer); no host State object required.
+    virtual void draw_prefab_panel(cardinal::actor::World* world,
+                                   u32* selected_actor_id_inout,
+                                   const char* title = "Prefabs",
+                                   bool* p_open = nullptr) = 0;
     virtual void draw_curve_editor_panel(cardinal::anim::Curve<float>* curve,
                                          const char* title = "Curve Editor",
                                          bool* p_open = nullptr) = 0;

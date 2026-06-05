@@ -12,12 +12,17 @@ World::World() {
 }
 World::~World() = default;
 
-Actor* World::spawn(cardinal::string name) {
+Actor* World::spawn_bare_(cardinal::string name) {
     auto a = cardinal::make_unique<Actor>(next_id_++, cardinal::move(name));
     Actor* raw = a.get();
+    actors_.push_back(cardinal::move(a));
+    return raw;
+}
+
+Actor* World::spawn(cardinal::string name) {
+    Actor* raw = spawn_bare_(cardinal::move(name));
     // Every actor gets a TransformComponent by default.
     raw->add_component<TransformComponent>();
-    actors_.push_back(cardinal::move(a));
     return raw;
 }
 
@@ -104,6 +109,73 @@ cardinal::vector<cardinal::string> World::blueprint_names() const {
     for (const auto& [n, _] : blueprints_) r.push_back(n);
     cardinal::sort(r.begin(), r.end());
     return r;
+}
+
+// ---- Prefabs ----------------------------------------------------------
+bool World::create_prefab(const cardinal::string& name, ActorId source) {
+    Actor* src = find(source);
+    if (src == nullptr) {
+        cardinal::log::warnf("actor/world",
+            "create_prefab('%s'): source actor %u not found",
+            name.c_str(), source);
+        return false;
+    }
+    // Detached prototype: id 0, never pushed to actors_, never ticked.
+    auto proto = cardinal::make_unique<Actor>(0u, name);
+    u32 skipped = 0;
+    const u32 cloned = src->clone_components_into(*proto, &skipped);
+    if (cloned == 0) {
+        cardinal::log::warnf("actor/world",
+            "create_prefab('%s'): source actor %u had no cloneable components "
+            "(%u skipped) — prefab not created", name.c_str(), source, skipped);
+        return false;
+    }
+    if (skipped > 0) {
+        cardinal::log::infof("actor/world",
+            "create_prefab('%s'): captured %u component(s), skipped %u "
+            "without clone() override", name.c_str(), cloned, skipped);
+    }
+    prefabs_[name] = cardinal::move(proto);
+    return true;
+}
+
+Actor* World::spawn_prefab(const cardinal::string& name,
+                           const cardinal::string& instance_name) {
+    auto it = prefabs_.find(name);
+    if (it == prefabs_.end()) {
+        cardinal::log::warnf("actor/world",
+            "spawn_prefab('%s'): no such prefab", name.c_str());
+        return nullptr;
+    }
+    cardinal::string inst = instance_name.empty()
+        ? (name + " (instance)")
+        : instance_name;
+    // Bare actor — no auto-Transform; the prototype carries its own.
+    Actor* a = spawn_bare_(cardinal::move(inst));
+    it->second->clone_components_into(*a, nullptr);
+    return a;
+}
+
+bool World::has_prefab(const cardinal::string& name) const {
+    return prefabs_.find(name) != prefabs_.end();
+}
+
+void World::remove_prefab(const cardinal::string& name) {
+    prefabs_.erase(name);
+}
+
+cardinal::vector<cardinal::string> World::prefab_names() const {
+    cardinal::vector<cardinal::string> r;
+    r.reserve(prefabs_.size());
+    for (const auto& [n, _] : prefabs_) r.push_back(n);
+    cardinal::sort(r.begin(), r.end());
+    return r;
+}
+
+u32 World::prefab_component_count(const cardinal::string& name) const {
+    auto it = prefabs_.find(name);
+    if (it == prefabs_.end()) return 0;
+    return static_cast<u32>(it->second->components().size());
 }
 
 World::HandlerId World::subscribe(const cardinal::string& event, EventFn fn) {

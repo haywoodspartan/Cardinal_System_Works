@@ -77,6 +77,31 @@ public:
         return components_;
     }
 
+    // ---- Prefab cloning ----------------------------------------------
+    //
+    // Deep-copy every component on this actor onto `dst`, invoking each
+    // clone's on_attach(dst). Components whose clone() returns nullptr
+    // (no override) are skipped — `skipped` (if non-null) receives the
+    // count so the caller can surface a diagnostic. Returns the number of
+    // components successfully cloned. Used by World::create_prefab (this →
+    // prototype) and World::spawn_prefab (prototype → fresh instance).
+    u32 clone_components_into(Actor& dst, u32* skipped = nullptr) const {
+        u32 cloned = 0, miss = 0;
+        for (const auto& c : components_) {
+            auto copy = c->clone();
+            if (!copy) { ++miss; continue; }
+            copy->on_attach(dst);
+            dst.components_.push_back(cardinal::move(copy));
+            ++cloned;
+        }
+        if (skipped) *skipped = miss;
+        return cloned;
+    }
+
+    // Remove all components (used before stamping a prefab over a bare
+    // actor so the auto-Transform doesn't duplicate the prefab's own).
+    void clear_components() noexcept { components_.clear(); }
+
     void tick(float dt);
 
 private:

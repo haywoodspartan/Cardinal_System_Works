@@ -71,6 +71,35 @@ public:
     const Blueprint* find_blueprint(const cardinal::string& name) const;
     cardinal::vector<cardinal::string> blueprint_names() const;
 
+    // ---- Prefabs (data-driven, captured from live actors) ------------
+    //
+    // A Prefab is a frozen snapshot of an actor's components — the
+    // game-creation workflow of "configure an actor in the editor, save
+    // it as a reusable template, stamp out copies". Unlike a Blueprint
+    // (a C++ build function), a Prefab is captured at runtime by deep-
+    // cloning a live actor's components into a detached prototype Actor.
+    //
+    //   create_prefab("Crate", crate_id)  — snapshot crate_id's components
+    //   spawn_prefab("Crate")             — new actor cloned from the snapshot
+    //
+    // Each spawn_prefab produces an independent instance: editing one
+    // doesn't touch the others or the prototype. Components that don't
+    // override Component::clone() are skipped during capture (logged).
+    //
+    // Returns true on capture success (source exists + ≥1 component cloned).
+    bool create_prefab(const cardinal::string& name, ActorId source);
+    // Stamp a new actor from the named prefab. Returns nullptr if no such
+    // prefab. The new actor is named "<prefab> (instance)" unless
+    // instance_name is given.
+    Actor* spawn_prefab(const cardinal::string& name,
+                        const cardinal::string& instance_name = "");
+    bool   has_prefab(const cardinal::string& name) const;
+    void   remove_prefab(const cardinal::string& name);
+    cardinal::vector<cardinal::string> prefab_names() const;
+    // Number of components captured in the named prefab (0 if absent) —
+    // for the panel's "Crate (5 components)" display.
+    u32    prefab_component_count(const cardinal::string& name) const;
+
     // ---- Event bus ---------------------------------------------------
     using EventFn = cardinal::function<void(const cardinal::any& payload)>;
     using HandlerId = u32;
@@ -79,9 +108,18 @@ public:
     void      broadcast(const cardinal::string& event, const cardinal::any& payload = {});
 
 private:
+    // Spawn a bare actor (id assigned, pushed to actors_) WITHOUT the
+    // default TransformComponent. spawn() layers the Transform on top;
+    // spawn_prefab() skips it and clones the prefab's own components in.
+    Actor* spawn_bare_(cardinal::string name);
+
     ActorId                                                  next_id_{1};
     cardinal::vector<cardinal::unique_ptr<Actor>>                      actors_;
     cardinal::unordered_map<cardinal::string, Blueprint>               blueprints_;
+    // Prefab prototypes — detached actors (id 0, never in actors_/never
+    // ticked) whose components are the captured snapshot. spawn_prefab
+    // clones from these.
+    cardinal::unordered_map<cardinal::string, cardinal::unique_ptr<Actor>> prefabs_;
     struct Sub { HandlerId id; EventFn fn; };
     cardinal::unordered_map<cardinal::string, cardinal::vector<Sub>>        subscribers_;
     HandlerId                                                next_handler_id_{1};

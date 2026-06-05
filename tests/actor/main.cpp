@@ -439,6 +439,87 @@ void test_blueprints() {
     CHECK(w.blueprint_names().size() == sz(2));
 }
 
+// ---- prefabs (capture live actor → template → stamp instances) ----
+void test_prefabs() {
+    ac::World w;
+
+    // Configure a source actor with several components + authored values.
+    ac::Actor* src = w.spawn("Crate");                     // auto-Transform
+    auto* st = src->get_component<ac::TransformComponent>();
+    st->translation = { 5.0f, 1.0f, -3.0f };
+    st->scale       = { 2.0f, 2.0f, 2.0f };
+    auto* sm = src->add_component<ac::MeshComponent>();
+    sm->asset_id = "crate.mesh";
+    sm->tint     = { 0.8f, 0.6f, 0.2f };
+    auto* sr = src->add_component<ac::RigidBodyComponent>();
+    sr->mass = 12.0f; sr->use_gravity = true;
+    auto* stag = src->add_component<ac::TagComponent>();
+    stag->add("pickup"); stag->add("breakable");
+
+    // Capture → prefab. 4 components (Transform + Mesh + RigidBody + Tag).
+    CHECK(w.create_prefab("Crate", src->id()));
+    CHECK(w.has_prefab("Crate"));
+    CHECK(w.prefab_component_count("Crate") == 4u);
+    CHECK(!w.has_prefab("nope"));
+
+    // Capturing a non-existent source fails cleanly.
+    CHECK(!w.create_prefab("Bad", 9999u));
+
+    // Stamp an instance — independent actor, distinct id, cloned values.
+    ac::Actor* inst = w.spawn_prefab("Crate");
+    CHECK(inst != nullptr);
+    CHECK(inst->id() != src->id());
+    CHECK(inst->name() == "Crate (instance)");
+    // Exactly the 4 captured components — no duplicate auto-Transform.
+    CHECK(inst->components().size() == sz(4));
+
+    auto* it = inst->get_component<ac::TransformComponent>();
+    CHECK(it != nullptr);
+    CHECK(it->translation.x == 5.0f && it->translation.z == -3.0f);
+    CHECK(it->scale.x == 2.0f);
+    auto* im = inst->get_component<ac::MeshComponent>();
+    CHECK(im != nullptr && im->asset_id == "crate.mesh");
+    CHECK(im->tint.y == 0.6f);
+    auto* ir = inst->get_component<ac::RigidBodyComponent>();
+    CHECK(ir != nullptr && ir->mass == 12.0f);
+    auto* itag = inst->get_component<ac::TagComponent>();
+    CHECK(itag != nullptr && itag->has("pickup") && itag->has("breakable"));
+
+    // Clone independence — mutating the instance must NOT touch the source
+    // or a second instance.
+    it->translation = { 99.0f, 0.0f, 0.0f };
+    im->asset_id    = "other.mesh";
+    CHECK(src->get_component<ac::TransformComponent>()->translation.x == 5.0f);
+    CHECK(src->get_component<ac::MeshComponent>()->asset_id == "crate.mesh");
+
+    ac::Actor* inst2 = w.spawn_prefab("Crate", "Crate #2");
+    CHECK(inst2 != nullptr);
+    CHECK(inst2->name() == "Crate #2");
+    CHECK(inst2->get_component<ac::TransformComponent>()->translation.x == 5.0f);
+    CHECK(inst2->get_component<ac::MeshComponent>()->asset_id == "crate.mesh");
+
+    // Instances are real, live, tickable actors in the world.
+    CHECK(w.find(inst->id())  == inst);
+    CHECK(w.find(inst2->id()) == inst2);
+
+    // Prefab listing + removal.
+    CHECK(w.create_prefab("Barrel", src->id()));
+    auto names = w.prefab_names();
+    CHECK(names.size() == sz(2));
+    CHECK(names[0] == "Barrel" && names[1] == "Crate");   // sorted
+    w.remove_prefab("Crate");
+    CHECK(!w.has_prefab("Crate"));
+    CHECK(w.spawn_prefab("Crate") == nullptr);            // gone → null
+    CHECK(w.prefab_names().size() == sz(1));
+
+    // RigidBody runtime state (velocity) is NOT carried by the clone —
+    // a stamped instance starts at rest even if the source was moving.
+    sr->velocity = { 10.0f, 0.0f, 0.0f };
+    CHECK(w.create_prefab("MovingCrate", src->id()));
+    ac::Actor* rest = w.spawn_prefab("MovingCrate");
+    CHECK(rest->get_component<ac::RigidBodyComponent>()->velocity.x == 0.0f);
+}
+
 // ---- event bus ----------------------------------------------------
 void test_event_bus() {
     ac::World w;
@@ -564,6 +645,7 @@ int main() {
     test_lifecycle();
     test_world_lifecycle();
     test_blueprints();
+    test_prefabs();
     test_event_bus();
     test_event_bus_reentrant();
     test_transform_matrix();

@@ -9,6 +9,7 @@
 #include "panels/editor_modes.hpp"
 #include "panels/hierarchy.hpp"
 #include "panels/inspector.hpp"
+#include "panels/prefab.hpp"
 #include "panels/log.hpp"
 #include "panels/memory.hpp"
 #include "panels/mesh_tools.hpp"
@@ -792,6 +793,12 @@ public:
                                    const char* title, bool* p_open) override {
         panels::actor_outliner_panel::draw(world, selected_actor_id_inout,
                                            title, p_open);
+    }
+    void draw_prefab_panel(cardinal::actor::World* world,
+                           u32* selected_actor_id_inout,
+                           const char* title, bool* p_open) override {
+        panels::prefab_panel::draw(prefab_panel_state_, world,
+                                   selected_actor_id_inout, title, p_open);
     }
     void draw_curve_editor_panel(cardinal::anim::Curve<float>* curve,
                                  const char* title, bool* p_open) override {
@@ -4150,6 +4157,7 @@ private:
     panels::mesh_tools_panel::State      mesh_tools_state_{};
     panels::texture_tools_panel::State   tex_tools_state_{};
     panels::cook_pack_panel::State       cook_pack_state_{};
+    panels::prefab_panel::State          prefab_panel_state_{};
 
     // World-grid level-editor: which chunk the cursor is over (filled by
     // draw_world_grid_overlay). Read by draw_viewport_context_menu so a
