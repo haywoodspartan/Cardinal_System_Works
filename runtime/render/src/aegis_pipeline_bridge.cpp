@@ -377,17 +377,13 @@ private:
             "Permit the math-division engine to escalate to FP4 (Blackwell / RDNA5).",
             false);
 
-        // ---- Debug visualisation --------------------------------------
-        add_bool_("show_wireframe", "Wireframe", "Debug",
-            "Overlay wireframe on opaque geometry.", false);
-        add_bool_("show_aabbs", "Scene AABBs", "Debug",
-            "Draw axis-aligned bounds for every renderable.", false);
-        add_bool_("show_lights", "Light Volumes", "Debug",
-            "Draw light influence radii / cones.", false);
-        add_bool_("show_cluster_grid", "Cluster Grid", "Debug",
-            "Visualise the tile / cluster light-cull grid.", false);
-        add_bool_("show_shadow_cascades", "Shadow Cascades", "Debug",
-            "Tint each pixel by the cascade slice it's reading from.", false);
+        // ---- Debug (pipeline-global only) -----------------------------
+        // Per-viewport visualisation choices — wireframe, polygons,
+        // ray-traced lighting preview, normals, heightmap — live in the
+        // VIEWPORT TOOLBAR, not here. Each viewport carries its own
+        // scene::ViewMode pushed through draw_viewport_panel. The
+        // pipeline panel only owns settings that affect the whole
+        // engine simulation / cull state regardless of viewport.
         add_bool_("pause_simulation", "Pause Simulation", "Debug",
             "Freeze the scene update; rendering continues.", false);
         add_bool_("freeze_culling", "Freeze Culling Frustum", "Debug",

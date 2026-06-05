@@ -1041,8 +1041,11 @@ public:
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         ImGui::SetCursorPos(ImVec2(6.0f, 3.0f));
         const float toolbar_avail = ImGui::GetContentRegionAvail().x;
+        // Per-viewport view mode. These are the visualisation choices that
+        // live ON THE VIEWPORT, not in the global Render Pipeline panel.
+        // Every panel can choose its own mode independently.
         const char* labels[] = { "Solid", "Wireframe", "Polygons",
-                                 "Heightmap", "Normals", "RTX Preview" };
+                                 "Heightmap", "Normals", "Ray-Traced Lighting" };
         int sel = mode_inout ? static_cast<int>(*mode_inout) : 0;
         const float vm_w = cardinal::clamp(toolbar_avail * 0.30f, 90.0f, 200.0f);
         char vm_label[32];
