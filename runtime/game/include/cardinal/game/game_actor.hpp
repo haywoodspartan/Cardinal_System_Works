@@ -51,6 +51,15 @@ public:
     void on_attach(cardinal::actor::Actor& a) override { owner_ = &a; }
     void on_detach(cardinal::actor::Actor&) override   { owner_ = nullptr; }
 
+    // Deep-copy for the Prefab system. Re-creates the correct subclass via
+    // the ClassRegistry (keyed by class_name_), copies the class name, and
+    // copies every reflected property value source -> clone by kind.
+    // Runtime state (owner_, playing_) is NOT copied — a fresh instance is
+    // unattached + not playing until the world + Game wire it up. Returns
+    // nullptr if the class isn't registered (out-of-line: needs the
+    // ClassRegistry, kept out of this header to avoid the reflection dep).
+    cardinal::unique_ptr<cardinal::actor::Component> clone() const override;
+
     // Friend access for Game.
     void _set_playing(bool p) noexcept { playing_ = p; }
 

@@ -196,6 +196,78 @@ void test_reflection_lastwins() {
     CHECK(reg.find("Dup")->category == "Y/Two");      // last wins
 }
 
+// ---- GameActor::clone (prefab capture of game-class actors) -------
+void test_gameactor_clone() {
+    // A source TestActor with non-default reflected values.
+    TestActor src;
+    src.set_class_name("TestActor");
+    src.hp        = 73.5f;
+    src.ammo      = 42;
+    src.invisible = true;
+    src.muzzle    = { 9.0f, 8.0f, 7.0f };
+    src.tint      = { 0.1f, 0.2f, 0.3f };
+    src.label     = "boss";
+    src._set_playing(true);   // runtime flag — must NOT survive the clone
+
+    // clone() returns the base Component type; it must be a GameActor.
+    auto comp = src.clone();
+    CHECK(comp != nullptr);
+    auto* clone = dynamic_cast<cg::GameActor*>(comp.get());
+    CHECK(clone != nullptr);
+    if (clone == nullptr) return;
+
+    // Concrete subclass + class name preserved.
+    auto* tc = dynamic_cast<TestActor*>(clone);
+    CHECK(tc != nullptr);
+    CHECK(clone->class_name() == "TestActor");
+
+    // Every reflected property value copied across.
+    if (tc != nullptr) {
+        CHECK(feq(tc->hp, 73.5f));
+        CHECK(tc->ammo == 42);
+        CHECK(tc->invisible == true);
+        CHECK(feq(tc->muzzle.x, 9.0f) && feq(tc->muzzle.y, 8.0f) && feq(tc->muzzle.z, 7.0f));
+        CHECK(feq(tc->tint.x, 0.1f) && feq(tc->tint.z, 0.3f));
+        CHECK(tc->label == "boss");
+    }
+
+    // Runtime state is reset — fresh instance is unattached + not playing.
+    CHECK(clone->playing() == false);
+    CHECK(clone->owner() == nullptr);
+
+    // Clone independence — mutating the clone leaves the source untouched.
+    if (tc != nullptr) {
+        tc->hp = 1.0f; tc->label = "minion";
+        CHECK(feq(src.hp, 73.5f));
+        CHECK(src.label == "boss");
+    }
+
+    // Unregistered class -> clone returns nullptr (logged, prefab omits it).
+    TestActor orphan;
+    orphan.set_class_name("NotRegistered");
+    CHECK(orphan.clone() == nullptr);
+
+    // End-to-end: a prefab captured from an actor carrying a GameActor
+    // stamps an instance that still carries the cloned GameActor.
+    cardinal::actor::World w;
+    cardinal::actor::Actor* a = w.spawn("Hero");      // auto-Transform
+    auto* ga = a->add_component<TestActor>();
+    ga->set_class_name("TestActor");
+    ga->hp = 55.0f;
+    CHECK(w.create_prefab("HeroPrefab", a->id()));
+    // Transform + GameActor both cloneable now -> 2 components.
+    CHECK(w.prefab_component_count("HeroPrefab") == 2u);
+    cardinal::actor::Actor* inst = w.spawn_prefab("HeroPrefab");
+    CHECK(inst != nullptr);
+    auto* inst_ga = inst->get_component<cg::GameActor>();
+    CHECK(inst_ga != nullptr);
+    if (inst_ga != nullptr) {
+        auto* inst_tc = dynamic_cast<TestActor*>(inst_ga);
+        CHECK(inst_tc != nullptr && feq(inst_tc->hp, 55.0f));
+        CHECK(inst_ga->class_name() == "TestActor");
+    }
+}
+
 // ---- game_state_name + GameActor accessors ------------------------
 void test_state_name_and_actor() {
     CHECK(cardinal::string(cg::game_state_name(cg::GameState::Stopped)) == "Stopped");
@@ -464,6 +536,7 @@ void test_lifecycle_spawn_during_iteration() {
 int main() {
     test_reflection();
     test_reflection_lastwins();
+    test_gameactor_clone();
     test_state_name_and_actor();
     test_game_lifecycle();
     test_game_tick_lifecycle();
