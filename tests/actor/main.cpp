@@ -785,6 +785,56 @@ void test_enable_disable() {
     CHECK(dup2 != nullptr && dup2->enabled());
 }
 
+// ---- World revision counter (auto-checkpoint signal) --------------
+void test_revision() {
+    ac::World w;
+    const cardinal::u64 r0 = w.revision();
+
+    // Spawn bumps (creation).
+    ac::Actor* a = w.spawn("A");
+    CHECK(w.revision() > r0);
+    const cardinal::u64 r1 = w.revision();
+    ac::Actor* b = w.spawn("B");
+    CHECK(w.revision() > r1);
+
+    // Read-only queries do NOT bump.
+    const cardinal::u64 r2 = w.revision();
+    (void)w.find(a->id());
+    (void)w.find_by_name("B");
+    (void)w.actor_count();
+    (void)w.find_all_by_name("A");
+    CHECK(w.revision() == r2);
+
+    // Manual bump (what the Inspector calls after a field edit).
+    w.bump_revision();
+    CHECK(w.revision() == r2 + 1);
+
+    // Duplicate bumps.
+    const cardinal::u64 r3 = w.revision();
+    w.duplicate(a->id());
+    CHECK(w.revision() > r3);
+
+    // destroy bumps; sweep bumps only when it actually removes.
+    const cardinal::u64 r4 = w.revision();
+    w.destroy(b->id());
+    CHECK(w.revision() > r4);
+    const cardinal::u64 r5 = w.revision();
+    w.sweep();
+    CHECK(w.revision() > r5);                 // removed b
+    const cardinal::u64 r6 = w.revision();
+    w.sweep();
+    CHECK(w.revision() == r6);                // nothing to remove -> no bump
+
+    // Bulk ops bump once when they affect ≥1 actor, not at all otherwise.
+    cardinal::vector<cardinal::u32> ids = { a->id() };
+    const cardinal::u64 r7 = w.revision();
+    CHECK(w.bulk_add_tag(ids, "x") == 1u);
+    CHECK(w.revision() == r7 + 1);
+    const cardinal::u64 r8 = w.revision();
+    CHECK(w.bulk_add_tag({}, "x") == 0u);    // empty set
+    CHECK(w.revision() == r8);               // no bump
+}
+
 // ---- component copy / paste (clipboard) ---------------------------
 void test_copy_paste_component() {
     ac::World w;
@@ -1234,6 +1284,7 @@ int main() {
     test_prefab_link_revert_apply();
     test_has_remove_component();
     test_enable_disable();
+    test_revision();
     test_copy_paste_component();
     test_duplicate();
     test_spawn_placement();

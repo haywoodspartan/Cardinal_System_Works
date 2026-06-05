@@ -37,19 +37,48 @@ void draw(cardinal::game::Game* game, const char* title, bool* p_open) {
     static cardinal::string s_snapshot;
 
     // Undo / redo history — snapshot checkpoints of the authored world.
-    // Baseline-captured once; the host (or the Checkpoint button) adds more.
+    // Auto-captures: a checkpoint is taken when the scene SETTLES after an
+    // edit (debounced via the World revision counter, so a continuous drag
+    // yields ONE checkpoint, not one per frame). sync_rev() marks the
+    // current revision as already-captured, so undo/redo/restore — which
+    // bump the revision while rebuilding the world — don't spuriously
+    // re-capture the result as a new checkpoint.
     static cardinal::serial::WorldHistory s_history;
-    if (s_history.empty()) s_history.capture(game->world());
+    static cardinal::u64 s_seen_rev = 0, s_captured_rev = 0;
+    static int s_stable_frames = 0;
+    auto sync_rev = [&]() {
+        s_seen_rev = s_captured_rev = game->world().revision();
+        s_stable_frames = 0;
+    };
+    if (s_history.empty()) { s_history.capture(game->world()); sync_rev(); }
+
+    // Debounced auto-checkpoint (editor mode only — never during Play, whose
+    // mutations are the live sim, not authored edits).
+    if (state == cardinal::game::GameState::Stopped) {
+        const cardinal::u64 rev = game->world().revision();
+        if (rev == s_seen_rev) {
+            if (s_stable_frames < 100000) ++s_stable_frames;
+        } else {
+            s_seen_rev = rev;
+            s_stable_frames = 0;
+        }
+        if (s_stable_frames == 30 && rev != s_captured_rev) {   // ~0.5s settle
+            s_history.capture(game->world());
+            s_captured_rev = rev;
+        }
+    }
 
     auto play_with_snapshot = [&]() {
         s_snapshot = cardinal::serial::serialize_world(game->world());
         s_history.capture(game->world());   // also a natural undo checkpoint
+        sync_rev();
         game->start_play();
     };
     auto stop_with_restore = [&]() {
         game->stop_play();
         if (s_restore_on_stop && !s_snapshot.empty()) {
             cardinal::serial::deserialize_world(*game, s_snapshot, /*replace_existing=*/true);
+            sync_rev();                     // restored state isn't a new edit
         }
     };
 
@@ -82,16 +111,16 @@ void draw(cardinal::game::Game* game, const char* title, bool* p_open) {
     // meaningful while editing (Stopped) — while playing, the world is the
     // live sim, not the authored scene.
     ImGui::BeginDisabled(state != cardinal::game::GameState::Stopped);
-    if (ImGui::Button("Checkpoint")) s_history.capture(game->world());
+    if (ImGui::Button("Checkpoint")) { s_history.capture(game->world()); sync_rev(); }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Snapshot the current scene as an undo checkpoint.");
     ImGui::SameLine();
     ImGui::BeginDisabled(!s_history.can_undo());
-    if (ImGui::Button("Undo")) s_history.undo(*game);
+    if (ImGui::Button("Undo")) { if (s_history.undo(*game)) sync_rev(); }
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!s_history.can_redo());
-    if (ImGui::Button("Redo")) s_history.redo(*game);
+    if (ImGui::Button("Redo")) { if (s_history.redo(*game)) sync_rev(); }
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::TextDisabled("(%zu/%zu)", s_history.cursor() + 1, s_history.depth());
@@ -145,10 +174,10 @@ void draw(cardinal::game::Game* game, const char* title, bool* p_open) {
         // Ctrl+Z undo / Ctrl+Y (or Ctrl+Shift+Z) redo — editor mode only.
         if (state == cardinal::game::GameState::Stopped && io.KeyCtrl) {
             if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
-                if (io.KeyShift) s_history.redo(*game);
-                else             s_history.undo(*game);
+                if (io.KeyShift) { if (s_history.redo(*game)) sync_rev(); }
+                else             { if (s_history.undo(*game)) sync_rev(); }
             }
-            if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) s_history.redo(*game);
+            if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) { if (s_history.redo(*game)) sync_rev(); }
         }
     }
 

@@ -15,8 +15,11 @@ namespace cardinal::ui::panels::actor_outliner_panel {
 
 namespace {
 
-void inspect_transform(cardinal::actor::TransformComponent& t) {
-    ImGui::DragFloat3("Translation", &t.translation.x, 0.05f);
+// Each inspect_* returns whether it EDITED the component this frame, so the
+// host can bump the World revision (driving auto-checkpoint undo).
+bool inspect_transform(cardinal::actor::TransformComponent& t) {
+    bool e = false;
+    e |= ImGui::DragFloat3("Translation", &t.translation.x, 0.05f);
     cardinal::scene::Vec3 deg{
         t.rotation_euler.x * 57.2957795f,
         t.rotation_euler.y * 57.2957795f,
@@ -26,102 +29,117 @@ void inspect_transform(cardinal::actor::TransformComponent& t) {
         t.rotation_euler.x = deg.x * 0.01745329f;
         t.rotation_euler.y = deg.y * 0.01745329f;
         t.rotation_euler.z = deg.z * 0.01745329f;
+        e = true;
     }
-    ImGui::DragFloat3("Scale", &t.scale.x, 0.01f, 0.01f, 100.0f);
+    e |= ImGui::DragFloat3("Scale", &t.scale.x, 0.01f, 0.01f, 100.0f);
+    return e;
 }
 
-void inspect_mesh(cardinal::actor::MeshComponent& m) {
+bool inspect_mesh(cardinal::actor::MeshComponent& m) {
+    bool e = false;
     char buf[128];
     cardinal::snprintf(buf, sizeof(buf), "%s", m.asset_id.c_str());
-    if (ImGui::InputText("Asset", buf, sizeof(buf))) m.asset_id = buf;
-    ImGui::ColorEdit3("Tint", &m.tint.x);
-    ImGui::Checkbox("Visible", &m.visible);
+    if (ImGui::InputText("Asset", buf, sizeof(buf))) { m.asset_id = buf; e = true; }
+    e |= ImGui::ColorEdit3("Tint", &m.tint.x);
+    e |= ImGui::Checkbox("Visible", &m.visible);
+    return e;
 }
 
-void inspect_camera(cardinal::actor::CameraComponent& c) {
+bool inspect_camera(cardinal::actor::CameraComponent& c) {
+    bool e = false;
     float fov_deg = c.fov_y_rad * 57.2957795f;
     if (ImGui::SliderFloat("FOV (deg)", &fov_deg, 10.0f, 170.0f, "%.1f")) {
-        c.fov_y_rad = fov_deg * 0.01745329f;
+        c.fov_y_rad = fov_deg * 0.01745329f; e = true;
     }
-    ImGui::SliderFloat("Near", &c.z_near, 0.001f, 10.0f, "%.3f");
-    ImGui::SliderFloat("Far",  &c.z_far, 1.0f, 5000.0f, "%.1f");
-    ImGui::Checkbox("Active", &c.active);
+    e |= ImGui::SliderFloat("Near", &c.z_near, 0.001f, 10.0f, "%.3f");
+    e |= ImGui::SliderFloat("Far",  &c.z_far, 1.0f, 5000.0f, "%.1f");
+    e |= ImGui::Checkbox("Active", &c.active);
+    return e;
 }
 
-void inspect_light(cardinal::actor::LightComponent& l) {
+bool inspect_light(cardinal::actor::LightComponent& l) {
+    bool e = false;
     const char* kinds[] = { "Directional", "Point", "Spot" };
     int k = static_cast<int>(l.kind);
     if (ImGui::Combo("Kind", &k, kinds, IM_ARRAYSIZE(kinds))) {
-        l.kind = static_cast<cardinal::actor::LightKind>(k);
+        l.kind = static_cast<cardinal::actor::LightKind>(k); e = true;
     }
-    ImGui::ColorEdit3("Color", &l.color.x);
-    ImGui::SliderFloat("Intensity", &l.intensity, 0.0f, 100.0f, "%.2f");
+    e |= ImGui::ColorEdit3("Color", &l.color.x);
+    e |= ImGui::SliderFloat("Intensity", &l.intensity, 0.0f, 100.0f, "%.2f");
     if (l.kind != cardinal::actor::LightKind::Directional) {
-        ImGui::SliderFloat("Range", &l.range, 0.1f, 500.0f, "%.1f");
+        e |= ImGui::SliderFloat("Range", &l.range, 0.1f, 500.0f, "%.1f");
     }
     if (l.kind == cardinal::actor::LightKind::Spot) {
-        ImGui::SliderFloat("Inner cos", &l.spot_inner_cos, -1.0f, 1.0f, "%.3f");
-        ImGui::SliderFloat("Outer cos", &l.spot_outer_cos, -1.0f, 1.0f, "%.3f");
+        e |= ImGui::SliderFloat("Inner cos", &l.spot_inner_cos, -1.0f, 1.0f, "%.3f");
+        e |= ImGui::SliderFloat("Outer cos", &l.spot_outer_cos, -1.0f, 1.0f, "%.3f");
     }
+    return e;
 }
 
-void inspect_audio(cardinal::actor::AudioEmitterComponent& a) {
+bool inspect_audio(cardinal::actor::AudioEmitterComponent& a) {
+    bool e = false;
     char buf[128];
     cardinal::snprintf(buf, sizeof(buf), "%s", a.cue_id.c_str());
-    if (ImGui::InputText("Cue", buf, sizeof(buf))) a.cue_id = buf;
-    ImGui::SliderFloat("Volume", &a.volume, 0.0f, 4.0f, "%.2f");
-    ImGui::SliderFloat("Pitch",  &a.pitch,  0.05f, 8.0f, "%.2f");
-    ImGui::Checkbox("Loop", &a.loop); ImGui::SameLine();
-    ImGui::Checkbox("3D",   &a.is_3d);
-    ImGui::Checkbox("Play on spawn", &a.play_on_spawn);
+    if (ImGui::InputText("Cue", buf, sizeof(buf))) { a.cue_id = buf; e = true; }
+    e |= ImGui::SliderFloat("Volume", &a.volume, 0.0f, 4.0f, "%.2f");
+    e |= ImGui::SliderFloat("Pitch",  &a.pitch,  0.05f, 8.0f, "%.2f");
+    e |= ImGui::Checkbox("Loop", &a.loop); ImGui::SameLine();
+    e |= ImGui::Checkbox("3D",   &a.is_3d);
+    e |= ImGui::Checkbox("Play on spawn", &a.play_on_spawn);
     int ch = static_cast<int>(a.channel);
     const char* names[] = { "Master", "Music", "SFX", "Voice", "UI" };
     if (ImGui::Combo("Channel", &ch, names, IM_ARRAYSIZE(names))) {
-        a.channel = static_cast<cardinal::u32>(ch);
+        a.channel = static_cast<cardinal::u32>(ch); e = true;
     }
     ImGui::TextDisabled("playing: %s, instance %llu",
         a.playing ? "yes" : "no",
         static_cast<unsigned long long>(a.instance_id));
+    return e;
 }
 
-void inspect_rb(cardinal::actor::RigidBodyComponent& r) {
-    ImGui::DragFloat3("Velocity",     &r.velocity.x,     0.05f);
-    ImGui::DragFloat3("Acceleration", &r.acceleration.x, 0.05f);
-    ImGui::SliderFloat("Mass",          &r.mass,            0.01f, 1000.0f, "%.2f");
-    ImGui::SliderFloat("Linear damping",&r.linear_damping,  0.0f,  2.0f,    "%.3f");
-    ImGui::Checkbox("Use gravity", &r.use_gravity); ImGui::SameLine();
-    ImGui::Checkbox("Kinematic",   &r.kinematic);
+bool inspect_rb(cardinal::actor::RigidBodyComponent& r) {
+    bool e = false;
+    e |= ImGui::DragFloat3("Velocity",     &r.velocity.x,     0.05f);
+    e |= ImGui::DragFloat3("Acceleration", &r.acceleration.x, 0.05f);
+    e |= ImGui::SliderFloat("Mass",          &r.mass,            0.01f, 1000.0f, "%.2f");
+    e |= ImGui::SliderFloat("Linear damping",&r.linear_damping,  0.0f,  2.0f,    "%.3f");
+    e |= ImGui::Checkbox("Use gravity", &r.use_gravity); ImGui::SameLine();
+    e |= ImGui::Checkbox("Kinematic",   &r.kinematic);
+    return e;
 }
 
-void inspect_tags(cardinal::actor::TagComponent& t) {
+bool inspect_tags(cardinal::actor::TagComponent& t) {
+    bool e = false;
     static char nb[64] = "";
     if (ImGui::InputTextWithHint("##new_tag", "new tag", nb, sizeof(nb),
                                  ImGuiInputTextFlags_EnterReturnsTrue))
     {
-        if (nb[0]) { t.add(nb); nb[0] = '\0'; }
+        if (nb[0]) { t.add(nb); nb[0] = '\0'; e = true; }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Add")) { if (nb[0]) { t.add(nb); nb[0] = '\0'; } }
+    if (ImGui::Button("Add")) { if (nb[0]) { t.add(nb); nb[0] = '\0'; e = true; } }
     for (auto it = t.tags.begin(); it != t.tags.end(); ) {
         ImGui::PushID(&*it);
-        if (ImGui::SmallButton("x")) { it = t.tags.erase(it); ImGui::PopID(); continue; }
+        if (ImGui::SmallButton("x")) { it = t.tags.erase(it); ImGui::PopID(); e = true; continue; }
         ImGui::SameLine();
         ImGui::TextUnformatted(it->c_str());
         ImGui::PopID();
         ++it;
     }
+    return e;
 }
 
-void inspect_component(cardinal::actor::Component& c) {
+bool inspect_component(cardinal::actor::Component& c) {
     using namespace cardinal::actor;
-    if (auto* p = dynamic_cast<TransformComponent*>(&c))    { inspect_transform(*p); return; }
-    if (auto* p = dynamic_cast<MeshComponent*>(&c))         { inspect_mesh(*p);      return; }
-    if (auto* p = dynamic_cast<CameraComponent*>(&c))       { inspect_camera(*p);    return; }
-    if (auto* p = dynamic_cast<LightComponent*>(&c))        { inspect_light(*p);     return; }
-    if (auto* p = dynamic_cast<AudioEmitterComponent*>(&c)) { inspect_audio(*p);     return; }
-    if (auto* p = dynamic_cast<RigidBodyComponent*>(&c))    { inspect_rb(*p);        return; }
-    if (auto* p = dynamic_cast<TagComponent*>(&c))          { inspect_tags(*p);      return; }
+    if (auto* p = dynamic_cast<TransformComponent*>(&c))    return inspect_transform(*p);
+    if (auto* p = dynamic_cast<MeshComponent*>(&c))         return inspect_mesh(*p);
+    if (auto* p = dynamic_cast<CameraComponent*>(&c))       return inspect_camera(*p);
+    if (auto* p = dynamic_cast<LightComponent*>(&c))        return inspect_light(*p);
+    if (auto* p = dynamic_cast<AudioEmitterComponent*>(&c)) return inspect_audio(*p);
+    if (auto* p = dynamic_cast<RigidBodyComponent*>(&c))    return inspect_rb(*p);
+    if (auto* p = dynamic_cast<TagComponent*>(&c))          return inspect_tags(*p);
     ImGui::TextDisabled("(no inspector)");
+    return false;
 }
 
 }  // namespace
@@ -220,7 +238,7 @@ void draw(cardinal::actor::World* world,
             // Per-row active checkbox — toggles the actor on/off in the sim
             // without deleting it.
             bool en = a->enabled();
-            if (ImGui::Checkbox("##en", &en)) a->set_enabled(en);
+            if (ImGui::Checkbox("##en", &en)) { a->set_enabled(en); world->bump_revision(); }
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip(en ? "Active — click to disable"
                                      : "Disabled — click to enable");
@@ -234,8 +252,10 @@ void draw(cardinal::actor::World* world,
             if (ImGui::Selectable(label, sel == a->id())) sel = a->id();
             if (!en) ImGui::PopStyleColor();
             if (ImGui::BeginPopupContextItem()) {
-                if (ImGui::MenuItem(a->enabled() ? "Disable" : "Enable"))
+                if (ImGui::MenuItem(a->enabled() ? "Disable" : "Enable")) {
                     a->set_enabled(!a->enabled());
+                    world->bump_revision();
+                }
                 if (ImGui::MenuItem("Duplicate")) {
                     if (auto* dup = world->duplicate(a->id())) sel = dup->id();
                 }
@@ -258,7 +278,7 @@ void draw(cardinal::actor::World* world,
     } else {
         char nm[128];
         cardinal::snprintf(nm, sizeof(nm), "%s", a->name().c_str());
-        if (ImGui::InputText("Name", nm, sizeof(nm))) a->set_name(nm);
+        if (ImGui::InputText("Name", nm, sizeof(nm))) { a->set_name(nm); world->bump_revision(); }
         ImGui::Text("ID:     %u", a->id());
         ImGui::Text("Parent: %u", a->parent());
         ImGui::Separator();
@@ -290,11 +310,13 @@ void draw(cardinal::actor::World* world,
                 ImGui::SameLine();
             }
             if (ImGui::CollapsingHeader(ctype, ImGuiTreeNodeFlags_DefaultOpen)) {
-                inspect_component(*c);
+                // Field edits bump the World revision -> Studio auto-captures
+                // an undo checkpoint once the edit settles.
+                if (inspect_component(*c)) world->bump_revision();
             }
             ImGui::PopID();
         }
-        if (to_remove != nullptr) a->remove_component(to_remove);
+        if (to_remove != nullptr) { a->remove_component(to_remove); world->bump_revision(); }
 
         // Paste the clipboard onto this actor (overwrites the matching
         // component's values, or adds one if absent).
@@ -303,6 +325,7 @@ void draw(cardinal::actor::World* world,
             cardinal::snprintf(plabel, sizeof(plabel), "Paste %s", s_clip_type.c_str());
             if (ImGui::Button(plabel)) {
                 cardinal::actor::paste_component(*a, s_clipboard);
+                world->bump_revision();
             }
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Apply the copied %s values to this actor "
@@ -329,8 +352,10 @@ void draw(cardinal::actor::World* world,
             char label[64];
             cardinal::snprintf(label, sizeof(label), "+ %s", type);
             if (ImGui::Button(label)) {
-                if (auto comp = cardinal::actor::make_component_by_name(type))
+                if (auto comp = cardinal::actor::make_component_by_name(type)) {
                     a->adopt_component(cardinal::move(comp));
+                    world->bump_revision();
+                }
             }
             if (present) ImGui::EndDisabled();
             // 3 buttons per row.

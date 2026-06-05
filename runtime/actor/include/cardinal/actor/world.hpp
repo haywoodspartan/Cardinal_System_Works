@@ -102,6 +102,18 @@ public:
     const cardinal::vector<cardinal::unique_ptr<Actor>>& actors() const noexcept { return actors_; }
     usize actor_count() const noexcept;
 
+    // ---- Revision (edit counter for auto-checkpoint undo) ------------
+    //
+    // Monotonic counter bumped on every authored-scene mutation the World
+    // mediates (spawn / destroy / sweep-that-removed / duplicate / placement
+    // / bulk ops). Component-level edits happen on the Component directly,
+    // so the editor calls bump_revision() after those (e.g. the Inspector
+    // after a field widget reports a change). The Studio compares
+    // revision() frame-to-frame and auto-captures a WorldHistory checkpoint
+    // when it settles — so undo is per-edit, not just per manual checkpoint.
+    u64  revision() const noexcept { return revision_; }
+    void bump_revision() noexcept { ++revision_; }
+
     // ---- Per-frame --------------------------------------------------
     // Call once per simulation tick. The World walks all live actors and
     // invokes their tick(dt). SimWorld typically wraps this with
@@ -210,6 +222,7 @@ private:
     struct Sub { HandlerId id; EventFn fn; };
     cardinal::unordered_map<cardinal::string, cardinal::vector<Sub>>        subscribers_;
     HandlerId                                                next_handler_id_{1};
+    u64                                                      revision_{0};
 };
 
 }  // namespace cardinal::actor

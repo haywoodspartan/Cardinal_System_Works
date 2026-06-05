@@ -17,6 +17,8 @@ Actor* World::spawn_bare_(cardinal::string name) {
     auto a = cardinal::make_unique<Actor>(next_id_++, cardinal::move(name));
     Actor* raw = a.get();
     actors_.push_back(cardinal::move(a));
+    ++revision_;   // creation is an authored-scene change (covers spawn /
+                   // spawn_prefab / duplicate, which all route through here)
     return raw;
 }
 
@@ -91,14 +93,16 @@ Actor* World::spawn_prefab_at(const cardinal::string& name,
 }
 
 void World::destroy(ActorId id) {
-    for (auto& a : actors_) if (a->id() == id) { a->kill(); return; }
+    for (auto& a : actors_) if (a->id() == id) { a->kill(); ++revision_; return; }
 }
 
 void World::sweep() {
+    const usize before = actors_.size();
     actors_.erase(
         cardinal::remove_if(actors_.begin(), actors_.end(),
                        [](const cardinal::unique_ptr<Actor>& a){ return !a->alive(); }),
         actors_.end());
+    if (actors_.size() != before) ++revision_;   // only when something left
 }
 
 // ---- Bulk operations --------------------------------------------------
@@ -107,6 +111,7 @@ u32 World::bulk_set_enabled(const cardinal::vector<ActorId>& ids, bool enabled) 
     for (ActorId id : ids) {
         if (Actor* a = find(id)) { a->set_enabled(enabled); ++n; }
     }
+    if (n) ++revision_;
     return n;
 }
 
@@ -115,6 +120,7 @@ u32 World::bulk_destroy(const cardinal::vector<ActorId>& ids) {
     for (ActorId id : ids) {
         if (Actor* a = find(id)) { if (a->alive()) { a->kill(); ++n; } }
     }
+    if (n) ++revision_;
     return n;
 }
 
@@ -129,6 +135,7 @@ u32 World::bulk_add_tag(const cardinal::vector<ActorId>& ids, const cardinal::st
         tc->add(tag);            // add() dedupes
         ++n;
     }
+    if (n) ++revision_;
     return n;
 }
 
@@ -142,6 +149,7 @@ u32 World::bulk_remove_tag(const cardinal::vector<ActorId>& ids, const cardinal:
             if (tc->has(tag)) { tc->remove(tag); ++n; }
         }
     }
+    if (n) ++revision_;
     return n;
 }
 
