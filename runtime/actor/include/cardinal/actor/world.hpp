@@ -110,6 +110,11 @@ public:
     // (the interior actors).
     u32 distribute_actors(const cardinal::vector<ActorId>& ids, Axis axis);
 
+    // Snap each actor's translation to a uniform grid of size `step` (every
+    // x/y/z rounded to the nearest multiple). step <= 0 is a no-op. Returns
+    // the number of actors snapped. For modular / tile-based layout.
+    u32 snap_actors_to_grid(const cardinal::vector<ActorId>& ids, float step);
+
     // ---- Lookup / iteration ------------------------------------------
     Actor*       find(ActorId id);
     const Actor* find(ActorId id) const;
@@ -250,5 +255,9 @@ private:
     HandlerId                                                next_handler_id_{1};
     u64                                                      revision_{0};
 };
+
+// Round `v` to the nearest multiple of `step` (the grid-snap primitive).
+// step <= 0 returns `v` unchanged. Free + pure for direct testing.
+float snap_to_grid(float v, float step) noexcept;
 
 }  // namespace cardinal::actor

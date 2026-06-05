@@ -943,6 +943,37 @@ void test_align_distribute() {
     CHECK(w.align_actors({}, Ax::X, Mode::Center) == 0u);
 }
 
+// ---- grid snapping ------------------------------------------------
+void test_snap_grid() {
+    // The pure helper rounds to the nearest multiple.
+    CHECK(ap(ac::snap_to_grid(0.4f, 1.0f), 0.0f));
+    CHECK(ap(ac::snap_to_grid(0.6f, 1.0f), 1.0f));
+    CHECK(ap(ac::snap_to_grid(2.3f, 0.5f), 2.5f));
+    CHECK(ap(ac::snap_to_grid(-1.2f, 0.5f), -1.0f));
+    CHECK(ap(ac::snap_to_grid(7.0f, 0.0f), 7.0f));     // step<=0 -> unchanged
+    CHECK(ap(ac::snap_to_grid(7.0f, -1.0f), 7.0f));
+
+    ac::World w;
+    auto at = [&](const char* n, float x, float y, float z) {
+        ac::Actor* a = w.spawn(n);
+        a->get_component<ac::TransformComponent>()->translation = { x, y, z };
+        return a;
+    };
+    ac::Actor* a = at("A", 0.4f, 1.6f, -0.9f);
+    ac::Actor* b = at("B", 2.2f, 0.1f, 4.7f);
+    cardinal::vector<cardinal::u32> ids = { a->id(), b->id() };
+
+    CHECK(w.snap_actors_to_grid(ids, 1.0f) == 2u);
+    auto ta = a->get_component<ac::TransformComponent>()->translation;
+    auto tb = b->get_component<ac::TransformComponent>()->translation;
+    CHECK(ap(ta.x, 0.0f) && ap(ta.y, 2.0f) && ap(ta.z, -1.0f));
+    CHECK(ap(tb.x, 2.0f) && ap(tb.y, 0.0f) && ap(tb.z, 5.0f));
+
+    // step<=0 + empty set are clean no-ops.
+    CHECK(w.snap_actors_to_grid(ids, 0.0f) == 0u);
+    CHECK(w.snap_actors_to_grid({}, 1.0f) == 0u);
+}
+
 // ---- prefab instance linkage (revert / apply edit loop) -----------
 void test_prefab_link_revert_apply() {
     ac::World w;
@@ -1370,6 +1401,7 @@ int main() {
     test_find_all_queries();
     test_bulk_ops();
     test_align_distribute();
+    test_snap_grid();
     test_prefab_link_revert_apply();
     test_has_remove_component();
     test_enable_disable();

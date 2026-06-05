@@ -239,6 +239,16 @@ void draw(cardinal::actor::World* world,
             if (ImGui::SmallButton("Y##d")) world->distribute_actors(match_ids, Ax::Y);
             ImGui::SameLine();
             if (ImGui::SmallButton("Z##d")) world->distribute_actors(match_ids, Ax::Z);
+
+            // Snap the shown set to a uniform grid.
+            static float s_grid = 1.0f;
+            ImGui::SetNextItemWidth(70.0f);
+            ImGui::DragFloat("##grid", &s_grid, 0.05f, 0.0f, 100.0f, "grid %.2f");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Snap")) world->snap_actors_to_grid(match_ids, s_grid);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Round each shown actor's position to the "
+                                  "nearest %.2f grid.", s_grid);
         }
     } else {
         ImGui::Text("Actors: %zu", world->actor_count());

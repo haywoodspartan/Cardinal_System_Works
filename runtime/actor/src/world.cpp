@@ -4,6 +4,7 @@
 
 #include <cardinal/core/algorithm.hpp>   // cardinal::sort/remove_if
 #include <cardinal/core/cstdio.hpp>      // cardinal::snprintf (duplicate naming)
+#include <cardinal/core/cmath.hpp>       // cardinal::round (grid snap)
 // cardinal::make_unique/move/any/vector arrive via actor/world.hpp
 
 namespace cardinal::actor {
@@ -241,6 +242,28 @@ u32 World::distribute_actors(const cardinal::vector<ActorId>& ids, Axis axis) {
         const float f = static_cast<float>(i) / static_cast<float>(last);
         axis_ref(trs[i]->translation, axis) = lo + (hi - lo) * f;
         ++n;
+    }
+    if (n) ++revision_;
+    return n;
+}
+
+float snap_to_grid(float v, float step) noexcept {
+    if (step <= 0.0f) return v;
+    return step * cardinal::round(v / step);
+}
+
+u32 World::snap_actors_to_grid(const cardinal::vector<ActorId>& ids, float step) {
+    if (step <= 0.0f) return 0;
+    u32 n = 0;
+    for (ActorId id : ids) {
+        Actor* a = find(id);
+        if (a == nullptr) continue;
+        if (auto* t = a->get_component<TransformComponent>()) {
+            t->translation.x = snap_to_grid(t->translation.x, step);
+            t->translation.y = snap_to_grid(t->translation.y, step);
+            t->translation.z = snap_to_grid(t->translation.z, step);
+            ++n;
+        }
     }
     if (n) ++revision_;
     return n;
