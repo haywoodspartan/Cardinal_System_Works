@@ -430,6 +430,20 @@ public:
     // Rotate = degrees, Scale = ratio increment. step <= 0 disables.
     virtual void set_gizmo_snap(bool enabled, float step) noexcept = 0;
 
+    // ----- ImGuizmo widget toggle -------------------------------------
+    // Studio ships with two gizmo renderers — Cardinal's hand-rolled
+    // overlay and a vcpkg ImGuizmo (industry-standard, ships local/world
+    // toggle + Universal-op + ViewManipulate orbit cube). Default is
+    // ImGuizmo. The hand-rolled path stays in tree for A/B testing and
+    // for hosts that prefer the Cardinal styling.
+    virtual void set_use_imguizmo(bool enabled) noexcept = 0;
+    virtual bool use_imguizmo() const noexcept = 0;
+    // World-space vs object-local-space transform — ImGuizmo only.
+    virtual void set_imguizmo_local_space(bool local) noexcept = 0;
+    virtual bool imguizmo_local_space() const noexcept = 0;
+    // Corner-cube camera orbiter widget (ViewManipulate) — ImGuizmo only.
+    virtual void set_imguizmo_show_view_cube(bool show) noexcept = 0;
+
     struct GizmoDrag {
         bool                  active{false};
         GizmoMode             mode{GizmoMode::Translate};

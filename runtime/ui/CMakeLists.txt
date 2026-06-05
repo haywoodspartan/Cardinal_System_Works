@@ -96,6 +96,10 @@ target_include_directories(cardinal_ui PRIVATE
 find_package(imgui          CONFIG REQUIRED)
 find_package(VulkanHeaders  CONFIG REQUIRED)
 find_package(volk           CONFIG REQUIRED)
+# ImGuizmo — 3D translate/rotate/scale handles + ViewManipulate orbit cube
+# layered on top of ImGui. Wired into draw_viewport_panel; coexists with
+# the existing hand-rolled gizmo (toggled via studio_impl flag).
+find_package(imguizmo       CONFIG REQUIRED)
 
 target_link_libraries(cardinal_ui
     # cardinal::engine pulls in the entire wood layer transitively (window,
@@ -106,7 +110,7 @@ target_link_libraries(cardinal_ui
     # belongs in cardinal::engine first.
     PUBLIC  cardinal::engine
             cardinal::compile_flags
-    PRIVATE imgui::imgui Vulkan::Headers volk::volk
+    PRIVATE imgui::imgui imguizmo::imguizmo Vulkan::Headers volk::volk
 )
 if(WIN32)
     target_link_libraries(cardinal_ui PRIVATE d3d12 dxgi)

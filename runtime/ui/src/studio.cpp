@@ -71,6 +71,13 @@
     #include <imgui_impl_win32.h>
     #include <imgui_impl_dx12.h>
 #endif
+// ImGuizmo — 3D translate / rotate / scale handles + ViewManipulate orbit cube
+// layered on top of ImGui. Provides Manipulate(view, proj, op, mode, matrix)
+// for the in-viewport gizmo and ViewManipulate(view, length, pos, size, color)
+// for the corner-cube camera orbiter. Snap, local/world toggle and Universal-
+// op (T+R+S in one widget) all built in. Wired alongside Cardinal's hand-rolled
+// gizmo so the user can A/B them via the runtime use_imguizmo_ flag.
+#include <ImGuizmo.h>
 
 #include <cardinal/core/algorithm.hpp>
 #include <cardinal/core/cctype.hpp>
@@ -327,6 +334,11 @@ public:
         ImGui_ImplWin32_NewFrame();
 #endif
         ImGui::NewFrame();
+        // ImGuizmo lives on top of ImGui's draw list. Call BeginFrame right
+        // after NewFrame so subsequent ImGuizmo::Manipulate / ViewManipulate
+        // calls during panel rendering land on this frame's command stream.
+        ImGuizmo::BeginFrame();
+        ImGuizmo::SetOrthographic(false);
         ++frame_count_;
         // Pick state is populated by draw_viewport_panel(); reset at the
         // top of each frame so a stale click doesn't leak across frames.
@@ -682,6 +694,13 @@ public:
         }
     }
     GizmoMode gizmo_mode() const noexcept override { return gizmo_mode_; }
+
+    // ---- ImGuizmo toggle --------------------------------------------
+    void set_use_imguizmo(bool enabled) noexcept override { use_imguizmo_ = enabled; }
+    bool use_imguizmo() const noexcept override            { return use_imguizmo_; }
+    void set_imguizmo_local_space(bool local) noexcept override { imguizmo_local_space_ = local; }
+    bool imguizmo_local_space() const noexcept override    { return imguizmo_local_space_; }
+    void set_imguizmo_show_view_cube(bool show) noexcept override { imguizmo_show_view_cube_ = show; }
     void set_gizmo_snap(bool enabled, float step) noexcept override {
         gizmo_snap_on_   = enabled;
         gizmo_snap_step_ = step;
@@ -1147,7 +1166,15 @@ public:
         // hidden by the lines. No-op when disabled or no camera pushed.
         draw_world_grid_overlay(image_pos, avail);
 
-        const bool gizmo_busy = draw_gizmo_overlay(image_pos, avail, viewport_id);
+        // Gizmo overlay. ImGuizmo is the default; the hand-rolled overlay
+        // stays in tree as a fallback under use_imguizmo_=false. Both
+        // produce the same drag output (gizmo_drag_.target_world /
+        // target_rotation_euler / target_scale) so the host loop reads it
+        // the same way regardless of which renderer fired.
+        const bool gizmo_busy =
+            use_imguizmo_
+                ? draw_imguizmo_overlay_(image_pos, avail, viewport_id)
+                : draw_gizmo_overlay(image_pos, avail, viewport_id);
 
         // Per-frame interaction snapshot. Items are populated only when this
         // viewport is the one actually hovered; the host loop reads
@@ -2152,6 +2179,134 @@ public:
                           uhot ? IM_COL32(255,200,120,255)
                                : IM_COL32(230,230,230,255));
         return gizmo_handle_active_ >= 0;
+    }
+
+    // ----- ImGuizmo-backed gizmo overlay --------------------------------
+    // Industry-standard renderer (the gizmo you see in Unity / Unreal /
+    // every Blender-inspired editor). Drives the same gizmo_drag_ output
+    // as the hand-rolled path so the host doesn't care which renderer
+    // fired. Translate / Rotate / Scale picked off gizmo_mode_; local-vs-
+    // world space from imguizmo_local_space_; snap from gizmo_snap_on_ +
+    // gizmo_snap_step_ (unit semantics match the existing path).
+    bool draw_imguizmo_overlay_(const ImVec2& image_pos, const ImVec2& avail,
+                                u32 viewport_id) {
+        if (!gizmo_has_target_ || !gizmo_have_camera_) return false;
+        if (avail.x < 4.0f || avail.y < 4.0f)          return false;
+
+        // Per-frame defaults — host reads these every frame.
+        gizmo_drag_.active                = false;
+        gizmo_drag_.mode                  = gizmo_mode_;
+        gizmo_drag_.target_rotation_euler = gizmo_target_rot_;
+        gizmo_drag_.target_scale          = gizmo_target_scl_;
+
+        // ImGuizmo draws onto the current window's foreground draw list and
+        // clips to the rect set here. Setting both each frame is required:
+        // ImGui's draw list pointer is per-window and the rect can change
+        // when the user docks / resizes the viewport panel.
+        ImGuizmo::SetDrawlist();
+        ImGuizmo::SetRect(image_pos.x, image_pos.y, avail.x, avail.y);
+
+        // Build the gizmo's input model matrix from the host-published
+        // target position + euler rotation + scale. ImGuizmo wants a
+        // column-major float[16]; Cardinal scene::Mat4 stores the same
+        // layout. RecomposeMatrixFromComponents handles the YPR ordering.
+        float matrix[16];
+        float t_in[3] = { gizmo_target_.x,     gizmo_target_.y,     gizmo_target_.z };
+        // ImGuizmo wants degrees for the recompose helper.
+        constexpr float kRad2Deg = 57.29577951308232f;
+        float r_in[3] = { gizmo_target_rot_.x * kRad2Deg,
+                          gizmo_target_rot_.y * kRad2Deg,
+                          gizmo_target_rot_.z * kRad2Deg };
+        float s_in[3] = { gizmo_target_scl_.x, gizmo_target_scl_.y, gizmo_target_scl_.z };
+        ImGuizmo::RecomposeMatrixFromComponents(t_in, r_in, s_in, matrix);
+
+        // Operation + space.
+        ImGuizmo::OPERATION op = ImGuizmo::TRANSLATE;
+        switch (gizmo_mode_) {
+            case GizmoMode::Translate: op = ImGuizmo::TRANSLATE; break;
+            case GizmoMode::Rotate:    op = ImGuizmo::ROTATE;    break;
+            case GizmoMode::Scale:     op = ImGuizmo::SCALE;     break;
+        }
+        const ImGuizmo::MODE mode = imguizmo_local_space_
+                                        ? ImGuizmo::LOCAL
+                                        : ImGuizmo::WORLD;
+
+        // Snap. ImGuizmo expects a 3-float array even when the unit is
+        // scalar (rotation, scale) — same value in every slot. Disable
+        // by passing nullptr.
+        float snap_buf[3] = { 0.0f, 0.0f, 0.0f };
+        float* snap_ptr   = nullptr;
+        if (gizmo_snap_on_ && gizmo_snap_step_ > 0.0f) {
+            snap_buf[0] = snap_buf[1] = snap_buf[2] = gizmo_snap_step_;
+            snap_ptr = snap_buf;
+        }
+
+        // Drive ImGuizmo. Returns true while the user is actively
+        // manipulating; we don't depend on the return — we read the
+        // mutated matrix back unconditionally and only commit the drag
+        // when IsUsing() reports the widget owns the input.
+        ImGuizmo::Manipulate(reinterpret_cast<const float*>(&gizmo_view_),
+                             reinterpret_cast<const float*>(&gizmo_proj_),
+                             op, mode, matrix, /*deltaMatrix*/ nullptr,
+                             snap_ptr);
+
+        const bool is_using = ImGuizmo::IsUsing();
+        if (is_using) {
+            // Decompose mutated matrix back into TRS for the host.
+            float t_out[3], r_out[3], s_out[3];
+            ImGuizmo::DecomposeMatrixToComponents(matrix, t_out, r_out, s_out);
+            constexpr float kDeg2Rad = 0.01745329251994329f;
+
+            cardinal::scene::Vec3 new_pos{t_out[0], t_out[1], t_out[2]};
+            cardinal::scene::Vec3 new_rot{r_out[0]*kDeg2Rad,
+                                          r_out[1]*kDeg2Rad,
+                                          r_out[2]*kDeg2Rad};
+            cardinal::scene::Vec3 new_scl{s_out[0], s_out[1], s_out[2]};
+
+            // Populate the drag output the host loop reads.
+            gizmo_drag_.active                  = true;
+            gizmo_drag_.mode                    = gizmo_mode_;
+            gizmo_drag_.target_world            = new_pos;
+            gizmo_drag_.target_rotation_euler   = new_rot;
+            gizmo_drag_.target_scale            = new_scl;
+            gizmo_drag_.delta                   = { new_pos.x - gizmo_target_.x,
+                                                    new_pos.y - gizmo_target_.y,
+                                                    new_pos.z - gizmo_target_.z };
+
+            // Update Studio's internal anchors so the next frame's gizmo
+            // draws at the new transform until the host writes its own.
+            gizmo_target_     = new_pos;
+            gizmo_target_rot_ = new_rot;
+            gizmo_target_scl_ = new_scl;
+            gizmo_drag_viewport_id_ = viewport_id;
+
+            // Maintain the drag-in-progress edge for undo coalescing.
+            if (!gizmo_drag_in_progress_) gizmo_drag_in_progress_ = true;
+        } else if (gizmo_drag_in_progress_) {
+            // Edge: was-using → not-using. Signal release for the next
+            // gizmo_drag_release_consume() poll.
+            gizmo_drag_in_progress_ = false;
+            gizmo_drag_release_     = true;
+        }
+
+        // Corner-cube camera orbiter — ViewManipulate. The widget mutates
+        // the view matrix in place if the user drags it; downstream the
+        // host can pick up the new view via gizmo_view_ next frame.
+        // 96-pixel square pinned to the top-right of the panel.
+        if (imguizmo_show_view_cube_) {
+            const float kCubeSize = 96.0f;
+            const ImVec2 cube_pos{
+                image_pos.x + avail.x - kCubeSize - 8.0f,
+                image_pos.y + 8.0f
+            };
+            ImGuizmo::ViewManipulate(reinterpret_cast<float*>(&gizmo_view_),
+                                     /*distance*/ 8.0f,
+                                     cube_pos,
+                                     ImVec2{kCubeSize, kCubeSize},
+                                     /*backgroundColor*/ 0x10101080u);
+        }
+
+        return is_using;
     }
 
     // ----- Public dispatcher (call site unchanged) ----------------------
@@ -4162,6 +4317,20 @@ private:
     float                                    gizmo_snap_step_{1.0f};
     cardinal::scene::Vec3                    gizmo_target_rot_{};   // euler rad
     cardinal::scene::Vec3                    gizmo_target_scl_{1,1,1};
+
+    // ----- ImGuizmo integration -----------------------------------------
+    // When true, draw_viewport_panel routes the gizmo through ImGuizmo's
+    // Manipulate/ViewManipulate. When false, falls back to Cardinal's
+    // hand-rolled overlay (still in tree for A/B). Default true — the
+    // ImGuizmo widget is the industry-standard look + supports Local/World
+    // toggle, Universal mode (T+R+S in one widget), and per-axis snap out
+    // of the box.
+    bool                                     use_imguizmo_{true};
+    // World vs local-space transform — drives ImGuizmo::MODE on Manipulate.
+    bool                                     imguizmo_local_space_{false};
+    // ViewManipulate orbit-cube widget in the corner of the viewport. The
+    // host can toggle this off if it provides its own camera controls.
+    bool                                     imguizmo_show_view_cube_{true};
     int                                      gizmo_handle_active_{-1};
     // Drag-start anchors (captured on mouse-down; results derived from
     // these + the current mouse ray every frame → no integration drift).
