@@ -77,6 +77,36 @@ public:
         return components_;
     }
 
+    // ---- Presence / removal ------------------------------------------
+    //
+    // has_component / remove_component round out add_component + the
+    // get_component query. Matched by type_name() (same rule as
+    // get_component). remove_component fires on_detach on the removed
+    // component and erases the FIRST match; returns whether one was found.
+    // The editor uses has_component to grey out "Add" for types already
+    // present (add_component does NOT dedup) and remove_component for the
+    // per-component delete button.
+    bool has_component(const char* tname) const noexcept {
+        for (const auto& c : components_)
+            if (cardinal::strcmp(c->type_name(), tname) == 0) return true;
+        return false;
+    }
+    template <class T>
+    bool has_component() noexcept { return get_component<T>() != nullptr; }
+
+    bool remove_component(const char* tname) {
+        for (auto it = components_.begin(); it != components_.end(); ++it) {
+            if (cardinal::strcmp((*it)->type_name(), tname) == 0) {
+                (*it)->on_detach(*this);
+                components_.erase(it);
+                return true;
+            }
+        }
+        return false;
+    }
+    template <class T>
+    bool remove_component() { return remove_component(T{}.type_name()); }
+
     // ---- Prefab cloning ----------------------------------------------
     //
     // Deep-copy every component on this actor onto `dst`, invoking each

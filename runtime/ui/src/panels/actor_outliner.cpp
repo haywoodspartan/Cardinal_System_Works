@@ -196,25 +196,55 @@ void draw(cardinal::actor::World* world,
         ImGui::Text("ID:     %u", a->id());
         ImGui::Text("Parent: %u", a->parent());
         ImGui::Separator();
+        // Per-component headers with a remove (X) affordance. Transform is
+        // not removable — every actor needs one. Defer the actual removal
+        // until after the loop so we don't mutate the vector mid-iteration.
+        const char* to_remove = nullptr;
         for (const auto& c : a->components()) {
             ImGui::PushID(c.get());
-            if (ImGui::CollapsingHeader(c->type_name(),
-                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+            const char* ctype = c->type_name();
+            const bool removable = cardinal::strcmp(ctype, "Transform") != 0;
+            if (removable) {
+                // Small X on the right edge of the header row.
+                if (ImGui::SmallButton("X")) to_remove = ctype;
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Remove this %s component", ctype);
+                ImGui::SameLine();
+            }
+            if (ImGui::CollapsingHeader(ctype, ImGuiTreeNodeFlags_DefaultOpen)) {
                 inspect_component(*c);
             }
             ImGui::PopID();
         }
+        if (to_remove != nullptr) a->remove_component(to_remove);
+
         ImGui::Separator();
-        if (ImGui::Button("+ Mesh"))         a->add_component<cardinal::actor::MeshComponent>();
-        ImGui::SameLine();
-        if (ImGui::Button("+ Camera"))       a->add_component<cardinal::actor::CameraComponent>();
-        ImGui::SameLine();
-        if (ImGui::Button("+ Light"))        a->add_component<cardinal::actor::LightComponent>();
-        if (ImGui::Button("+ AudioEmitter")) a->add_component<cardinal::actor::AudioEmitterComponent>();
-        ImGui::SameLine();
-        if (ImGui::Button("+ RigidBody"))    a->add_component<cardinal::actor::RigidBodyComponent>();
-        ImGui::SameLine();
-        if (ImGui::Button("+ Tag"))          a->add_component<cardinal::actor::TagComponent>();
+        // Add Component — data-driven over the built-in factory. Each type
+        // greys out once present (add_component does NOT dedup, and the
+        // get_component query only ever returns the first of a type, so a
+        // second copy would be dead weight). Uses make_component_by_name +
+        // adopt_component so the set stays in sync with the persistence
+        // factory automatically.
+        ImGui::TextUnformatted("Add Component:");
+        static const char* kAddable[] = {
+            "Mesh", "Camera", "Light", "AudioEmitter",
+            "RigidBody", "Tag", "Script", "PlayerController",
+        };
+        int col = 0;
+        for (const char* type : kAddable) {
+            const bool present = a->has_component(type);
+            if (present) ImGui::BeginDisabled();
+            char label[64];
+            cardinal::snprintf(label, sizeof(label), "+ %s", type);
+            if (ImGui::Button(label)) {
+                if (auto comp = cardinal::actor::make_component_by_name(type))
+                    a->adopt_component(cardinal::move(comp));
+            }
+            if (present) ImGui::EndDisabled();
+            // 3 buttons per row.
+            if (++col % 3 != 0) ImGui::SameLine();
+        }
+        if (col % 3 != 0) ImGui::NewLine();
     }
 
     ImGui::End();

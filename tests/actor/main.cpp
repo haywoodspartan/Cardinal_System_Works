@@ -522,6 +522,50 @@ void test_prefabs() {
     CHECK(rest->get_component<ac::RigidBodyComponent>()->velocity.x == 0.0f);
 }
 
+// ---- has_component / remove_component -----------------------------
+void test_has_remove_component() {
+    ac::World w;
+    ac::Actor* a = w.spawn("E");                  // auto-Transform
+    CHECK(a->has_component("Transform"));
+    CHECK(a->has_component<ac::TransformComponent>());
+    CHECK(!a->has_component("Mesh"));
+    CHECK(!a->has_component<ac::MeshComponent>());
+
+    a->add_component<ac::MeshComponent>();
+    a->add_component<ac::LightComponent>();
+    CHECK(a->has_component("Mesh") && a->has_component("Light"));
+    CHECK(a->components().size() == sz(3));        // Transform + Mesh + Light
+
+    // Remove the Mesh — fires on_detach, drops the count, leaves the rest.
+    CHECK(a->remove_component("Mesh"));
+    CHECK(!a->has_component("Mesh"));
+    CHECK(a->has_component("Light"));               // unaffected
+    CHECK(a->has_component("Transform"));
+    CHECK(a->components().size() == sz(2));
+
+    // Removing an absent type returns false, no-op.
+    CHECK(!a->remove_component("Mesh"));
+    CHECK(a->components().size() == sz(2));
+
+    // Template remove form.
+    CHECK(a->remove_component<ac::LightComponent>());
+    CHECK(!a->has_component("Light"));
+    CHECK(a->components().size() == sz(1));         // just Transform
+
+    // on_detach actually fires on remove — use a counting component.
+    static int s_live = 0;
+    struct Counted : ac::Component {
+        const char* type_name() const noexcept override { return "Counted"; }
+        void on_attach(ac::Actor&) override { ++s_live; }
+        void on_detach(ac::Actor&) override { --s_live; }
+    };
+    s_live = 0;
+    a->add_component<Counted>();
+    CHECK(s_live == 1);
+    CHECK(a->remove_component("Counted"));
+    CHECK(s_live == 0);                             // on_detach ran
+}
+
 // ---- prefab instance linkage (revert / apply edit loop) -----------
 void test_prefab_link_revert_apply() {
     ac::World w;
@@ -885,6 +929,7 @@ int main() {
     test_blueprints();
     test_prefabs();
     test_prefab_link_revert_apply();
+    test_has_remove_component();
     test_duplicate();
     test_component_serialization();
     test_event_bus();
