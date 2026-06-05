@@ -1,13 +1,46 @@
 #include <cardinal/core/log.hpp>
+#include <cardinal/core/platform.hpp>
 
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
 #include <vector>
 
+#if CARDINAL_PLATFORM_WINDOWS && defined(_DEBUG)
+    #include <cstdlib>     // _set_abort_behavior
+    #include <crtdbg.h>    // _CrtSetReportMode / _CrtSetReportFile
+    #include <Windows.h>   // SetErrorMode + SEM_*
+#endif
+
 namespace cardinal::log {
 
 namespace {
+
+#if CARDINAL_PLATFORM_WINDOWS && defined(_DEBUG)
+// Static-init abort()/assert() dialog silencer. Lives inside log.cpp (an
+// always-linked TU — every cardinal::log consumer drags it in) so the
+// static library linker can't drop it. Without this MSVC pops TWO modal
+// dialogs on assert(false)/abort():
+//   1. "Debug Assertion Failed" from _wassert() (the assert macro impl).
+//   2. "Debug Error! abort() has been called" from abort() afterwards.
+// Both are unwelcome for headless tests + CI. Redirect the CRT report
+// streams to stderr + clear the abort() message-box bits + the Win32
+// SEM_FAILCRITICALERRORS / SEM_NOGPFAULTERRORBOX flags.
+struct AbortSilencer {
+    AbortSilencer() noexcept {
+        ::_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+        const int kStreams[] = {_CRT_ASSERT, _CRT_ERROR, _CRT_WARN};
+        for (int s : kStreams) {
+            ::_CrtSetReportMode(s, _CRTDBG_MODE_FILE);
+            ::_CrtSetReportFile(s, _CRTDBG_FILE_STDERR);
+        }
+        ::SetErrorMode(::GetErrorMode()
+                       | SEM_FAILCRITICALERRORS
+                       | SEM_NOGPFAULTERRORBOX);
+    }
+};
+const AbortSilencer g_abort_silencer{};
+#endif
 
 // Built-in stderr sink — installed on first use. The default behaviour
 // matches the engine's old fprintf-everywhere style so dropping this in

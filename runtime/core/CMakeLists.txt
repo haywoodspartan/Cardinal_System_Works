@@ -210,7 +210,11 @@ set(CARDINAL_CORE_HEADERS
 )
 
 set(CARDINAL_CORE_SOURCES
-    # diag/
+    # diag/  (log.cpp embeds the static-init AbortSilencer that kills the
+    # modal "Debug Error! abort() has been called" / assert popup in debug
+    # builds — folded into log.cpp because that TU is always linked, while
+    # a standalone silencer.cpp inside a static lib gets dropped by the
+    # linker when nothing references its symbols.)
     src/diag/log.cpp
     src/diag/crash.cpp
     src/diag/trace_export.cpp
