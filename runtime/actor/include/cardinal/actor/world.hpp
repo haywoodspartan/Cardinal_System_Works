@@ -100,6 +100,15 @@ public:
     // for the panel's "Crate (5 components)" display.
     u32    prefab_component_count(const cardinal::string& name) const;
 
+    // Read access to a prefab's prototype Actor (its components are the
+    // captured snapshot). Used by serial::save_prefabs to walk + emit each
+    // component. Returns nullptr if no such prefab.
+    const Actor* prefab_prototype(const cardinal::string& name) const;
+    // Install a pre-built prototype directly (used by serial::load_prefabs
+    // when reconstructing a prefab library from disk). Replaces any
+    // existing prefab of the same name.
+    void   add_prefab(cardinal::string name, cardinal::unique_ptr<Actor> prototype);
+
     // ---- Event bus ---------------------------------------------------
     using EventFn = cardinal::function<void(const cardinal::any& payload)>;
     using HandlerId = u32;

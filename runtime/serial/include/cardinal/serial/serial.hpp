@@ -80,6 +80,61 @@ LoadStats load_world(cardinal::game::Game& game,
                      cardinal::string* error_out = nullptr);
 
 // ---------------------------------------------------------------------------
+// Prefab library save / load.
+//
+// Persists the World's prefab prototypes (captured via World::create_prefab)
+// to a text file so a prefab library survives across editor sessions. Each
+// prefab is one block of component sub-blocks:
+//
+//   # Cardinal prefab library v1
+//   prefab "Crate" {
+//     component "Transform" {
+//       translation = 5 1 -3
+//       ...
+//     }
+//     component "Mesh" {
+//       asset_id = crate.mesh
+//       ...
+//     }
+//     component "GameActor" {
+//       class = TurretActor
+//       prop float fire_rate_hz = 2.000000
+//       ...
+//     }
+//   }
+//
+// Built-in components round-trip through Component::serialize_fields /
+// deserialize_field + the make_component_by_name factory. GameActor blocks
+// round-trip class + reflected props through the ClassRegistry (same path
+// as save_world). On load, each prefab is rebuilt as a detached prototype
+// and installed via World::add_prefab.
+// ---------------------------------------------------------------------------
+struct PrefabSaveStats {
+    u32 prefabs_written{0};
+    u32 components_written{0};
+    u64 bytes_written{0};
+};
+struct PrefabLoadStats {
+    u32 prefabs_loaded{0};
+    u32 components_loaded{0};
+    u32 components_skipped{0};   // unknown type + not a GameActor
+    u32 errors{0};
+    cardinal::vector<cardinal::string> warnings;
+};
+
+PrefabSaveStats save_prefabs(const cardinal::actor::World& world,
+                             const cardinal::string& path,
+                             cardinal::string* error_out = nullptr);
+
+// Loads prefabs into world (does NOT clear existing prefabs unless
+// replace_existing — there's no bulk prefab-clear, so replace_existing
+// removes any prefab whose name collides with a loaded one).
+PrefabLoadStats load_prefabs(cardinal::actor::World& world,
+                             const cardinal::string& path,
+                             bool replace_existing = false,
+                             cardinal::string* error_out = nullptr);
+
+// ---------------------------------------------------------------------------
 // Sky save / load — small format extension that stores the current hour,
 // time scale, frozen flag, and every phase key.
 // ---------------------------------------------------------------------------

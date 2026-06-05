@@ -20,6 +20,7 @@
 
 #include <cardinal/serial/serial.hpp>
 #include <cardinal/sky/sky.hpp>
+#include <cardinal/actor/world.hpp>
 #include <cardinal/core/log.hpp>
 
 #include <filesystem>
@@ -196,6 +197,81 @@ void test_sky_failures(const std::filesystem::path& dir) {
 
 }  // namespace
 
+// ---- prefab library save / load round-trip (built-in components) ----
+// No ClassRegistry needed — built-in components are pure CPU, so this is
+// fully deterministic. GameActor prefab round-trip is covered by the
+// game suite (which owns the registry); here we lock the multi-component
+// file format + the make_component_by_name / deserialize_field path.
+void test_prefab_roundtrip(const std::filesystem::path& dir) {
+    namespace ac = cardinal::actor;
+    const cardinal::string path = (dir / "lib.cardinalprefab").string();
+
+    // Source world: one richly-configured actor captured as "Crate".
+    {
+        ac::World w;
+        ac::Actor* a = w.spawn("Crate");                  // auto-Transform
+        auto* t = a->get_component<ac::TransformComponent>();
+        t->translation = { 4.0f, 2.0f, -6.0f };
+        t->scale       = { 3.0f, 3.0f, 3.0f };
+        auto* m = a->add_component<ac::MeshComponent>();
+        m->asset_id = "props/crate";
+        m->tint     = { 0.7f, 0.5f, 0.3f };
+        m->visible  = false;
+        auto* l = a->add_component<ac::LightComponent>();
+        l->kind = ac::LightKind::Point;
+        l->intensity = 5.5f; l->range = 18.0f;
+        auto* tg = a->add_component<ac::TagComponent>();
+        tg->add("breakable"); tg->add("loot drop");      // space in a tag
+        CHECK(w.create_prefab("Crate", a->id()));
+        CHECK(w.prefab_component_count("Crate") == sz(4));
+
+        const auto ss = ser::save_prefabs(w, path);
+        CHECK(ss.prefabs_written == 1u);
+        CHECK(ss.components_written == 4u);
+        CHECK(ss.bytes_written > 0u);
+    }
+
+    // Fresh world: load the library back + verify a stamped instance.
+    {
+        ac::World w2;
+        const auto ls = ser::load_prefabs(w2, path);
+        CHECK(ls.prefabs_loaded == 1u);
+        CHECK(ls.components_loaded == 4u);
+        CHECK(ls.components_skipped == 0u);
+        CHECK(w2.has_prefab("Crate"));
+        CHECK(w2.prefab_component_count("Crate") == sz(4));
+
+        ac::Actor* inst = w2.spawn_prefab("Crate");
+        CHECK(inst != nullptr);
+        if (inst != nullptr) {
+            auto* t = inst->get_component<ac::TransformComponent>();
+            CHECK(t != nullptr);
+            CHECK(approx(t->translation.x, 4.0f, 1e-3f));
+            CHECK(approx(t->translation.z, -6.0f, 1e-3f));
+            CHECK(approx(t->scale.y, 3.0f, 1e-3f));
+            auto* m = inst->get_component<ac::MeshComponent>();
+            CHECK(m != nullptr && m->asset_id == "props/crate");
+            CHECK(approx(m->tint.x, 0.7f, 1e-3f));
+            CHECK(m->visible == false);
+            auto* l = inst->get_component<ac::LightComponent>();
+            CHECK(l != nullptr && l->kind == ac::LightKind::Point);
+            CHECK(approx(l->intensity, 5.5f, 1e-3f) && approx(l->range, 18.0f, 1e-3f));
+            auto* tg = inst->get_component<ac::TagComponent>();
+            CHECK(tg != nullptr && tg->has("breakable") && tg->has("loot drop"));
+        }
+    }
+
+    // Missing-file load fails cleanly (error_out set, zero stats).
+    {
+        ac::World w3;
+        cardinal::string err;
+        const auto ls = ser::load_prefabs(w3, (dir / "nope.cardinalprefab").string(),
+                                          false, &err);
+        CHECK(ls.prefabs_loaded == 0u);
+        CHECK(!err.empty());
+    }
+}
+
 int main() {
     std::error_code ec;
     std::filesystem::path dir =
@@ -211,6 +287,7 @@ int main() {
     test_text_helpers();
     test_sky_roundtrip(dir);
     test_sky_failures(dir);
+    test_prefab_roundtrip(dir);
 
     const auto removed = std::filesystem::remove_all(dir, ec);
     (void)removed;

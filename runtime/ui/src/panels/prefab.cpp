@@ -4,6 +4,7 @@
 #include "prefab.hpp"
 
 #include <cardinal/actor/world.hpp>
+#include <cardinal/serial/serial.hpp>
 #include <cardinal/ui/imgui.hpp>
 
 #include <cardinal/core/cstdio.hpp>
@@ -63,6 +64,42 @@ void draw(State& state,
         ImGui::TextDisabled("(select an actor in the Outliner to capture it)");
         // Reset the staged name when nothing is selected.
         state.name_buf[0] = '\0';
+    }
+
+    // ---- Disk (save / load the whole library) -------------------------
+    ImGui::SeparatorText("Library File");
+    ImGui::SetNextItemWidth(-160.0f);
+    ImGui::InputText("##prefab_lib_path", state.library_path, sizeof(state.library_path));
+    ImGui::SameLine();
+    if (ImGui::Button("Save##lib", ImVec2(72.0f, 0.0f))) {
+        cardinal::string err;
+        const auto ss = cardinal::serial::save_prefabs(*world, state.library_path, &err);
+        if (!err.empty()) {
+            cardinal::snprintf(state.status, sizeof(state.status),
+                               "Save failed: %s", err.c_str());
+        } else {
+            cardinal::snprintf(state.status, sizeof(state.status),
+                               "Saved %u prefab(s), %u component(s).",
+                               ss.prefabs_written, ss.components_written);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load##lib", ImVec2(72.0f, 0.0f))) {
+        cardinal::string err;
+        const auto ls = cardinal::serial::load_prefabs(*world, state.library_path,
+                                                       /*replace_existing=*/true, &err);
+        if (!err.empty()) {
+            cardinal::snprintf(state.status, sizeof(state.status),
+                               "Load failed: %s", err.c_str());
+        } else {
+            cardinal::snprintf(state.status, sizeof(state.status),
+                               "Loaded %u prefab(s), %u component(s)%s.",
+                               ls.prefabs_loaded, ls.components_loaded,
+                               ls.components_skipped ? " (some skipped)" : "");
+        }
+    }
+    if (state.status[0] != '\0') {
+        ImGui::TextDisabled("%s", state.status);
     }
 
     // ---- Library section ----------------------------------------------

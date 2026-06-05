@@ -384,6 +384,231 @@ LoadStats load_world(cardinal::game::Game& game,
 }
 
 // ---------------------------------------------------------------------------
+// Prefab library save / load
+// ---------------------------------------------------------------------------
+PrefabSaveStats save_prefabs(const cardinal::actor::World& world,
+                             const cardinal::string& path,
+                             cardinal::string* error_out)
+{
+    PrefabSaveStats s{};
+    cardinal::string out;
+    out.reserve(8192);
+    out += "# Cardinal prefab library v1\n\n";
+
+    for (const auto& name : world.prefab_names()) {
+        const cardinal::actor::Actor* proto = world.prefab_prototype(name);
+        if (proto == nullptr) continue;
+
+        out += "prefab \""; out += name; out += "\" {\n";
+        for (const auto& c : proto->components()) {
+            const cardinal::string type = c->type_name();
+            out += "  component \""; out += type; out += "\" {\n";
+
+            if (type == "GameActor") {
+                // Game class: emit class name + reflected props (same path
+                // as save_world). describe_properties needs a non-const
+                // GameActor*; the const_cast only reads field addresses.
+                const auto* ga = static_cast<const cardinal::game::GameActor*>(c.get());
+                out += "    class = "; out += ga->class_name(); out += "\n";
+                const auto* def =
+                    cardinal::game::ClassRegistry::instance().find(ga->class_name());
+                if (def && def->describe_properties) {
+                    auto* mut = const_cast<cardinal::game::GameActor*>(ga);
+                    for (auto& p : def->describe_properties(mut)) {
+                        // emit_prop writes a "  prop ..." line; the extra
+                        // indent here is cosmetic (parser strips leading ws).
+                        emit_prop(out, p);
+                    }
+                }
+            } else {
+                // Built-in component: its own field serializer ("  key = val").
+                c->serialize_fields(out);
+            }
+
+            out += "  }\n";
+            ++s.components_written;
+        }
+        out += "}\n\n";
+        ++s.prefabs_written;
+    }
+
+    cardinal::ofstream f(path, cardinal::ios::binary | cardinal::ios::trunc);
+    if (!f) {
+        if (error_out) *error_out = "could not open file for write: " + path;
+        return s;
+    }
+    f.write(out.data(), static_cast<cardinal::streamsize>(out.size()));
+    s.bytes_written = static_cast<u64>(out.size());
+    cardinal::log::infof("serial",
+        "saved prefab library: %u prefabs, %u components -> %s (%llu bytes)",
+        s.prefabs_written, s.components_written, path.c_str(),
+        static_cast<unsigned long long>(s.bytes_written));
+    return s;
+}
+
+PrefabLoadStats load_prefabs(cardinal::actor::World& world,
+                             const cardinal::string& path,
+                             bool replace_existing,
+                             cardinal::string* error_out)
+{
+    PrefabLoadStats st{};
+    cardinal::ifstream f(path);
+    if (!f) {
+        if (error_out) *error_out = "could not open file: " + path;
+        return st;
+    }
+
+    // Parser state: a prefab block holds component sub-blocks; a component
+    // sub-block holds field lines. Brace depth disambiguates the close.
+    cardinal::string line;
+    cardinal::string cur_prefab_name;
+    cardinal::unique_ptr<cardinal::actor::Actor> proto;   // building prototype
+    cardinal::string cur_comp_type;
+    cardinal::actor::Component*  cur_comp = nullptr;       // built-in being filled
+    cardinal::game::GameActor*   cur_ga   = nullptr;       // game-class being filled
+    cardinal::vector<cardinal::game::PropertyDef> cur_props;
+
+    auto finish_component = [&]() {
+        cur_comp = nullptr; cur_ga = nullptr; cur_comp_type.clear();
+        cur_props.clear();
+    };
+    auto finish_prefab = [&]() {
+        if (proto && !cur_prefab_name.empty()) {
+            world.add_prefab(cur_prefab_name, cardinal::move(proto));
+            ++st.prefabs_loaded;
+        }
+        proto.reset();
+        cur_prefab_name.clear();
+    };
+
+    auto strip = [](const cardinal::string& l, usize& i) {
+        while (i < l.size() && (l[i] == ' ' || l[i] == '\t')) ++i;
+    };
+    auto extract_quoted = [](const cardinal::string& l, usize from) -> cardinal::string {
+        const auto q1 = l.find('"', from);
+        if (q1 == cardinal::string::npos) return {};
+        const auto q2 = l.find('"', q1 + 1);
+        if (q2 == cardinal::string::npos) return {};
+        return l.substr(q1 + 1, q2 - q1 - 1);
+    };
+
+    while (cardinal::getline(f, line)) {
+        usize i = 0; strip(line, i);
+        if (i >= line.size() || line[i] == '#') continue;
+
+        // Close brace — closes whichever level is innermost.
+        if (line[i] == '}') {
+            if (cur_comp != nullptr || cur_ga != nullptr || !cur_comp_type.empty()) {
+                finish_component();
+            } else {
+                finish_prefab();
+            }
+            continue;
+        }
+
+        // prefab "Name" {
+        if (line.compare(i, 7, "prefab ") == 0) {
+            finish_prefab();   // safety: close any unterminated prior block
+            cur_prefab_name = extract_quoted(line, i);
+            proto = cardinal::make_unique<cardinal::actor::Actor>(0u, cur_prefab_name);
+            if (replace_existing && world.has_prefab(cur_prefab_name)) {
+                world.remove_prefab(cur_prefab_name);
+            }
+            continue;
+        }
+
+        // component "Type" {
+        if (line.compare(i, 10, "component ") == 0) {
+            finish_component();
+            cur_comp_type = extract_quoted(line, i);
+            if (!proto) continue;
+            if (cur_comp_type == "GameActor") {
+                // Defer construction until we see "class = ..." (need the
+                // registry name to pick the subclass).
+                cur_comp = nullptr; cur_ga = nullptr;
+            } else {
+                auto made = cardinal::actor::make_component_by_name(cur_comp_type);
+                if (made) {
+                    cur_comp = proto->adopt_component(cardinal::move(made));
+                    ++st.components_loaded;
+                } else {
+                    ++st.components_skipped;
+                    st.warnings.push_back("unknown component type: " + cur_comp_type);
+                }
+            }
+            continue;
+        }
+
+        // Field line within a component block: "key = value".
+        // GameActor "class = X" creates the instance; "prop <kind> name = v"
+        // applies a reflected property; built-ins use deserialize_field.
+        if (cur_comp_type == "GameActor") {
+            // class = ClassName
+            if (line.compare(i, 5, "class") == 0) {
+                cardinal::string key, val;
+                if (text::parse_kv(line.substr(i), &key, &val) && key == "class") {
+                    const auto* def =
+                        cardinal::game::ClassRegistry::instance().find(val);
+                    if (def && def->create && proto) {
+                        auto ga = def->create();
+                        ga->set_class_name(val);
+                        cur_ga = ga.get();
+                        proto->adopt_component(cardinal::move(ga));
+                        ++st.components_loaded;
+                        cur_props.clear();
+                        if (def->describe_properties)
+                            cur_props = def->describe_properties(cur_ga);
+                    } else {
+                        ++st.components_skipped;
+                        st.warnings.push_back("unregistered game class: " + val);
+                    }
+                }
+                continue;
+            }
+            // prop <kind> <name> = <value>
+            if (line.compare(i, 5, "prop ") == 0 && cur_ga != nullptr) {
+                // tokenise: prop <kind> <name> = <value>
+                cardinal::string rest = line.substr(i + 5);
+                // kind
+                usize k0 = 0; while (k0 < rest.size() && rest[k0] == ' ') ++k0;
+                usize k1 = rest.find(' ', k0);
+                if (k1 == cardinal::string::npos) continue;
+                cardinal::string kind = rest.substr(k0, k1 - k0);
+                // name
+                usize n0 = k1; while (n0 < rest.size() && rest[n0] == ' ') ++n0;
+                usize eq = rest.find('=', n0);
+                if (eq == cardinal::string::npos) continue;
+                usize n1 = eq; while (n1 > n0 && rest[n1 - 1] == ' ') --n1;
+                cardinal::string pname = rest.substr(n0, n1 - n0);
+                cardinal::string val   = rest.substr(eq + 1);
+                usize v0 = 0; while (v0 < val.size() && val[v0] == ' ') ++v0;
+                val = val.substr(v0);
+                for (auto& p : cur_props) {
+                    if (p.name == pname) { apply_prop(p, kind, val); break; }
+                }
+                continue;
+            }
+            continue;
+        }
+
+        // Built-in component field.
+        if (cur_comp != nullptr) {
+            cardinal::string key, val;
+            if (text::parse_kv(line.substr(i), &key, &val)) {
+                cur_comp->deserialize_field(key, val);
+            }
+        }
+    }
+    finish_prefab();   // close trailing block at EOF
+
+    cardinal::log::infof("serial",
+        "loaded prefab library: %u prefabs, %u components (%u skipped) <- %s",
+        st.prefabs_loaded, st.components_loaded, st.components_skipped,
+        path.c_str());
+    return st;
+}
+
+// ---------------------------------------------------------------------------
 // Sky save / load
 // ---------------------------------------------------------------------------
 bool save_sky(const cardinal::sky::Sky& sky, const cardinal::string& path,

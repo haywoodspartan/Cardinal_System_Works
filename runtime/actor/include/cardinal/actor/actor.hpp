@@ -102,6 +102,17 @@ public:
     // actor so the auto-Transform doesn't duplicate the prefab's own).
     void clear_components() noexcept { components_.clear(); }
 
+    // Adopt an already-constructed component (e.g. from the deserializer's
+    // make_component_by_name factory or a game-class ClassRegistry::create).
+    // Fires on_attach + returns the raw pointer. The Actor takes ownership.
+    Component* adopt_component(cardinal::unique_ptr<Component> c) {
+        if (!c) return nullptr;
+        Component* raw = c.get();
+        raw->on_attach(*this);
+        components_.push_back(cardinal::move(c));
+        return raw;
+    }
+
     void tick(float dt);
 
 private:

@@ -27,6 +27,11 @@ namespace cardinal::ui::panels::prefab_panel {
 // buffer). One instance per Studio; pass the same object every frame.
 struct State {
     char name_buf[128]{};
+    // Disk path for save/load of the whole prefab library. Default lives
+    // next to world/sky saves under save/.
+    char library_path[512]{ "save/prefabs.cardinalprefab" };
+    // Last-operation feedback line shown under the Save/Load buttons.
+    char status[160]{};
 };
 
 void draw(State& state,

@@ -178,6 +178,16 @@ u32 World::prefab_component_count(const cardinal::string& name) const {
     return static_cast<u32>(it->second->components().size());
 }
 
+const Actor* World::prefab_prototype(const cardinal::string& name) const {
+    auto it = prefabs_.find(name);
+    return it == prefabs_.end() ? nullptr : it->second.get();
+}
+
+void World::add_prefab(cardinal::string name, cardinal::unique_ptr<Actor> prototype) {
+    if (!prototype) return;
+    prefabs_[cardinal::move(name)] = cardinal::move(prototype);
+}
+
 World::HandlerId World::subscribe(const cardinal::string& event, EventFn fn) {
     Sub s{ next_handler_id_++, cardinal::move(fn) };
     const HandlerId id = s.id;
