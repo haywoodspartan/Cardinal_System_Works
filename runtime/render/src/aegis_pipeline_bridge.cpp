@@ -23,6 +23,8 @@
 
 #include <cardinal/render/pipeline.hpp>
 #include <cardinal/render/aegis_runner.hpp>
+
+#include <initializer_list>
 #include <cardinal/render/gpu_aegis.hpp>
 #include <cardinal/scene/renderer.hpp>
 #include <cardinal/core/log.hpp>
@@ -106,11 +108,41 @@ public:
         // tier selector knows what FP16/8/4 the device actually supports.
         gpu::AegisConfig cfg = runner_->config();
         cfg.caps.fp16_supported = caps.shader_float16;
-        // FP8/FP4 — flag fields not yet on rhi::GpuCapabilities; keep
-        // host-controllable via the knob below.
-        (void)caps;
-        // (Re-create the runner only if width/height changed — for now
-        // construction is per-frame-free so we skip the rebuild.)
+
+        // Per-knob availability gating. Walks every knob whose ID matches a
+        // GpuCapabilities feature flag and sets `available` + a friendly
+        // unavailable_reason. The Render Pipeline panel greys out greyed-
+        // out knobs and shows the reason on hover.
+        const auto gate = [&](const char* knob_id, bool supported,
+                              const char* reason) {
+            for (auto& k : knobs_) {
+                if (k.id == knob_id) {
+                    k.available = supported;
+                    k.unavailable_reason = supported ? "" : reason;
+                    return;
+                }
+            }
+        };
+        gate("async_compute",         caps.async_compute,
+             "Device has no separate async compute queue");
+        gate("variable_rate_shading", caps.variable_rate_shading,
+             "Device lacks VRS Tier 1 support");
+        gate("mesh_shaders",          caps.mesh_shader,
+             "Device has no mesh-shader pipeline");
+        gate("bindless_resources",    caps.bindless_resources,
+             "Device lacks bindless descriptor heaps");
+        gate("ray_tracing",           caps.ray_tracing_pipeline,
+             "Device has no ray-tracing pipeline");
+        gate("dlss_upscaler",         caps.nvidia_dlss_capable,
+             "DLSS requires an NVIDIA RTX 20-series or newer GPU");
+        gate("fsr_upscaler",          caps.amd_fsr3_capable,
+             "FSR 3 requires an AMD RX 6000-series or newer GPU");
+        gate("direct_storage",        caps.direct_storage_capable,
+             "DirectStorage / RTX IO not present on this device");
+        gate("max_tier_fp8",          caps.fp8_math,
+             "Device lacks FP8 math (Hopper / Ada / RDNA4 required)");
+        gate("max_tier_fp4",          caps.fp4_math,
+             "Device lacks FP4 math (Blackwell / RDNA5 required)");
     }
 
     void render(scene::Scene& scn, float aspect) override {
@@ -173,50 +205,194 @@ public:
     }
 
 private:
+    // ---- Knob factory helpers -----------------------------------------
+    // Keep build_knobs() readable — every knob would otherwise be a 6-line
+    // brace block. These helpers fold the boilerplate into one-liners.
+    Knob& add_bool_(const char* id, const char* label, const char* group,
+                    const char* tip, bool def) {
+        Knob k;
+        k.id = id; k.label = label; k.group = group; k.tooltip = tip;
+        k.kind = KnobKind::Bool; k.b = def;
+        knobs_.push_back(cardinal::move(k));
+        return knobs_.back();
+    }
+    Knob& add_int_(const char* id, const char* label, const char* group,
+                   const char* tip, int def, int lo, int hi) {
+        Knob k;
+        k.id = id; k.label = label; k.group = group; k.tooltip = tip;
+        k.kind = KnobKind::Int; k.i = def; k.i_min = lo; k.i_max = hi;
+        knobs_.push_back(cardinal::move(k));
+        return knobs_.back();
+    }
+    Knob& add_float_(const char* id, const char* label, const char* group,
+                     const char* tip, float def, float lo, float hi,
+                     float step = 0.01f) {
+        Knob k;
+        k.id = id; k.label = label; k.group = group; k.tooltip = tip;
+        k.kind = KnobKind::Float;
+        k.f = def; k.f_min = lo; k.f_max = hi; k.f_step = step;
+        knobs_.push_back(cardinal::move(k));
+        return knobs_.back();
+    }
+    Knob& add_enum_(const char* id, const char* label, const char* group,
+                    const char* tip, int def,
+                    std::initializer_list<const char*> labels) {
+        Knob k;
+        k.id = id; k.label = label; k.group = group; k.tooltip = tip;
+        k.kind = KnobKind::Enum; k.e = def;
+        for (const char* s : labels) k.enum_labels.push_back(s);
+        knobs_.push_back(cardinal::move(k));
+        return knobs_.back();
+    }
+
     void build_knobs() {
         knobs_.clear();
-        // backend_mode — Null / Cpu / ThreadedCpu / Rhi
-        {
-            Knob k;
-            k.id = "backend_mode"; k.label = "Graph Backend";
-            k.group = "AEGIS"; k.tooltip =
-                "Which graph::Backend the AEGIS runner executes against. "
-                "Null = topology only (per-frame stats, no buffers). "
-                "Cpu / ThreadedCpu = full virtual-GPU simulation. "
-                "Rhi = real compute dispatch (when RhiBackend lands).";
-            k.kind = KnobKind::Enum;
-            k.enum_labels.push_back("Null (topology)");
-            k.enum_labels.push_back("CpuBackend");
-            k.enum_labels.push_back("ThreadedCpuBackend");
-            k.enum_labels.push_back("RhiBackend");
-            k.e = 0;
-            knobs_.push_back(cardinal::move(k));
-        }
-        // max_tier — FP32 / FP16 / FP8 / FP4
-        {
-            Knob k;
-            k.id = "max_tier"; k.label = "Max Geometry Tier";
-            k.group = "AEGIS"; k.tooltip =
-                "Maximum precision tier the math-division engine is allowed "
-                "to escalate to. FP4 (Blackwell) = 8 micro-tris per source "
-                "triangle; FP32 = no subdivision.";
-            k.kind = KnobKind::Enum;
-            k.enum_labels.push_back("FP32");
-            k.enum_labels.push_back("FP16");
-            k.enum_labels.push_back("FP8");
-            k.enum_labels.push_back("FP4");
-            k.e = 1;   // default Fp16
-            knobs_.push_back(cardinal::move(k));
-        }
-        // exposure
-        {
-            Knob k;
-            k.id = "exposure"; k.label = "Exposure (EV)";
-            k.group = "AEGIS"; k.tooltip = "TonemapPass exposure multiplier.";
-            k.kind = KnobKind::Float;
-            k.f = 1.0f; k.f_min = 0.0f; k.f_max = 4.0f; k.f_step = 0.05f;
-            knobs_.push_back(cardinal::move(k));
-        }
+
+        // ---- AEGIS core ----------------------------------------------
+        add_enum_("backend_mode", "Graph Backend", "AEGIS",
+            "Which graph::Backend the AEGIS runner executes against. "
+            "Null = topology only (per-frame stats, no buffers). "
+            "Cpu / ThreadedCpu = full virtual-GPU simulation. "
+            "Rhi = real compute dispatch (when RhiBackend lands).",
+            0, {"Null (topology)", "CpuBackend", "ThreadedCpuBackend", "RhiBackend"});
+        add_enum_("max_tier", "Max Geometry Tier", "AEGIS",
+            "Maximum precision tier the math-division engine is allowed to "
+            "escalate to. FP4 (Blackwell) = 8 micro-tris per source triangle; "
+            "FP32 = no subdivision.",
+            1, {"FP32", "FP16", "FP8", "FP4"});
+
+        // ---- Quality / Resolution -------------------------------------
+        add_float_("resolution_scale", "Resolution Scale", "Quality",
+            "Internal render-target resolution multiplier before upscaling. "
+            "0.5 = quarter pixels (huge perf); 2.0 = SSAA x2 (huge quality cost).",
+            1.0f, 0.50f, 2.0f, 0.05f);
+        add_enum_("msaa_samples", "MSAA Samples", "Quality",
+            "Multi-sample anti-aliasing for the forward path. Ignored when a "
+            "temporal upscaler (DLSS / FSR) is active.",
+            0, {"1x (off)", "2x", "4x", "8x"});
+        add_enum_("anisotropic_filter", "Anisotropic Filter", "Quality",
+            "Texture filtering for sampled material textures.",
+            3, {"Bilinear", "Trilinear", "Aniso 2x", "Aniso 4x", "Aniso 8x", "Aniso 16x"});
+        add_enum_("shadow_resolution", "Shadow Atlas", "Quality",
+            "Per-light shadow-map dimensions. 8k is for cinematic captures.",
+            2, {"512", "1024", "2048", "4096", "8192"});
+        add_int_("shadow_cascades", "Shadow Cascades", "Quality",
+            "Number of cascaded shadow-map slices for the sun directional.",
+            3, 1, 4);
+
+        // ---- Frame pacing ---------------------------------------------
+        add_enum_("vsync_mode", "VSync", "Frame Pacing",
+            "Off = uncapped (tear allowed). On = wait for vblank. Adaptive = "
+            "off when below refresh, on when above (G-Sync / FreeSync feel).",
+            0, {"Off", "On", "Adaptive"});
+        add_enum_("fps_limit", "FPS Limit", "Frame Pacing",
+            "Hard cap on rendered frames per second. None = no cap (relies on "
+            "VSync or vendor-side limiter).",
+            0, {"None", "30", "60", "90", "120", "144", "165", "240"});
+        add_float_("frame_pacing_smoothing", "Pacing Smoothing", "Frame Pacing",
+            "How aggressively the engine smooths frame-time jitter. 0 = raw, "
+            "1 = heavy averaging (smoother but laggier).",
+            0.3f, 0.0f, 1.0f, 0.05f);
+
+        // ---- Post-FX --------------------------------------------------
+        add_float_("exposure", "Exposure (EV)", "Post-FX",
+            "TonemapPass exposure multiplier (linear stops above middle grey).",
+            1.0f, 0.0f, 4.0f, 0.05f);
+        add_enum_("tonemap_operator", "Tonemap Operator", "Post-FX",
+            "How linear HDR is mapped to LDR display range. AgX is the modern "
+            "preference; ACES is the film-industry standard; Reinhard is the "
+            "classic; Uncharted2 is Hable's curve.",
+            1, {"Reinhard", "ACES Fitted", "AgX", "Uncharted 2", "PBR Neutral"});
+        add_bool_("bloom_enabled", "Bloom", "Post-FX",
+            "Bright-pass blur composited back over the HDR target.", true);
+        add_float_("bloom_threshold", "Bloom Threshold", "Post-FX",
+            "Minimum luminance (cd/m²-ish) that contributes to bloom.",
+            1.0f, 0.0f, 5.0f, 0.05f);
+        add_float_("bloom_intensity", "Bloom Intensity", "Post-FX",
+            "Scale on the bloom mip-chain composite.",
+            0.5f, 0.0f, 2.0f, 0.05f);
+        add_float_("sharpness", "CAS Sharpness", "Post-FX",
+            "AMD Contrast-Adaptive Sharpening strength applied post-upscale.",
+            0.25f, 0.0f, 1.0f, 0.05f);
+        add_float_("chromatic_aberration", "Chromatic Aberration", "Post-FX",
+            "Per-channel screen-space offset (in screen units × 1000).",
+            0.0f, 0.0f, 1.0f, 0.05f);
+        add_float_("vignette", "Vignette", "Post-FX",
+            "Edge-darkening intensity.",
+            0.0f, 0.0f, 1.0f, 0.05f);
+
+        // ---- Lighting -------------------------------------------------
+        add_bool_("ibl_diffuse",  "IBL Diffuse", "Lighting",
+            "Image-based diffuse from the irradiance probe volume.", true);
+        add_bool_("ibl_specular", "IBL Specular", "Lighting",
+            "Image-based specular from the pre-filtered environment cube.", true);
+        add_bool_("ssao_enabled", "SSAO", "Lighting",
+            "Screen-space ambient occlusion (GTAO-style).", true);
+        add_enum_("ssao_quality", "SSAO Quality", "Lighting",
+            "Sample count + radius per AO probe.",
+            1, {"Low (4 taps)", "Med (8 taps)", "High (16 taps)", "Ultra (32 taps)"});
+        add_bool_("ssr_enabled", "SSR", "Lighting",
+            "Screen-space reflections (linear ray-march + Hi-Z accelerator).", false);
+        add_enum_("ssr_quality", "SSR Quality", "Lighting",
+            "Reflection ray step count + roughness importance sampling.",
+            1, {"Low", "Med", "High"});
+
+        // ---- Upscaler -------------------------------------------------
+        add_enum_("dlss_upscaler", "DLSS", "Upscaler",
+            "NVIDIA Deep Learning Super Sampling. Quality > Balanced > "
+            "Performance trade screen-space samples for speed.",
+            0, {"Off", "DLAA (native)", "Quality", "Balanced", "Performance", "Ultra Performance"});
+        add_enum_("fsr_upscaler", "FSR 3", "Upscaler",
+            "AMD FidelityFX Super Resolution. Quality > Balanced > Performance.",
+            0, {"Off", "Native AA", "Quality", "Balanced", "Performance"});
+        add_bool_("frame_generation", "DLSS / FSR Frame Generation", "Upscaler",
+            "Synthesise an interpolated frame between every rendered pair. "
+            "Doubles displayed FPS at the cost of input latency.", false);
+
+        // ---- GPU Features (feature-gated via on_caps()) ---------------
+        add_bool_("async_compute", "Async Compute", "GPU Features",
+            "Run compute passes on a dedicated GPU queue concurrent with the "
+            "graphics queue. Effective on hardware with multiple compute engines.",
+            false);
+        add_bool_("variable_rate_shading", "Variable Rate Shading", "GPU Features",
+            "Coarse-shade screen regions the eye doesn't focus on. Big win in "
+            "VR foveated rendering and post-FX shaders.", false);
+        add_bool_("mesh_shaders", "Mesh Shaders", "GPU Features",
+            "Use mesh + task shaders instead of vertex + geometry pipelines. "
+            "Required for the Block 4 GPU-driven cluster pipeline.", false);
+        add_bool_("bindless_resources", "Bindless Resources", "GPU Features",
+            "Replace per-draw descriptor binding with a single huge descriptor "
+            "heap indexed in-shader. Required for Block 8 material extensions.",
+            false);
+        add_bool_("ray_tracing", "Ray Tracing Pipeline", "GPU Features",
+            "Hardware RT — required for ReSTIR DI / GI and ray-traced shadows.",
+            false);
+        add_bool_("direct_storage", "DirectStorage / RTX IO", "GPU Features",
+            "GPU-decompressed asset streaming straight from NVMe to VRAM, "
+            "bypassing the CPU.", false);
+        add_bool_("max_tier_fp8", "Allow FP8 Tier", "GPU Features",
+            "Permit the math-division engine to escalate to FP8 (Hopper / Ada / RDNA4).",
+            false);
+        add_bool_("max_tier_fp4", "Allow FP4 Tier", "GPU Features",
+            "Permit the math-division engine to escalate to FP4 (Blackwell / RDNA5).",
+            false);
+
+        // ---- Debug visualisation --------------------------------------
+        add_bool_("show_wireframe", "Wireframe", "Debug",
+            "Overlay wireframe on opaque geometry.", false);
+        add_bool_("show_aabbs", "Scene AABBs", "Debug",
+            "Draw axis-aligned bounds for every renderable.", false);
+        add_bool_("show_lights", "Light Volumes", "Debug",
+            "Draw light influence radii / cones.", false);
+        add_bool_("show_cluster_grid", "Cluster Grid", "Debug",
+            "Visualise the tile / cluster light-cull grid.", false);
+        add_bool_("show_shadow_cascades", "Shadow Cascades", "Debug",
+            "Tint each pixel by the cascade slice it's reading from.", false);
+        add_bool_("pause_simulation", "Pause Simulation", "Debug",
+            "Freeze the scene update; rendering continues.", false);
+        add_bool_("freeze_culling", "Freeze Culling Frustum", "Debug",
+            "Hold the previous-frame cull frustum so you can fly the camera "
+            "OUTSIDE it to see what's being culled.", false);
     }
 
     rhi::Device*                                      dev_  {nullptr};
