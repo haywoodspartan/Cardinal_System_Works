@@ -68,6 +68,24 @@ public:
 cardinal::unique_ptr<Component> make_component_by_name(const cardinal::string& type_name);
 
 // ---------------------------------------------------------------------------
+// Component copy / paste — the editor clipboard primitive.
+//
+// copy_component serializes a single component to a self-describing blob:
+//   "<type_name>\n  <key> = <value>\n  ..."
+// (the type tag on line 1, then its serialize_fields lines).
+//
+// paste_component parses the type, then OVERWRITES the destination's
+// component of that type if present, else ADDS one via the factory, then
+// applies the stored fields. Returns the affected component, or nullptr if
+// the blob is empty / the type isn't a factory-known built-in (e.g. a
+// GameActor — reconstructed via the ClassRegistry, not this path). "Paste
+// values" semantics: a second paste of the same type updates in place
+// rather than stacking a duplicate.
+// ---------------------------------------------------------------------------
+cardinal::string copy_component(const Component& c);
+Component*       paste_component(Actor& dst, const cardinal::string& blob);
+
+// ---------------------------------------------------------------------------
 // Built-in components.
 // ---------------------------------------------------------------------------
 

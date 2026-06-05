@@ -566,6 +566,54 @@ void test_has_remove_component() {
     CHECK(s_live == 0);                             // on_detach ran
 }
 
+// ---- component copy / paste (clipboard) ---------------------------
+void test_copy_paste_component() {
+    ac::World w;
+
+    // Source actor with a configured Light.
+    ac::Actor* src = w.spawn("Lamp");
+    auto* sl = src->add_component<ac::LightComponent>();
+    sl->kind = ac::LightKind::Spot;
+    sl->intensity = 8.0f; sl->range = 30.0f;
+    sl->color = { 0.2f, 0.4f, 0.8f };
+
+    // Copy -> a self-describing blob tagged with the type.
+    cardinal::string blob = ac::copy_component(*sl);
+    CHECK(!blob.empty());
+    CHECK(blob.compare(0, 5, "Light") == 0);    // type tag on line 1
+
+    // Paste onto a DIFFERENT actor that has no Light yet -> adds one.
+    ac::Actor* dst = w.spawn("Wall");
+    CHECK(!dst->has_component("Light"));
+    ac::Component* pasted = ac::paste_component(*dst, blob);
+    CHECK(pasted != nullptr);
+    CHECK(dst->has_component("Light"));
+    auto* dl = dst->get_component<ac::LightComponent>();
+    CHECK(dl != nullptr);
+    CHECK(dl->kind == ac::LightKind::Spot);
+    CHECK(ap(dl->intensity, 8.0f) && ap(dl->range, 30.0f));
+    CHECK(ap(dl->color.z, 0.8f));
+    // dst gained exactly one component (Transform + Light = 2).
+    CHECK(dst->components().size() == sz(2));
+
+    // Edit the source, re-copy, paste again -> OVERWRITES dst's Light in
+    // place (paste-values), does NOT stack a second Light.
+    sl->intensity = 1.0f;
+    blob = ac::copy_component(*sl);
+    ac::paste_component(*dst, blob);
+    CHECK(dst->components().size() == sz(2));    // still one Light
+    CHECK(ap(dst->get_component<ac::LightComponent>()->intensity, 1.0f));
+
+    // Paste independence — editing dst's Light doesn't touch src's.
+    dst->get_component<ac::LightComponent>()->intensity = 99.0f;
+    CHECK(ap(src->get_component<ac::LightComponent>()->intensity, 1.0f));
+
+    // Empty + unknown-type blobs paste cleanly to nullptr.
+    CHECK(ac::paste_component(*dst, "") == nullptr);
+    CHECK(ac::paste_component(*dst, "GameActor\n") == nullptr);  // not a factory type
+    CHECK(ac::paste_component(*dst, "Bogus\n  x = 1\n") == nullptr);
+}
+
 // ---- prefab instance linkage (revert / apply edit loop) -----------
 void test_prefab_link_revert_apply() {
     ac::World w;
@@ -930,6 +978,7 @@ int main() {
     test_prefabs();
     test_prefab_link_revert_apply();
     test_has_remove_component();
+    test_copy_paste_component();
     test_duplicate();
     test_component_serialization();
     test_event_bus();

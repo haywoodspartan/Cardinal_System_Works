@@ -383,4 +383,58 @@ cardinal::unique_ptr<Component> make_component_by_name(const cardinal::string& t
     return nullptr;
 }
 
+// ===========================================================================
+// Component copy / paste — clipboard primitive over serialize/deserialize.
+// ===========================================================================
+cardinal::string copy_component(const Component& c) {
+    cardinal::string blob = c.type_name();
+    blob += "\n";
+    c.serialize_fields(blob);
+    return blob;
+}
+
+Component* paste_component(Actor& dst, const cardinal::string& blob) {
+    if (blob.empty()) return nullptr;
+
+    // Line 1 = type tag.
+    cardinal::usize nl = blob.find('\n');
+    cardinal::string type = (nl == cardinal::string::npos) ? blob : blob.substr(0, nl);
+    while (!type.empty() && (type.back() == ' ' || type.back() == '\r' || type.back() == '\t'))
+        type.pop_back();
+    if (type.empty()) return nullptr;
+
+    // Reuse the destination's existing component of this type ("paste
+    // values"), else make a fresh one via the factory ("paste as new").
+    Component* target = nullptr;
+    for (const auto& c : dst.components()) {
+        if (cardinal::strcmp(c->type_name(), type.c_str()) == 0) {
+            target = c.get();
+            break;
+        }
+    }
+    if (target == nullptr) {
+        auto made = make_component_by_name(type);
+        if (!made) return nullptr;        // unknown / non-factory type (GameActor)
+        target = dst.adopt_component(cardinal::move(made));
+    }
+
+    // Apply the remaining "  key = value" lines.
+    cardinal::usize i = (nl == cardinal::string::npos) ? blob.size() : nl + 1;
+    while (i < blob.size()) {
+        cardinal::usize eol = blob.find('\n', i);
+        if (eol == cardinal::string::npos) eol = blob.size();
+        cardinal::string line = blob.substr(i, eol - i);
+        i = eol + 1;
+        cardinal::usize s = 0;
+        while (s < line.size() && (line[s] == ' ' || line[s] == '\t')) ++s;
+        const cardinal::usize eq = line.find(" = ", s);
+        if (eq == cardinal::string::npos) continue;
+        cardinal::string key = line.substr(s, eq - s);
+        cardinal::string val = line.substr(eq + 3);
+        while (!val.empty() && val.back() == '\r') val.pop_back();
+        target->deserialize_field(key, val);
+    }
+    return target;
+}
+
 }  // namespace cardinal::actor

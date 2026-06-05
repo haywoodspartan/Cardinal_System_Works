@@ -196,16 +196,28 @@ void draw(cardinal::actor::World* world,
         ImGui::Text("ID:     %u", a->id());
         ImGui::Text("Parent: %u", a->parent());
         ImGui::Separator();
-        // Per-component headers with a remove (X) affordance. Transform is
-        // not removable — every actor needs one. Defer the actual removal
-        // until after the loop so we don't mutate the vector mid-iteration.
+        // Inter-frame component clipboard (one Inspector per Studio, so a
+        // function-static is fine — matches save_load's static path fields).
+        static cardinal::string s_clipboard;
+        static cardinal::string s_clip_type;
+
+        // Per-component headers with Copy + remove (X) affordances. Transform
+        // is not removable — every actor needs one. Defer removal until after
+        // the loop so we don't mutate the vector mid-iteration.
         const char* to_remove = nullptr;
         for (const auto& c : a->components()) {
             ImGui::PushID(c.get());
             const char* ctype = c->type_name();
+            // Copy this component's values to the clipboard.
+            if (ImGui::SmallButton("Copy")) {
+                s_clipboard = cardinal::actor::copy_component(*c);
+                s_clip_type = ctype;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Copy this %s component's values", ctype);
+            ImGui::SameLine();
             const bool removable = cardinal::strcmp(ctype, "Transform") != 0;
             if (removable) {
-                // Small X on the right edge of the header row.
                 if (ImGui::SmallButton("X")) to_remove = ctype;
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Remove this %s component", ctype);
@@ -217,6 +229,20 @@ void draw(cardinal::actor::World* world,
             ImGui::PopID();
         }
         if (to_remove != nullptr) a->remove_component(to_remove);
+
+        // Paste the clipboard onto this actor (overwrites the matching
+        // component's values, or adds one if absent).
+        if (!s_clipboard.empty()) {
+            char plabel[96];
+            cardinal::snprintf(plabel, sizeof(plabel), "Paste %s", s_clip_type.c_str());
+            if (ImGui::Button(plabel)) {
+                cardinal::actor::paste_component(*a, s_clipboard);
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Apply the copied %s values to this actor "
+                                  "(adds the component if missing)",
+                                  s_clip_type.c_str());
+        }
 
         ImGui::Separator();
         // Add Component — data-driven over the built-in factory. Each type
