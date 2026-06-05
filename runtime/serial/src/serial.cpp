@@ -171,9 +171,8 @@ bool apply_prop(cardinal::game::PropertyDef& p,
 // ---------------------------------------------------------------------------
 // World save
 // ---------------------------------------------------------------------------
-SaveStats save_world(const cardinal::actor::World& world,
-                     const cardinal::string& path,
-                     cardinal::string* error_out)
+cardinal::string serialize_world(const cardinal::actor::World& world,
+                                 SaveStats* stats_out)
 {
     SaveStats s{};
     cardinal::string out;
@@ -245,6 +244,17 @@ SaveStats save_world(const cardinal::actor::World& world,
         ++s.actors_written;
     }
 
+    if (stats_out) *stats_out = s;
+    return out;
+}
+
+SaveStats save_world(const cardinal::actor::World& world,
+                     const cardinal::string& path,
+                     cardinal::string* error_out)
+{
+    SaveStats s{};
+    const cardinal::string out = serialize_world(world, &s);
+
     cardinal::ofstream f(path, cardinal::ios::binary | cardinal::ios::trunc);
     if (!f) {
         if (error_out) *error_out = "could not open file for write: " + path;
@@ -260,19 +270,16 @@ SaveStats save_world(const cardinal::actor::World& world,
 }
 
 // ---------------------------------------------------------------------------
-// World load
+// World load — a single stream parser drives both the file path
+// (load_world) and the in-memory string path (deserialize_world).
 // ---------------------------------------------------------------------------
-LoadStats load_world(cardinal::game::Game& game,
-                     const cardinal::string& path,
-                     bool replace_existing,
-                     cardinal::string* error_out)
+template <class Stream>
+static LoadStats parse_world_stream_(cardinal::game::Game& game,
+                                     Stream& f,
+                                     bool replace_existing,
+                                     const char* src_label)
 {
     LoadStats st{};
-    cardinal::ifstream f(path);
-    if (!f) {
-        if (error_out) *error_out = "could not open file: " + path;
-        return st;
-    }
 
     if (replace_existing) {
         cardinal::vector<u32> ids;
@@ -456,8 +463,29 @@ LoadStats load_world(cardinal::game::Game& game,
 
     cardinal::log::infof("serial",
         "loaded world: %u spawned, %u props applied, %u errors <- %s",
-        st.actors_spawned, st.properties_applied, st.errors, path.c_str());
+        st.actors_spawned, st.properties_applied, st.errors, src_label);
     return st;
+}
+
+LoadStats load_world(cardinal::game::Game& game,
+                     const cardinal::string& path,
+                     bool replace_existing,
+                     cardinal::string* error_out)
+{
+    cardinal::ifstream f(path);
+    if (!f) {
+        if (error_out) *error_out = "could not open file: " + path;
+        return {};
+    }
+    return parse_world_stream_(game, f, replace_existing, path.c_str());
+}
+
+LoadStats deserialize_world(cardinal::game::Game& game,
+                            const cardinal::string& text,
+                            bool replace_existing)
+{
+    cardinal::istringstream ss(text);
+    return parse_world_stream_(game, ss, replace_existing, "<memory>");
 }
 
 // ---------------------------------------------------------------------------

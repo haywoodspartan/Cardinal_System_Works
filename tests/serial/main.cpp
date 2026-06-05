@@ -336,13 +336,12 @@ void test_world_full_components(const std::filesystem::path& dir) {
 }
 
 // ---- play-mode snapshot / restore (the PIE contract) --------------
-// game_bar snapshots the world on Play (save_world) and restores it on
-// Stop (load_world replace). Verify that contract: snapshot, mutate the
-// world as playtesting would (move actors, spawn new ones, disable some),
-// then restore -> the authored scene is exactly back.
-void test_play_snapshot_restore(const std::filesystem::path& dir) {
+// game_bar snapshots the world on Play (serialize_world -> string) and
+// restores it on Stop (deserialize_world replace). Verify that contract
+// in-memory: snapshot, mutate the world as playtesting would (move actors,
+// spawn new ones, disable some), then restore -> the authored scene back.
+void test_play_snapshot_restore(const std::filesystem::path& /*dir*/) {
     namespace ac = cardinal::actor;
-    const cardinal::string snap = (dir / "pie_snap.cardinalworld").string();
 
     cardinal::sim::SimWorld sw{cardinal::sim::SimDesc{}};
     cardinal::game::Game game{sw};
@@ -356,8 +355,9 @@ void test_play_snapshot_restore(const std::filesystem::path& dir) {
     const cardinal::usize authored_count = game.world().actor_count();
     CHECK(authored_count == sz(2));
 
-    // --- Play: snapshot ---
-    ser::save_world(game.world(), snap);
+    // --- Play: snapshot to an in-memory string (no disk) ---
+    const cardinal::string snap = ser::serialize_world(game.world());
+    CHECK(!snap.empty());
 
     // --- Playtest mutations: move the hero, spawn a projectile, disable prop ---
     hero->get_component<ac::TransformComponent>()->translation = { 50.0f, 9.0f, 50.0f };
@@ -365,8 +365,8 @@ void test_play_snapshot_restore(const std::filesystem::path& dir) {
     prop->set_enabled(false);
     CHECK(game.world().actor_count() == sz(3));    // a runtime actor appeared
 
-    // --- Stop: restore ---
-    const auto ls = ser::load_world(game, snap, /*replace_existing=*/true);
+    // --- Stop: restore from the snapshot string ---
+    const auto ls = ser::deserialize_world(game, snap, /*replace_existing=*/true);
     CHECK(ls.actors_spawned >= 2u);
     game.world().sweep();
 

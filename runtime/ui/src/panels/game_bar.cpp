@@ -28,23 +28,21 @@ void draw(cardinal::game::Game* game, const char* title, bool* p_open) {
     // Playtesting mutates the live world (physics moves bodies, scripts
     // spawn/destroy actors, the player walks around). Without a snapshot
     // those changes would permanently corrupt the authored scene. On Play
-    // we serialize the world to a snapshot file; on Stop we reload it,
-    // restoring the scene exactly as it was — the standard UE/Unity PIE
-    // contract. Toggle off to keep play-mode changes.
-    static bool s_restore_on_stop = true;
-    static bool s_has_snapshot    = false;
-    constexpr const char* kSnapPath = "save/.pie_snapshot.cardinalworld";
+    // we serialize the world to an in-memory snapshot; on Stop we rebuild
+    // it, restoring the scene exactly as it was — the standard UE/Unity PIE
+    // contract. Toggle off to keep play-mode changes. In-memory (no temp
+    // file): nothing touches disk for a transient playtest.
+    static bool             s_restore_on_stop = true;
+    static cardinal::string s_snapshot;
 
     auto play_with_snapshot = [&]() {
-        cardinal::string err;
-        cardinal::serial::save_world(game->world(), kSnapPath, &err);
-        s_has_snapshot = err.empty();
+        s_snapshot = cardinal::serial::serialize_world(game->world());
         game->start_play();
     };
     auto stop_with_restore = [&]() {
         game->stop_play();
-        if (s_restore_on_stop && s_has_snapshot) {
-            cardinal::serial::load_world(*game, kSnapPath, /*replace_existing=*/true);
+        if (s_restore_on_stop && !s_snapshot.empty()) {
+            cardinal::serial::deserialize_world(*game, s_snapshot, /*replace_existing=*/true);
         }
     };
 

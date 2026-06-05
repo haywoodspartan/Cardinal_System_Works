@@ -79,6 +79,17 @@ LoadStats load_world(cardinal::game::Game& game,
                      bool replace_existing = false,
                      cardinal::string* error_out = nullptr);
 
+// In-memory variants — same text format, to/from a cardinal::string instead
+// of a file. For transient snapshots that shouldn't touch disk: the
+// play-in-editor snapshot-on-Play / restore-on-Stop, and future undo
+// checkpoints. serialize_world fills stats_out (sans bytes_written) if given.
+cardinal::string serialize_world(const cardinal::actor::World& world,
+                                 SaveStats* stats_out = nullptr);
+
+LoadStats deserialize_world(cardinal::game::Game& game,
+                            const cardinal::string& text,
+                            bool replace_existing = true);
+
 // ---------------------------------------------------------------------------
 // Prefab library save / load.
 //
