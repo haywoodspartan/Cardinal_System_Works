@@ -46,6 +46,14 @@ public:
     Actor*  spawn(cardinal::string name);
     Actor*  spawn_blueprint(const cardinal::string& blueprint_name);
 
+    // Duplicate an existing actor — deep-clones EVERY component (incl. a
+    // PrefabLink, so a duplicated prefab instance stays linked to the same
+    // prefab, matching editor expectations) onto a fresh actor with a
+    // unique "<name> (copy)" / "(copy N)" name. Runtime state resets via
+    // each component's clone(). Returns nullptr if `id` is unknown. The
+    // Ctrl-D primitive every editor needs.
+    Actor*  duplicate(ActorId id);
+
     // Mark for destruction; the actual remove happens on the next sweep().
     void    destroy(ActorId id);
     void    sweep();   // physically remove dead actors

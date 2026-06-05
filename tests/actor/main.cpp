@@ -583,6 +583,56 @@ void test_prefab_link_revert_apply() {
     CHECK(w.prefab_of(inst->id()) == "Box");      // link string still readable
 }
 
+// ---- actor duplication (Ctrl-D primitive) -------------------------
+void test_duplicate() {
+    ac::World w;
+
+    // Source with a couple of components + authored values.
+    ac::Actor* src = w.spawn("Crate");
+    src->get_component<ac::TransformComponent>()->translation = { 7.0f, 0.0f, 0.0f };
+    auto* sm = src->add_component<ac::MeshComponent>();
+    sm->asset_id = "crate.mesh";
+
+    // Duplicate: distinct id, unique "(copy)" name, cloned values, alive.
+    ac::Actor* d1 = w.duplicate(src->id());
+    CHECK(d1 != nullptr);
+    CHECK(d1->id() != src->id());
+    CHECK(d1->name() == "Crate (copy)");
+    CHECK(d1->alive());
+    CHECK(w.find(d1->id()) == d1);
+    auto* dt = d1->get_component<ac::TransformComponent>();
+    CHECK(dt != nullptr && ap(dt->translation.x, 7.0f));
+    CHECK(d1->get_component<ac::MeshComponent>() != nullptr);
+    CHECK(d1->get_component<ac::MeshComponent>()->asset_id == "crate.mesh");
+    // No duplicate auto-Transform: Transform + Mesh = 2.
+    CHECK(d1->components().size() == sz(2));
+
+    // Independence — edit the dup, source unchanged.
+    dt->translation = { -1.0f, 0.0f, 0.0f };
+    CHECK(ap(src->get_component<ac::TransformComponent>()->translation.x, 7.0f));
+
+    // Second duplicate of the SAME source -> "(copy 2)" (copy is taken).
+    ac::Actor* d2 = w.duplicate(src->id());
+    CHECK(d2 != nullptr && d2->name() == "Crate (copy 2)");
+
+    // Duplicating a COPY strips the suffix -> base "(copy)" path, which is
+    // taken, so it lands on the next free "(copy N)".
+    ac::Actor* d3 = w.duplicate(d1->id());
+    CHECK(d3 != nullptr);
+    CHECK(d3->name() == "Crate (copy 3)");   // copy + copy 2 taken
+
+    // Duplicating a prefab instance keeps the PrefabLink (same prefab).
+    CHECK(w.create_prefab("Crate", src->id()));
+    ac::Actor* inst = w.spawn_prefab("Crate");
+    CHECK(w.prefab_of(inst->id()) == "Crate");
+    ac::Actor* inst_dup = w.duplicate(inst->id());
+    CHECK(inst_dup != nullptr);
+    CHECK(w.prefab_of(inst_dup->id()) == "Crate");   // link cloned through
+
+    // Unknown id -> nullptr.
+    CHECK(w.duplicate(99999u) == nullptr);
+}
+
 // ---- component serialization (round-trip via factory) -------------
 void test_component_serialization() {
     // Local near-zero check (delta already subtracted at the call sites).
@@ -835,6 +885,7 @@ int main() {
     test_blueprints();
     test_prefabs();
     test_prefab_link_revert_apply();
+    test_duplicate();
     test_component_serialization();
     test_event_bus();
     test_event_bus_reentrant();

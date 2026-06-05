@@ -3,6 +3,7 @@
 #include <cardinal/core/log.hpp>
 
 #include <cardinal/core/algorithm.hpp>   // cardinal::sort/remove_if
+#include <cardinal/core/cstdio.hpp>      // cardinal::snprintf (duplicate naming)
 // cardinal::make_unique/move/any/vector arrive via actor/world.hpp
 
 namespace cardinal::actor {
@@ -36,6 +37,32 @@ Actor* World::spawn_blueprint(const cardinal::string& blueprint_name) {
     Actor* a = spawn(blueprint_name);
     if (it->second.build) it->second.build(*a);
     return a;
+}
+
+Actor* World::duplicate(ActorId id) {
+    Actor* src = find(id);
+    if (src == nullptr) {
+        cardinal::log::warnf("actor/world", "duplicate(%u): no such actor", id);
+        return nullptr;
+    }
+    // Unique name: "<base> (copy)", then "(copy 2)", "(copy 3)"… until free.
+    // Strip an existing "(copy...)" suffix so duplicating a copy doesn't
+    // accrete "(copy) (copy)".
+    cardinal::string base = src->name();
+    const auto paren = base.rfind(" (copy");
+    if (paren != cardinal::string::npos && base.back() == ')') {
+        base = base.substr(0, paren);
+    }
+    cardinal::string candidate = base + " (copy)";
+    for (u32 n = 2; find_by_name(candidate) != nullptr; ++n) {
+        char suffix[40];
+        cardinal::snprintf(suffix, sizeof(suffix), " (copy %u)", n);
+        candidate = base + suffix;
+    }
+
+    Actor* dst = spawn_bare_(candidate);   // no auto-Transform; clone carries it
+    src->clone_components_into(*dst, nullptr);
+    return dst;
 }
 
 void World::destroy(ActorId id) {

@@ -170,6 +170,9 @@ void draw(cardinal::actor::World* world,
                 a->id(), a->name().c_str());
             if (ImGui::Selectable(label, sel == a->id())) sel = a->id();
             if (ImGui::BeginPopupContextItem()) {
+                if (ImGui::MenuItem("Duplicate")) {
+                    if (auto* dup = world->duplicate(a->id())) sel = dup->id();
+                }
                 if (ImGui::MenuItem("Destroy")) world->destroy(a->id());
                 ImGui::EndPopup();
             }
