@@ -27,7 +27,9 @@
 
 #include <cardinal/console/console.hpp>
 #include <cardinal/core/log.hpp>
+#include <cardinal/core/fstream.hpp>
 
+#include <cstdio>     // std::remove (temp-file cleanup)
 #include <string>
 #include <vector>
 
@@ -484,6 +486,65 @@ void test_output() {
 
 }  // namespace
 
+// Settings persistence: save every cvar to a file, wipe the live state, then
+// load it back — the round-trip that backs the Studio settings file. Also
+// pins exec_file's comment/blank skipping (the UE5-style config-is-a-script
+// model).
+void test_persistence() {
+    reg().clear();
+
+    bool        vb = false;
+    cardinal::i64 vi = 0;
+    double      vf = 0.0;
+    std::string vs;
+
+    cc::CVar cb; cb.name = "t.flag"; cb.type = cc::CVarType::Bool;
+    cb.get_bool = [&] { return vb; }; cb.set_bool = [&](bool b) { vb = b; };
+    reg().register_cvar(std::move(cb));
+
+    cc::CVar ci; ci.name = "t.count"; ci.type = cc::CVarType::Int; ci.min = 0; ci.max = 1000;
+    ci.get_int = [&] { return vi; }; ci.set_int = [&](cardinal::i64 v) { vi = v; };
+    reg().register_cvar(std::move(ci));
+
+    cc::CVar cf; cf.name = "t.scale"; cf.type = cc::CVarType::Float; cf.min = 0.0; cf.max = 10.0;
+    cf.get_float = [&] { return vf; }; cf.set_float = [&](double v) { vf = v; };
+    reg().register_cvar(std::move(cf));
+
+    cc::CVar cs; cs.name = "t.name"; cs.type = cc::CVarType::String;
+    cs.get_string = [&] { return cardinal::string(vs); };
+    cs.set_string = [&](const cardinal::string& s) { vs = s; };
+    reg().register_cvar(std::move(cs));
+
+    // Non-default values, incl. a multi-word string (exercises set_string rejoin).
+    vb = true; vi = 742; vf = 3.5; vs = "hello world cfg";
+
+    const cardinal::string path = "./.cardinal_settings_test.cfg";
+    CHECK(reg().save_cvars(path) == 4);
+
+    // Wipe live state, then reload from the file.
+    vb = false; vi = 0; vf = 0.0; vs.clear();
+    CHECK(reg().load_cvars(path) == 4);
+
+    CHECK(vb == true);
+    CHECK(vi == 742);
+    CHECK(ap_d(vf, 3.5));
+    CHECK(vs == "hello world cfg");                 // multi-word string round-tripped
+
+    // exec_file skips '#'/';' comments + blank lines; only real lines resolve.
+    {
+        cardinal::ofstream w("./.cardinal_cfg2.cfg");
+        w << "# comment\n\n; also a comment\nt.count 99\n";
+    }
+    cc::Output sink{[](const cardinal::string&) {}};
+    vi = 0;
+    CHECK(reg().exec_file("./.cardinal_cfg2.cfg", sink) == 1);
+    CHECK(vi == 99);
+
+    std::remove(path.c_str());
+    std::remove("./.cardinal_cfg2.cfg");
+    reg().clear();
+}
+
 int main() {
     test_register();
     test_listing_sorted();
@@ -495,6 +556,7 @@ int main() {
     test_builtins();
     test_unknown_empty();
     test_output();
+    test_persistence();
 
     if (g_fail == 0) {
         cardinal::log::infof("contest", "OK  %d checks passed", g_checks);

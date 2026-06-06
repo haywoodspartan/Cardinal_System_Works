@@ -159,6 +159,25 @@ public:
     // can fall through to a scripting engine.
     bool execute(const cardinal::string& input, Output& out);
 
+    // ----- Persistence / config files (UE5-style) -----
+    //
+    // A settings file IS just a list of console lines, so persistence reuses
+    // the exact parse + clamp path as live input.
+    //
+    //   save_cvars(path)      Write every cvar as a `name value` line (the
+    //                         same form execute() reads back). Returns the
+    //                         count written, or 0 if the file couldn't open.
+    //   exec_file(path, out)  Replay a config / script file: each non-blank,
+    //                         non-comment line ('#' or ';' starts a comment)
+    //                         through execute(), routing output to `out`.
+    //                         Powers an `exec <file>` command + autoexec.
+    //                         Returns the count of lines that resolved.
+    //   load_cvars(path)      exec_file with output discarded — the quiet
+    //                         "apply saved settings at startup" path.
+    cardinal::usize save_cvars(const cardinal::string& path) const;
+    cardinal::usize exec_file (const cardinal::string& path, Output& out);
+    cardinal::usize load_cvars(const cardinal::string& path);
+
 private:
     Registry() = default;
     ~Registry() = default;

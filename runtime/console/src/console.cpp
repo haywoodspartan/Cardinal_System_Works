@@ -10,6 +10,7 @@
 #include <cardinal/core/cstdio.hpp>      // cardinal::vsnprintf
 #include <cardinal/core/cstdlib.hpp>     // cardinal::strtoll/strtod
 #include <cardinal/core/cstring.hpp>
+#include <cardinal/core/fstream.hpp>     // cardinal::ofstream/ifstream (save/load)
 
 namespace cardinal::console {
 
@@ -348,6 +349,81 @@ bool Registry::execute(const cardinal::string& input, Output& out) {
 
     // Unknown — let the caller fall through to a scripting engine.
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// Persistence / config files — a settings file is just a list of console
+// lines, so save/load reuse execute()'s parse + clamp path verbatim.
+// ---------------------------------------------------------------------------
+cardinal::usize Registry::save_cvars(const cardinal::string& path) const {
+    cardinal::ofstream f(path, cardinal::ios::out | cardinal::ios::trunc);
+    if (!f) return 0;
+    f << "# Cardinal settings - `cvar value` per line; re-applied at startup.\n";
+    cardinal::usize n = 0;
+    char buf[64];
+    for (const CVar* cv : all_cvars()) {
+        if (cv == nullptr) continue;
+        f << cv->name << ' ';
+        switch (cv->type) {
+            case CVarType::Bool:
+                f << ((cv->get_bool && cv->get_bool()) ? '1' : '0');
+                break;
+            case CVarType::Int:
+                cardinal::snprintf(buf, sizeof(buf), "%lld",
+                    static_cast<long long>(cv->get_int ? cv->get_int() : 0));
+                f << buf;
+                break;
+            case CVarType::Float:
+                // %.17g round-trips an IEEE-754 double exactly.
+                cardinal::snprintf(buf, sizeof(buf), "%.17g",
+                    cv->get_float ? cv->get_float() : 0.0);
+                f << buf;
+                break;
+            case CVarType::String:
+                f << (cv->get_string ? cv->get_string() : cardinal::string{});
+                break;
+        }
+        f << '\n';
+        ++n;
+    }
+    return n;
+}
+
+cardinal::usize Registry::exec_file(const cardinal::string& path, Output& out) {
+    cardinal::ifstream f(path, cardinal::ios::in | cardinal::ios::binary);
+    if (!f) return 0;
+    f.seekg(0, cardinal::ios::end);
+    const auto len = f.tellg();
+    if (len <= 0) return 0;                       // empty or unseekable
+    cardinal::string content(static_cast<cardinal::usize>(len), '\0');
+    f.seekg(0, cardinal::ios::beg);
+    f.read(content.data(), len);
+
+    cardinal::usize n = 0;
+    cardinal::usize start = 0;
+    while (start <= content.size()) {
+        const cardinal::usize nl  = content.find('\n', start);
+        const cardinal::usize end = (nl == cardinal::string::npos) ? content.size() : nl;
+        cardinal::string line = content.substr(start, end - start);
+        // Trim trailing CR/space/tab (CRLF files) + leading whitespace.
+        while (!line.empty() &&
+               (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
+            line.pop_back();
+        cardinal::usize lead = 0;
+        while (lead < line.size() && (line[lead] == ' ' || line[lead] == '\t')) ++lead;
+        if (lead > 0) line.erase(0, lead);
+        if (!line.empty() && line[0] != '#' && line[0] != ';') {
+            if (execute(line, out)) ++n;
+        }
+        if (nl == cardinal::string::npos) break;
+        start = nl + 1;
+    }
+    return n;
+}
+
+cardinal::usize Registry::load_cvars(const cardinal::string& path) {
+    Output discard{[](const cardinal::string&) {}};   // quiet apply-at-startup
+    return exec_file(path, discard);
 }
 
 }  // namespace cardinal::console
