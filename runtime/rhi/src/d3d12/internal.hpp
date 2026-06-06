@@ -392,6 +392,12 @@ public:
     void end_shadow_pass() override;
     void bind_sampled_texture(u32 slot, Texture* tex) override;
 
+    // GPU debug-marker regions (PIX / RenderDoc / Nsight). Implemented in
+    // commands.cpp via ID3D12GraphicsCommandList::BeginEvent/EndEvent/SetMarker.
+    void begin_event(const char* name) override;
+    void end_event() override;
+    void insert_marker(const char* name) override;
+
     // Interop accessors.
     IDXGISwapChain3*           swap_chain()       const noexcept { return swap_.Get(); }
     DXGI_FORMAT                back_buffer_format() const noexcept { return DXGI_FORMAT_B8G8R8A8_UNORM; }

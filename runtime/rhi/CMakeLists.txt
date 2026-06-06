@@ -25,8 +25,12 @@ set(CARDINAL_RHI_SOURCES
                                  # + d3d12_interop functions + non-Windows
                                  # fallback (only TU that defines the symbol
                                  # when CARDINAL_PLATFORM_WINDOWS is 0)
-    src/d3d12/swapchain.cpp      # D3D12Swapchain methods + Reflex/NvAPI
-                                 # integration + per-viewport RTT mgmt
+    src/d3d12/swapchain.cpp      # D3D12Swapchain core: init / present /
+                                 # resize / per-viewport RTT management
+    src/d3d12/reflex.cpp         # D3D12Swapchain Reflex (NvAPI) integration
+    src/d3d12/commands.cpp       # D3D12Swapchain command-recording surface:
+                                 # bind / draw / push / shadow pass + GPU
+                                 # debug-marker regions (PIX / RenderDoc)
 )
 
 add_library(cardinal_rhi STATIC ${CARDINAL_RHI_SOURCES} ${CARDINAL_RHI_HEADERS})

@@ -1209,6 +1209,7 @@ public:
                                                  scene.camera().target,
                                                  32.0f, 0.05f, 200.0f,
                                                  kShadowDim);
+                swapchain_->begin_event("Shadow Pass (sun depth)");
                 swapchain_->begin_shadow_pass(shadow_tex_.get());
                 swapchain_->bind_pipeline(pso_shadow_.get());
                 swapchain_->bind_vertex_buffer(slot.buffer.get(), 0);
@@ -1224,6 +1225,7 @@ public:
                                      1, static_cast<u32>(w.out_offset), 0);
                 }
                 swapchain_->end_shadow_pass();
+                swapchain_->end_event();
                 shadow_ready_ = true;
             } else {
                 shadow_ready_ = false;
@@ -1233,6 +1235,8 @@ public:
         }
 
         rhi::Pipeline* pso = (mode == ViewMode::Wireframe) ? pso_wire_.get() : pso_solid_.get();
+        swapchain_->begin_event(mode == ViewMode::Wireframe ? "Main Pass (wire)"
+                                                            : "Main Pass (forward shade)");
         swapchain_->bind_pipeline(pso);
         swapchain_->bind_vertex_buffer(slot.buffer.get(), 0);
 
@@ -1449,6 +1453,7 @@ public:
                              1, static_cast<u32>(w.out_offset), 0);
             ++stats_.draw_calls;
         }
+        swapchain_->end_event();   // Main Pass
 
         // ---------------------------------------------------------------
         // Gizmo pass — wireframe AABBs + camera frustum overlay.
