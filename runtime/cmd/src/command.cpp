@@ -5,6 +5,7 @@
 
 #include <cardinal/scene/math.hpp>     // unproject_ndc_ray, ray_plane_y_intersect
 #include <cardinal/level/level.hpp>    // AssetPlacement, PlaceResult
+#include <cardinal/actor/world.hpp>    // World (actor/layout commands)
 #include <cardinal/core/cmath.hpp>     // cardinal::round
 #include <cardinal/core/algorithm.hpp> // cardinal::sort
 #include <cardinal/core/utility.hpp>   // cardinal::move
@@ -80,6 +81,75 @@ void register_builtin_commands(CommandRegistry& reg) {
         return { true, {} };
     };
     reg.add(cardinal::move(place));
+
+    // ---- actor / layout commands (pure World ops — headless-testable) ----
+    // These act on ctx.world + ctx.selection, so the same operation the
+    // Outliner/menu invokes is unit-testable without the GUI.
+    {
+        Command c;
+        c.id = "actor.duplicate"; c.label = "Duplicate Selected";
+        c.run = [](CommandContext& ctx) -> CommandResult {
+            if (ctx.world == nullptr)     return { false, "no world" };
+            if (ctx.selection.empty())    return { false, "empty selection" };
+            cardinal::u32 n = 0, last = 0;
+            for (const auto id : ctx.selection)
+                if (auto* d = ctx.world->duplicate(id)) { last = d->id(); ++n; }
+            ctx.result_count = n;
+            ctx.result_actor = last;
+            return n ? CommandResult{ true, {} }
+                     : CommandResult{ false, "nothing duplicated" };
+        };
+        reg.add(cardinal::move(c));
+    }
+    {
+        Command c;
+        c.id = "actor.delete"; c.label = "Delete Selected";
+        c.run = [](CommandContext& ctx) -> CommandResult {
+            if (ctx.world == nullptr) return { false, "no world" };
+            ctx.result_count = ctx.world->bulk_destroy(ctx.selection);
+            return ctx.result_count ? CommandResult{ true, {} }
+                                    : CommandResult{ false, "nothing deleted" };
+        };
+        reg.add(cardinal::move(c));
+    }
+    {
+        Command c;
+        c.id = "layout.align"; c.label = "Align Selected";
+        c.run = [](CommandContext& ctx) -> CommandResult {
+            if (ctx.world == nullptr) return { false, "no world" };
+            using Ax = cardinal::actor::World::Axis;
+            using Md = cardinal::actor::World::AlignMode;
+            const Ax ax = (ctx.axis == 2) ? Ax::Z : (ctx.axis == 1) ? Ax::Y : Ax::X;
+            const Md md = (ctx.align_mode == 0) ? Md::Min
+                        : (ctx.align_mode == 2) ? Md::Max : Md::Center;
+            ctx.result_count = ctx.world->align_actors(ctx.selection, ax, md);
+            return { true, {} };
+        };
+        reg.add(cardinal::move(c));
+    }
+    {
+        Command c;
+        c.id = "layout.distribute"; c.label = "Distribute Selected";
+        c.run = [](CommandContext& ctx) -> CommandResult {
+            if (ctx.world == nullptr) return { false, "no world" };
+            using Ax = cardinal::actor::World::Axis;
+            const Ax ax = (ctx.axis == 2) ? Ax::Z : (ctx.axis == 1) ? Ax::Y : Ax::X;
+            ctx.result_count = ctx.world->distribute_actors(ctx.selection, ax);
+            return { true, {} };
+        };
+        reg.add(cardinal::move(c));
+    }
+    {
+        Command c;
+        c.id = "layout.snap"; c.label = "Snap Selected to Grid";
+        c.run = [](CommandContext& ctx) -> CommandResult {
+            if (ctx.world == nullptr) return { false, "no world" };
+            ctx.result_count =
+                ctx.world->snap_actors_to_grid(ctx.selection, ctx.grid_step);
+            return { true, {} };
+        };
+        reg.add(cardinal::move(c));
+    }
 }
 
 }  // namespace cardinal::cmd

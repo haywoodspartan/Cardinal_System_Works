@@ -8,6 +8,7 @@ add_executable(Cardinal_Test_Cmd main.cpp)
 target_link_libraries(Cardinal_Test_Cmd PRIVATE
     cardinal::cmd
     cardinal::scene
+    cardinal::actor
     cardinal::core
     cardinal::compile_flags)
 set_target_properties(Cardinal_Test_Cmd PROPERTIES FOLDER tests)

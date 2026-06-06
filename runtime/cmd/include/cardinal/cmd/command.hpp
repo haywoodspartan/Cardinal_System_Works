@@ -59,9 +59,16 @@ struct CommandContext {
     bool             snap_enabled{false};
     float            snap_step{0.0f};
 
+    // Selection + layout inputs (actor.* / layout.* commands act on these).
+    cardinal::vector<cardinal::u32> selection;   // selected actor ids
+    int   axis{0};         // 0=X 1=Y 2=Z   (layout.align / layout.distribute)
+    int   align_mode{1};   // 0=Min 1=Center 2=Max (layout.align)
+    float grid_step{1.0f}; // layout.snap
+
     // Outputs a command may fill.
     cardinal::u32        result_actor{0};
     cardinal::u32        result_entity{0};
+    cardinal::u32        result_count{0};   // # affected (bulk/layout ops)
     cardinal::core::Vec3 result_hit{0.0f, 0.0f, 0.0f};
 };
 

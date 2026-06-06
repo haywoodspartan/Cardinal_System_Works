@@ -3,6 +3,7 @@
 // =============================================================================
 #include <cardinal/cmd/command.hpp>
 #include <cardinal/scene/math.hpp>
+#include <cardinal/actor/world.hpp>
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/utility.hpp>   // cardinal::move
 
@@ -93,6 +94,53 @@ int main() {
     CHECK(!reg.dispatch("world.place_asset", pctx).ok);           // no placement bound
     pctx.active_asset_id.clear();
     CHECK(!reg.dispatch("world.place_asset", pctx).ok);           // no asset
+
+    // ---- actor / layout commands act on a real World, HEADLESS ----------
+    namespace ac = cardinal::actor;
+    ac::World w;
+    auto* a = w.spawn("A"); a->get_component<ac::TransformComponent>()->translation = { 0, 1, 0 };
+    auto* b = w.spawn("B"); b->get_component<ac::TransformComponent>()->translation = { 4, 5, 0 };
+    auto* c = w.spawn("C"); c->get_component<ac::TransformComponent>()->translation = { 10, 9, 0 };
+    cc::CommandContext wx{};
+    wx.world = &w;
+    wx.selection = { a->id(), b->id(), c->id() };
+
+    // builtins include the new commands.
+    CHECK(reg.has("actor.duplicate") && reg.has("actor.delete"));
+    CHECK(reg.has("layout.align") && reg.has("layout.distribute") && reg.has("layout.snap"));
+
+    // duplicate the 3 selected -> 3 new actors.
+    const cardinal::usize before = w.actor_count();
+    CHECK(reg.dispatch("actor.duplicate", wx).ok);
+    CHECK(wx.result_count == 3u);
+    CHECK(w.actor_count() == before + 3u);
+
+    // align the original 3 to their Y-center (min 1, max 9 -> center 5).
+    wx.axis = 1; wx.align_mode = 1;   // Y, Center
+    CHECK(reg.dispatch("layout.align", wx).ok);
+    CHECK(ap(a->get_component<ac::TransformComponent>()->translation.y, 5.0f, 1e-3f));
+    CHECK(ap(c->get_component<ac::TransformComponent>()->translation.y, 5.0f, 1e-3f));
+
+    // distribute along X (endpoints fixed at 0 and 10, middle -> 5).
+    wx.axis = 0;
+    CHECK(reg.dispatch("layout.distribute", wx).ok);
+    CHECK(ap(b->get_component<ac::TransformComponent>()->translation.x, 5.0f, 1e-3f));
+
+    // snap to a grid of 1.0 (already integer here -> unchanged, count == 3).
+    wx.grid_step = 1.0f;
+    CHECK(reg.dispatch("layout.snap", wx).ok);
+    CHECK(wx.result_count == 3u);
+
+    // delete the selection (deferred kill).
+    CHECK(reg.dispatch("actor.delete", wx).ok);
+    CHECK(wx.result_count == 3u);
+    CHECK(!a->alive() && !b->alive() && !c->alive());
+
+    // Graceful failures: no world, empty selection.
+    cc::CommandContext empty{};
+    CHECK(!reg.dispatch("actor.duplicate", empty).ok);   // no world
+    cc::CommandContext nosel{}; nosel.world = &w;
+    CHECK(!reg.dispatch("actor.duplicate", nosel).ok);   // empty selection
 
     if (g_fail == 0) cardinal::log::infof("cmdtest", "OK  %d checks passed", g_checks);
     else             cardinal::log::errorf("cmdtest", "%d/%d checks FAILED", g_fail, g_checks);
