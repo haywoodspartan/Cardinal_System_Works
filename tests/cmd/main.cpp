@@ -142,6 +142,17 @@ int main() {
     cc::CommandContext nosel{}; nosel.world = &w;
     CHECK(!reg.dispatch("actor.duplicate", nosel).ok);   // empty selection
 
+    // ---- world.validate / world.autofix --------------------------------
+    CHECK(reg.has("world.validate") && reg.has("world.autofix"));
+    ac::World vw;
+    vw.spawn("Dup");
+    vw.spawn("Dup");                       // duplicate name -> a validation issue
+    cc::CommandContext vx{}; vx.world = &vw;
+    CHECK(reg.dispatch("world.validate", vx).ok);
+    CHECK(vx.result_count >= 1u);          // at least the shared-name issue
+    CHECK(reg.dispatch("world.autofix", vx).ok);    // runs (result_count = #fixes)
+    CHECK(!reg.dispatch("world.validate", empty).ok);   // no world -> graceful
+
     if (g_fail == 0) cardinal::log::infof("cmdtest", "OK  %d checks passed", g_checks);
     else             cardinal::log::errorf("cmdtest", "%d/%d checks FAILED", g_fail, g_checks);
     return g_fail == 0 ? 0 : 1;

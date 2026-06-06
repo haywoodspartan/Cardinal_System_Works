@@ -5,7 +5,8 @@
 
 #include <cardinal/scene/math.hpp>     // unproject_ndc_ray, ray_plane_y_intersect
 #include <cardinal/level/level.hpp>    // AssetPlacement, PlaceResult
-#include <cardinal/actor/world.hpp>    // World (actor/layout commands)
+#include <cardinal/actor/world.hpp>      // World (actor/layout commands)
+#include <cardinal/actor/validation.hpp> // validate_world / auto_fix_world
 #include <cardinal/core/cmath.hpp>     // cardinal::round
 #include <cardinal/core/algorithm.hpp> // cardinal::sort
 #include <cardinal/core/utility.hpp>   // cardinal::move
@@ -147,6 +148,27 @@ void register_builtin_commands(CommandRegistry& reg) {
             ctx.result_count =
                 ctx.world->snap_actors_to_grid(ctx.selection, ctx.grid_step);
             return { true, {} };
+        };
+        reg.add(cardinal::move(c));
+    }
+    {
+        Command c;
+        c.id = "world.validate"; c.label = "Validate Scene";
+        c.run = [](CommandContext& ctx) -> CommandResult {
+            if (ctx.world == nullptr) return { false, "no world" };
+            const auto issues = cardinal::actor::validate_world(*ctx.world);
+            ctx.result_count = static_cast<cardinal::u32>(issues.size());
+            return { true, {} };   // ok regardless; result_count = # issues
+        };
+        reg.add(cardinal::move(c));
+    }
+    {
+        Command c;
+        c.id = "world.autofix"; c.label = "Auto-Fix Scene Issues";
+        c.run = [](CommandContext& ctx) -> CommandResult {
+            if (ctx.world == nullptr) return { false, "no world" };
+            ctx.result_count = cardinal::actor::auto_fix_world(*ctx.world);
+            return { true, {} };   // result_count = # fixes applied
         };
         reg.add(cardinal::move(c));
     }

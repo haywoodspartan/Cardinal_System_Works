@@ -615,6 +615,7 @@ int main(int argc, char** argv) {
     bool show_game      = true;
     bool show_classes   = true;
     bool show_sky       = true;
+    bool show_cmd_palette = false;   // Ctrl+P — unified command-bus palette
     bool show_input     = false;
     bool show_save_load = false;
     bool show_particles = false;
@@ -2224,7 +2225,59 @@ int main(int argc, char** argv) {
                 if (z && io.KeyShift)      { undo.redo(); }
                 else if (z)                { undo.undo(); }
                 else if (y)                { undo.redo(); }
+                if (ImGui::IsKeyPressed(ImGuiKey_P, false))
+                    show_cmd_palette = !show_cmd_palette;          // Ctrl+P
             }
+        }
+
+        // ---- Command palette (Ctrl+P) — the unified command bus surfaced as
+        // a searchable list. EVERY registered command is reachable + callable
+        // here through the one registry, with a host-built CommandContext
+        // (actor world + scene + placement + current selection). Commands that
+        // need inputs the palette can't supply (e.g. a viewport click for
+        // world.place_asset) fail gracefully with a message rather than crash.
+        if (show_cmd_palette) {
+            ImGui::SetNextWindowSize(ImVec2(440, 380), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("Command Palette", &show_cmd_palette)) {
+                static char cmd_filter[64] = "";
+                ImGui::SetNextItemWidth(-1.0f);
+                ImGui::InputTextWithHint("##cmdfilter", "filter commands…",
+                                         cmd_filter, sizeof(cmd_filter));
+                ImGui::TextDisabled("context: %s selected · %zu commands",
+                                    selected_actor_id ? "1 actor" : "no",
+                                    commands.ids().size());
+                ImGui::Separator();
+                auto lower = [](cardinal::string s) {
+                    for (auto& ch : s)
+                        if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+                    return s;
+                };
+                const cardinal::string flt = lower(cmd_filter);
+                for (const auto& id : commands.ids()) {
+                    const auto* c = commands.find(id);
+                    const cardinal::string label = c ? c->label : id;
+                    if (!flt.empty() &&
+                        lower(id).find(flt) == cardinal::string::npos &&
+                        lower(label).find(flt) == cardinal::string::npos)
+                        continue;
+                    const cardinal::string row = label + "   (" + id + ")";
+                    if (ImGui::Selectable(row.c_str())) {
+                        cardinal::cmd::CommandContext cx{};
+                        cx.world     = &aworld;
+                        cx.scene     = &scene;
+                        cx.placement = placement.get();
+                        cx.device    = device.get();
+                        if (selected_actor_id != 0)
+                            cx.selection = { selected_actor_id };
+                        const auto r = commands.dispatch(id, cx);
+                        clog::infof("palette", "%s -> %s (%s) [n=%u]",
+                            id.c_str(), r.ok ? "ok" : "FAIL",
+                            r.message.empty() ? "-" : r.message.c_str(),
+                            cx.result_count);
+                    }
+                }
+            }
+            ImGui::End();
         }
 
         // Terrain Grid spawn modal — opens on Create→Terrain Grid…, executes
