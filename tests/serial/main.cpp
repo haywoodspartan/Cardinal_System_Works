@@ -388,6 +388,55 @@ void test_group_prefab_roundtrip(const std::filesystem::path& dir) {
     }
 }
 
+// ---- group prefab round-trip: adversarial-review regression cases ------
+// (1) member name containing "rel" must NOT zero the offset; (2) large/
+// precise offsets must round-trip (%.6f, not %.6g); (3) a long member name
+// must not truncate the header / drop the brace.
+void test_group_prefab_review_fixes(const std::filesystem::path& dir) {
+    namespace ac = cardinal::actor;
+    const cardinal::string path = (dir / "lib_groups_rev.cardinalprefab").string();
+    const cardinal::string long_name(140, 'M');   // exceeds the old 160B header
+
+    {
+        ac::World w;
+        ac::Actor* anchor = w.spawn("anchor");      // group anchor at origin
+        anchor->get_component<ac::TransformComponent>()->translation = { 0, 0, 0 };
+        // member whose NAME contains the substring "rel" — the old loader
+        // matched "rel" inside the name and zeroed the offset.
+        ac::Actor* barrel = w.spawn("barrel");
+        barrel->get_component<ac::TransformComponent>()->translation = { 1234.5f, 0.0f, 0.0f };
+        // member with a LARGE precise offset — %.6g would have lost precision.
+        ac::Actor* far = w.spawn("far");
+        far->get_component<ac::TransformComponent>()->translation = { 0.0f, 98765.4f, 0.0f };
+        // member with a very long name — old fixed buffer would truncate.
+        ac::Actor* longa = w.spawn(long_name);
+        longa->get_component<ac::TransformComponent>()->translation = { 0.0f, 0.0f, 7.0f };
+        longa->add_component<ac::MeshComponent>()->asset_id = "longmesh";
+
+        CHECK(w.create_group_prefab("G",
+            { anchor->id(), barrel->id(), far->id(), longa->id() }));
+        CHECK(ser::save_prefabs(w, path).prefabs_written == 1u);
+    }
+    {
+        ac::World w2;
+        ser::load_prefabs(w2, path);
+        CHECK(w2.group_prefab_member_count("G") == 4u);
+        auto inst = w2.spawn_group_prefab("G", { 0.0f, 0.0f, 0.0f });
+        CHECK(inst.size() == sz(4));
+        // member[1] = "barrel" — offset PRESERVED (not zeroed by the name match)
+        CHECK(approx(inst[1]->get_component<ac::TransformComponent>()->translation.x,
+                     1234.5f, 1e-2f));
+        // member[2] = "far" — large offset round-trips to full precision
+        CHECK(approx(inst[2]->get_component<ac::TransformComponent>()->translation.y,
+                     98765.4f, 0.5f));
+        // member[3] = long name — block intact, name + component survived
+        CHECK(inst[3]->name() == long_name);
+        CHECK(inst[3]->get_component<ac::MeshComponent>() != nullptr);
+        CHECK(approx(inst[3]->get_component<ac::TransformComponent>()->translation.z,
+                     7.0f, 1e-3f));
+    }
+}
+
 // ---- world load: unknown component block must not truncate the actor
 // Forward-compat: a save written by a newer build can contain a component
 // type this build doesn't know. The loader must SKIP the unknown block's
@@ -597,6 +646,7 @@ int main() {
     test_sky_failures(dir);
     test_prefab_roundtrip(dir);
     test_group_prefab_roundtrip(dir);
+    test_group_prefab_review_fixes(dir);
     test_world_full_components(dir);
     test_world_load_unknown_component();
     test_play_snapshot_restore(dir);

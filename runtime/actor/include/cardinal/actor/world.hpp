@@ -68,8 +68,10 @@ public:
 
     // Array tool — stamp `count` copies of an actor in a line, each offset
     // by `step` from the previous (copy i lands at source + step*i). Every
-    // copy is a full clone (unique name, components, prefab link, enabled),
-    // so a configured prop becomes a row in one action. The source is
+    // copy is a full clone (components, prefab link, enabled) named
+    // "<base> (copy N)". Names are sequential, NOT collision-checked against
+    // existing actors (the world keys by id, not name; run auto-fix if you
+    // need unique names) — so stamping twice can repeat a name. The source is
     // unchanged; returns the created copies (empty if src unknown / count 0).
     cardinal::vector<Actor*> array_actor(ActorId src, u32 count,
                                          const cardinal::scene::Vec3& step);

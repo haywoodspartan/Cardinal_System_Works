@@ -160,17 +160,22 @@ cardinal::vector<Actor*> World::array_grid(ActorId src_id, u32 nx, u32 ny, u32 n
     if (nx == 0) nx = 1;
     if (ny == 0) ny = 1;
     if (nz == 0) nz = 1;
-    // Bound the product up front so the triple loop can't generate a
-    // gigantic offset list (stamp_copies_ clamps the spawn count too).
+    // Bound the product up front so the triple loop can't generate a gigantic
+    // offset list (stamp_copies_ clamps the spawn count too).
     constexpr u32 kMaxCells = 4097u;            // 4096 copies + the origin cell
-    if (static_cast<cardinal::u64>(nx) * ny * nz > kMaxCells) {
-        // Shrink the largest axis until the product fits (keeps a usable grid).
-        while (static_cast<cardinal::u64>(nx) * ny * nz > kMaxCells) {
-            if (nx >= ny && nx >= nz && nx > 1) --nx;
-            else if (ny >= nz && ny > 1)        --ny;
-            else if (nz > 1)                    --nz;
-            else break;
-        }
+    // Per-axis clamp FIRST: nx*ny*nz of three u32 can overflow u64 and wrap to
+    // a small value, sneaking past the product check below. A single axis can
+    // never need to exceed kMaxCells, so clamping each keeps the product
+    // computable without overflow (kMaxCells^3 fits easily in u64).
+    if (nx > kMaxCells) nx = kMaxCells;
+    if (ny > kMaxCells) ny = kMaxCells;
+    if (nz > kMaxCells) nz = kMaxCells;
+    // Shrink the largest axis until the (now overflow-safe) product fits.
+    while (static_cast<cardinal::u64>(nx) * ny * nz > kMaxCells) {
+        if (nx >= ny && nx >= nz && nx > 1) --nx;
+        else if (ny >= nz && ny > 1)        --ny;
+        else if (nz > 1)                    --nz;
+        else break;
     }
     // Lattice offsets, skipping (0,0,0) — that cell is the source itself.
     cardinal::vector<cardinal::scene::Vec3> offsets;

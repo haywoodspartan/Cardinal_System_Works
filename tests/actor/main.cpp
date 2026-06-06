@@ -1538,6 +1538,12 @@ void test_array_grid() {
     auto huge = big.array_grid(b->id(), 100, 100, 100, { 1, 1, 1 });
     CHECK(huge.size() <= sz(4096));          // clamped
     CHECK(big.actor_count() <= sz(4097));
+
+    // Overflow-safe: dims whose u64 product wraps below the cell guard
+    // (2^30 * 2^30 * 16 == 2^64 == 0 mod 2^64) must STILL clamp, not run
+    // away (the per-axis clamp catches it before the product is computed).
+    auto ovf = big.array_grid(b->id(), 0x40000000u, 0x40000000u, 16u, { 1, 1, 1 });
+    CHECK(ovf.size() <= sz(4096));
 }
 
 // ---- component serialization (round-trip via factory) -------------

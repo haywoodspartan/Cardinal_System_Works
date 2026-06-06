@@ -560,12 +560,16 @@ PrefabSaveStats save_prefabs(const cardinal::actor::World& world,
             const cardinal::actor::Actor* mp = world.group_member_proto(gname, mi);
             if (mp == nullptr) continue;
             const cardinal::scene::Vec3 rel = world.group_member_rel(gname, mi);
-            char hdr[160];
-            cardinal::snprintf(hdr, sizeof(hdr),
-                "  member \"%s\" rel %.6g %.6g %.6g {\n",
-                mp->name().c_str(), static_cast<double>(rel.x),
-                static_cast<double>(rel.y), static_cast<double>(rel.z));
-            out += hdr;
+            // Concatenate the (unbounded) name like the prefab/group headers —
+            // a fixed buffer could truncate a long name and drop the trailing
+            // " {", corrupting block structure. Only the 3 floats go through a
+            // small fixed buffer. %.6f (not %.6g) to match every other position
+            // in this format, so larger offsets round-trip to full precision.
+            char rels[96];
+            cardinal::snprintf(rels, sizeof(rels), " rel %.6f %.6f %.6f {\n",
+                static_cast<double>(rel.x), static_cast<double>(rel.y),
+                static_cast<double>(rel.z));
+            out += "  member \""; out += mp->name(); out += "\""; out += rels;
             s.components_written += emit_proto_components_(out, *mp, "    ");
             out += "  }\n";
         }
@@ -669,7 +673,12 @@ PrefabLoadStats load_prefabs(cardinal::actor::World& world,
 
         // prefab "Name" {
         if (line.compare(i, 7, "prefab ") == 0) {
-            finish_prefab();   // safety: close any unterminated prior block
+            if (in_member) finish_member();   // safety: close unterminated member
+            finish_prefab();                  // safety: close prior block
+            // A top-level prefab can't be inside a group — clear any group
+            // state leaked by a brace-truncated/malformed prior group, so its
+            // close brace isn't mis-routed to close THIS prefab.
+            in_group = false; cur_group_name.clear();
             cur_prefab_name = extract_quoted(line, i);
             proto = cardinal::make_unique<cardinal::actor::Actor>(0u, cur_prefab_name);
             if (replace_existing && world.has_prefab(cur_prefab_name)) {
@@ -680,9 +689,11 @@ PrefabLoadStats load_prefabs(cardinal::actor::World& world,
 
         // group "Name" {  — opens a multi-actor group block.
         if (line.compare(i, 6, "group ") == 0) {
+            if (in_member) finish_member();   // safety
             finish_prefab();
             cur_group_name = extract_quoted(line, i);
-            in_group = true;
+            in_group  = true;
+            in_member = false;
             if (replace_existing && world.has_group_prefab(cur_group_name)) {
                 world.remove_group_prefab(cur_group_name);
             }
@@ -692,16 +703,25 @@ PrefabLoadStats load_prefabs(cardinal::actor::World& world,
         // member "Name" rel x y z {  — one actor inside the current group.
         if (in_group && line.compare(i, 7, "member ") == 0) {
             finish_member();   // safety: close any unterminated prior member
-            const cardinal::string mname = extract_quoted(line, i);
-            proto = cardinal::make_unique<cardinal::actor::Actor>(0u, mname);
             in_member = true;
-            // Parse "rel x y z" after the closing quote.
             cur_member_rel = {0, 0, 0};
-            const auto rel = line.find("rel", i);
-            if (rel != cardinal::string::npos) {
-                float x = 0, y = 0, z = 0;
-                cardinal::sscanf(line.c_str() + rel + 3, " %f %f %f", &x, &y, &z);
-                cur_member_rel = { x, y, z };
+            // The name is the first quoted token; the rel triplet follows the
+            // name's CLOSING quote. Anchor the "rel" search there — searching
+            // from `i` would match "rel" INSIDE a member name like "barrel".
+            const auto q1 = line.find('"', i);
+            const auto q2 = (q1 == cardinal::string::npos)
+                          ? cardinal::string::npos : line.find('"', q1 + 1);
+            const cardinal::string mname =
+                (q1 != cardinal::string::npos && q2 != cardinal::string::npos)
+                ? line.substr(q1 + 1, q2 - q1 - 1) : cardinal::string{};
+            proto = cardinal::make_unique<cardinal::actor::Actor>(0u, mname);
+            if (q2 != cardinal::string::npos) {
+                const auto rel = line.find("rel", q2 + 1);
+                if (rel != cardinal::string::npos) {
+                    float x = 0, y = 0, z = 0;
+                    cardinal::sscanf(line.c_str() + rel + 3, " %f %f %f", &x, &y, &z);
+                    cur_member_rel = { x, y, z };
+                }
             }
             continue;
         }
