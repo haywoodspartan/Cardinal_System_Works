@@ -27,6 +27,10 @@ namespace cardinal::scene   { class Scene; }
 namespace cardinal::world   { class WorldGrid; class WorldStreamer; }
 namespace cardinal::ui        { class Studio; }
 namespace cardinal::cppscript { class Engine; }
+namespace cardinal::cmd     { class CommandRegistry; }
+namespace cardinal::actor   { class World; }
+namespace cardinal::level   { class AssetPlacement; }
+namespace cardinal::edit    { class UndoStack; }
 
 namespace sample_studio {
 
@@ -64,8 +68,18 @@ struct ConsoleSetupContext {
     // Mutable host-side editor state. The console reads + writes these.
     std::vector<ViewportSlot>*          viewports{nullptr};
     int*                                next_viewport_serial{nullptr};
-    cardinal::u32*                      selected_id{nullptr};
+    cardinal::u32*                      selected_id{nullptr};         // scene entity id
     bool*                               want_quit{nullptr};
+
+    // Command bus — lets `cmd <id>` dispatch any registered editor command
+    // from the console (the framework made callable from scripts, not just
+    // clicks). The actor world + placement + undo + actor selection let the
+    // bridge build a CommandContext mirroring the palette's.
+    cardinal::cmd::CommandRegistry*     commands{nullptr};
+    cardinal::actor::World*             aworld{nullptr};
+    cardinal::level::AssetPlacement*    placement{nullptr};
+    cardinal::edit::UndoStack*          undo{nullptr};
+    cardinal::u32*                      selected_actor_id{nullptr};   // actor id
 };
 
 // One-shot: registers every CVar + CCommand the sample exposes through

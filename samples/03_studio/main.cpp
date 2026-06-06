@@ -1524,6 +1524,11 @@ int main(int argc, char** argv) {
         cctx.want_quit            = &want_quit;
         cctx.studio               = studio.get();
         cctx.cppscript            = cppscript_engine.get();
+        cctx.commands             = &commands;
+        cctx.aworld               = &aworld;
+        cctx.placement            = placement.get();
+        cctx.undo                 = &undo;
+        cctx.selected_actor_id    = &selected_actor_id;
         sample_studio::register_engine_console_commands(cctx);
     }
 

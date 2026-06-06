@@ -13,6 +13,7 @@
 // =============================================================================
 #include "sample_types.hpp"
 
+#include <cardinal/cmd/command.hpp>
 #include <cardinal/console/console.hpp>
 #include <cardinal/core/frame_pacer.hpp>
 #include <cardinal/cppscript/cppscript.hpp>
@@ -57,6 +58,11 @@ void register_engine_console_commands(const ConsoleSetupContext& ctx) {
     auto* want_quit            = ctx.want_quit;
     auto* studio               = ctx.studio;
     auto* cppscript            = ctx.cppscript;
+    auto* commands             = ctx.commands;
+    auto* aworld               = ctx.aworld;
+    auto* placement            = ctx.placement;
+    auto* undo                 = ctx.undo;
+    auto* selected_actor_id    = ctx.selected_actor_id;
 
     // Helper used by viewport.add / viewport.count to materialise new slots
     // without duplicating the title formatting.
@@ -189,6 +195,38 @@ void register_engine_console_commands(const ConsoleSetupContext& ctx) {
         [world_streamer](const std::vector<std::string>&, cv::Output& out) {
             world_streamer->evict_all();
             out("evicted; active=%zu", world_streamer->active_count());
+        });
+    // ---- Command bus bridge — dispatch any registered editor command -----
+    // `cmd list` enumerates; `cmd <id>` dispatches with a context mirroring
+    // the Ctrl+P palette (actor world + scene + placement + undo + current
+    // selection). Makes the whole framework scriptable from the console.
+    CARDINAL_CCOMMAND("cmd",
+        "cmd <id> — dispatch an editor command (or `cmd list` to enumerate)",
+        [commands, aworld, scene, placement, undo, selected_id, selected_actor_id]
+        (const std::vector<std::string>& argv, cv::Output& out) {
+            if (commands == nullptr) { out("cmd: no command registry bound"); return; }
+            if (argv.size() < 2 || argv[1] == "list") {
+                for (const auto& id : commands->ids()) {
+                    const auto* c = commands->find(id);
+                    out("  %-26s %s", id.c_str(),
+                        (c && !c->label.empty()) ? c->label.c_str() : "");
+                }
+                return;
+            }
+            const cardinal::string id = argv[1].c_str();
+            cardinal::cmd::CommandContext cx{};
+            cx.world      = aworld;
+            cx.scene      = scene;
+            cx.placement  = placement;
+            cx.scene_undo = undo;
+            if (selected_actor_id && *selected_actor_id != 0)
+                cx.selection = { *selected_actor_id };
+            if (selected_id && *selected_id != 0)
+                cx.scene_selection = { *selected_id };
+            const auto r = commands->dispatch(id, cx);
+            out("cmd %s -> %s%s%s  [n=%u]", id.c_str(), r.ok ? "ok" : "FAIL",
+                r.message.empty() ? "" : ": ",
+                r.message.empty() ? "" : r.message.c_str(), cx.result_count);
         });
     CARDINAL_CCOMMAND("world.stats",
         "Print world-streaming stats",
