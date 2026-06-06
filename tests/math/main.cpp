@@ -298,6 +298,42 @@ void test_ray() {
     CHECK(r.direction.z < 0.0f);          // away from camera, into scene
 }
 
+// The viewport pick must unproject with the SAME aspect the scene was
+// RENDERED with (the committed RTT size), not a different panel aspect.
+// Using a mismatched aspect skews the ray -> the placed object lands at a
+// constant offset from the cursor (the release-build placement bug). This
+// pins the invariant in pure math: matching aspect hits the target point,
+// mismatched aspect misses it by a clear margin.
+void test_unproject_aspect_invariant() {
+    const Vec3 cam{ 0.0f, 0.0f, 5.0f };
+    const Mat4 view = Mat4::look_at(cam, Vec3{0,0,0}, Vec3{0,1,0});
+    const float aspect_render = 16.0f / 9.0f;
+    const Mat4 proj_r = Mat4::perspective(sc::kPi / 3.0f, aspect_render, 0.1f, 100.0f);
+
+    // An OFF-CENTRE world point — aspect only matters away from the centre axis.
+    const Vec3 P{ 1.0f, 0.6f, 0.0f };
+    const Vec4 clip = proj_r * (view * Vec4{ P.x, P.y, P.z, 1.0f });
+    const float ndc_x = clip.x / clip.w;
+    const float ndc_y = clip.y / clip.w;
+
+    // Perpendicular distance from a point to a (unit-direction) ray.
+    auto point_ray_dist = [](const Vec3& pt, const sc::Ray& ray) {
+        const Vec3  w  = pt - ray.origin;
+        const float tt = co::dot(w, ray.direction);
+        const Vec3  cp = ray.origin + ray.direction * tt;
+        return co::length(pt - cp);
+    };
+
+    // MATCHING aspect (render == unproject): the ray passes through P.
+    const sc::Ray ok = sc::unproject_ndc_ray(ndc_x, ndc_y, view, proj_r);
+    CHECK(point_ray_dist(P, ok) < 1e-2f);
+
+    // MISMATCHED aspect (the bug): the ray misses P by a clear margin.
+    const Mat4 proj_w = Mat4::perspective(sc::kPi / 3.0f, 1.0f, 0.1f, 100.0f);
+    const sc::Ray bad = sc::unproject_ndc_ray(ndc_x, ndc_y, view, proj_w);
+    CHECK(point_ray_dist(P, bad) > 0.05f);
+}
+
 }  // namespace
 
 int main() {
@@ -307,6 +343,7 @@ int main() {
     test_mat3();
     test_mat4();
     test_ray();
+    test_unproject_aspect_invariant();
 
     if (g_fail == 0) {
         cardinal::log::infof("mathtest", "OK  %d checks passed", g_checks);

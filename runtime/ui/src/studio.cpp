@@ -1205,13 +1205,30 @@ public:
         if (ImGui::IsItemHovered() && avail.x > 1.0f && avail.y > 1.0f) {
             vp_pick_.hovered = true;
             vp_last_hovered_id_ = viewport_id;
-            // Travel the panel id + its TRUE aspect with the pick so the
-            // host unprojects with a projection matching THIS panel — even
-            // when it's its own OS window with a different aspect than
-            // viewport 0 (was: host hardcoded viewport 0's aspect → ray
-            // skew → object placement offset in detached viewports).
+            // Travel the panel id + the aspect with the pick so the host
+            // unprojects with a projection matching THIS panel.
+            //
+            // CRITICAL: report the aspect the scene was actually RENDERED
+            // with — the swapchain viewport's COMMITTED pixel size — NOT the
+            // live ImGui panel `avail`. The RTT is rendered at the committed
+            // size (proj = committed W/H) and then drawn STRETCHED to fill
+            // `avail`; the host must unproject the click with that same
+            // committed aspect or the ray is skewed and placement lands at a
+            // constant offset from the cursor. The two sizes differ whenever
+            // the deferred/debounced resize (see above) hasn't caught up —
+            // a steady-state gap of up to the 16px commit threshold, and the
+            // gap is frame-rate sensitive (so it surfaced in release but not
+            // debug). Fall back to `avail` only before the RTT exists.
             vp_pick_.viewport_id = viewport_id;
-            vp_pick_.aspect      = avail.x / avail.y;
+            {
+                const u32 cw = (swapchain_ != nullptr)
+                             ? swapchain_->viewport_width(viewport_id)  : 0u;
+                const u32 ch = (swapchain_ != nullptr)
+                             ? swapchain_->viewport_height(viewport_id) : 0u;
+                vp_pick_.aspect = (cw > 0u && ch > 0u)
+                    ? static_cast<float>(cw) / static_cast<float>(ch)
+                    : (avail.x / avail.y);
+            }
             const ImGuiIO& io = ImGui::GetIO();
 
             const bool ctrl_or_shift = io.KeyCtrl || io.KeyShift;
