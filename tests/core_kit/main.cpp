@@ -20,6 +20,7 @@
 #include <cardinal/core/string/string_id.hpp>
 #include <cardinal/core/small_vector.hpp>
 #include <cardinal/core/dense_map.hpp>
+#include <cardinal/core/flags.hpp>
 #include <cardinal/core/containers.hpp>
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/utility.hpp>
@@ -647,6 +648,49 @@ void test_string_id() {
     CHECK(rebuilt == lit);
 }
 
+enum class TestPerm : cardinal::u32 { None = 0, Read = 1, Write = 2, Exec = 4 };
+CARDINAL_ENABLE_FLAGS(TestPerm)
+
+void test_flags() {
+    using F = cardinal::Flags<TestPerm>;
+
+    F f;
+    CHECK(f.none() && !f.any() && !static_cast<bool>(f));
+    CHECK(!f.has(TestPerm::None));               // "None = 0" never reads as present
+
+    f.set(TestPerm::Read);
+    CHECK(f.has(TestPerm::Read) && !f.has(TestPerm::Write));
+    CHECK(f.any() && static_cast<bool>(f) && f.value() == 1u);
+
+    // Enum-level operator| (via CARDINAL_ENABLE_FLAGS) builds a Flags.
+    F rw = TestPerm::Read | TestPerm::Write;
+    CHECK(rw.has(TestPerm::Read) && rw.has(TestPerm::Write) && !rw.has(TestPerm::Exec));
+    CHECK(rw.has_all(TestPerm::Read | TestPerm::Write));
+    CHECK(!rw.has_any(TestPerm::Exec));
+    CHECK(rw.has_any(TestPerm::Read | TestPerm::Exec));      // Read present
+
+    rw.clear(TestPerm::Read);
+    CHECK(!rw.has(TestPerm::Read) && rw.has(TestPerm::Write));
+    rw.toggle(TestPerm::Exec);
+    CHECK(rw.has(TestPerm::Exec));
+    rw.toggle(TestPerm::Exec);
+    CHECK(!rw.has(TestPerm::Exec));
+
+    // Operators: |, &, ^, ~, ==.
+    const F a = TestPerm::Read, b = TestPerm::Write;
+    CHECK((a | b).has_all(TestPerm::Read | TestPerm::Write));
+    CHECK((a & b).none());                        // disjoint single bits
+    CHECK(((a | b) & a) == a);
+    CHECK((a ^ a).none());
+    CHECK((~F()).any());                          // complement of empty has bits set
+    CHECK(a == F(TestPerm::Read) && a != b);
+
+    // Compile-time evaluation.
+    static_assert((TestPerm::Read | TestPerm::Write).has(TestPerm::Read), "ct has");
+    static_assert(F(TestPerm::Exec).value() == 4u, "ct value");
+    static_assert(!F().any(), "ct empty");
+}
+
 void test_dense_map() {
     cardinal::dense_map<int, int> m;
     CHECK(m.empty() && m.size() == 0);
@@ -740,6 +784,7 @@ int main() {
     test_string();
     test_small_vector();
     test_string_id();
+    test_flags();
     test_dense_map();
     test_sync_queue();
     test_dedup_queue();
