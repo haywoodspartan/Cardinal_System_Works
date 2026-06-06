@@ -389,12 +389,12 @@ u32 World::snap_actors_to_grid(const cardinal::vector<ActorId>& ids, float step)
 }
 
 Actor* World::find(ActorId id) {
-    auto it = by_id_.find(id);   // O(1) — was a linear scan over actors_
-    return it == by_id_.end() ? nullptr : it->second;
+    Actor** p = by_id_.find(id);   // O(1) hashed DenseMap probe (flat array)
+    return p ? *p : nullptr;
 }
 const Actor* World::find(ActorId id) const {
-    auto it = by_id_.find(id);
-    return it == by_id_.end() ? nullptr : it->second;
+    Actor* const* p = by_id_.find(id);
+    return p ? *p : nullptr;
 }
 
 Actor* World::find_by_name(const cardinal::string& name) {

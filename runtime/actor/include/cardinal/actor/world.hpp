@@ -20,6 +20,7 @@
 #include <cardinal/core/any.hpp>          // cardinal::any
 #include <cardinal/core/utility.hpp>      // cardinal::move
 #include <cardinal/core/containers.hpp>   // unordered_map/vector
+#include <cardinal/core/dense_map.hpp>    // dense_map (O(1) id index)
 
 namespace cardinal::actor {
 
@@ -321,7 +322,7 @@ private:
     // sweep, matching find()'s "returns dead-but-unswept" contract.) The
     // Actor objects are heap-stable unique_ptr pointees, so these raw
     // pointers survive actors_ reallocation.
-    cardinal::unordered_map<ActorId, Actor*>                 by_id_;
+    cardinal::dense_map<ActorId, Actor*>                     by_id_;
     cardinal::unordered_map<cardinal::string, Blueprint>               blueprints_;
     // Prefab prototypes — detached actors (id 0, never in actors_/never
     // ticked) whose components are the captured snapshot. spawn_prefab
