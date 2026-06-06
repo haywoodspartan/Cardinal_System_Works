@@ -818,6 +818,19 @@ void test_bulk_ops() {
     CHECK(w.find_all_by_tag("enemy").empty());
     CHECK(w.bulk_remove_tag(ids, "enemy") == 0u);                // already gone
 
+    // Bulk add component -> attaches to actors lacking it (dedup), skips
+    // unknown types + already-present. a + b have no Light yet.
+    CHECK(w.bulk_add_component(ids, "Light") == 2u);
+    CHECK(a->has_component<ac::LightComponent>() && b->has_component<ac::LightComponent>());
+    CHECK(w.bulk_add_component(ids, "Light") == 0u);             // already present
+    CHECK(w.bulk_add_component(ids, "Nope")  == 0u);             // unknown type
+    CHECK(w.bulk_add_component(ids, "")      == 0u);             // empty type
+    CHECK(w.find_all_by_component("Light").size() == sz(2));
+    // Bulk remove component -> detaches from actors that have it.
+    CHECK(w.bulk_remove_component(ids, "Light") == 2u);
+    CHECK(!a->has_component<ac::LightComponent>());
+    CHECK(w.bulk_remove_component(ids, "Light") == 0u);          // already gone
+
     // Bulk destroy -> kills listed actors (deferred), counts live kills.
     CHECK(w.bulk_destroy(ids) == 2u);
     CHECK(!a->alive() && !b->alive());

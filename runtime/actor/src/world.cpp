@@ -260,6 +260,36 @@ u32 World::bulk_remove_tag(const cardinal::vector<ActorId>& ids, const cardinal:
     return n;
 }
 
+u32 World::bulk_add_component(const cardinal::vector<ActorId>& ids,
+                             const cardinal::string& type_name) {
+    if (type_name.empty()) return 0;
+    u32 n = 0;
+    for (ActorId id : ids) {
+        Actor* a = find(id);
+        if (a == nullptr) continue;
+        if (a->has_component(type_name.c_str())) continue;   // dedup
+        auto c = make_component_by_name(type_name);
+        if (!c) continue;                                    // unknown type
+        a->adopt_component(cardinal::move(c));
+        ++n;
+    }
+    if (n) ++revision_;
+    return n;
+}
+
+u32 World::bulk_remove_component(const cardinal::vector<ActorId>& ids,
+                                const cardinal::string& type_name) {
+    if (type_name.empty()) return 0;
+    u32 n = 0;
+    for (ActorId id : ids) {
+        Actor* a = find(id);
+        if (a == nullptr) continue;
+        if (a->remove_component(type_name.c_str())) ++n;     // first match
+    }
+    if (n) ++revision_;
+    return n;
+}
+
 // ---- Alignment / distribution -----------------------------------------
 namespace {
 float& axis_ref(cardinal::scene::Vec3& v, World::Axis a) {

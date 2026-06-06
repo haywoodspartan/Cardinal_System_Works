@@ -100,6 +100,15 @@ public:
     u32 bulk_destroy    (const cardinal::vector<ActorId>& ids);
     u32 bulk_add_tag    (const cardinal::vector<ActorId>& ids, const cardinal::string& tag);
     u32 bulk_remove_tag (const cardinal::vector<ActorId>& ids, const cardinal::string& tag);
+    // Component-level bulk edits across a set. add: attach a fresh component
+    // of `type_name` (via make_component_by_name) to each actor that lacks
+    // one — skips actors that already have it (dedup) and an unknown type;
+    // returns how many were added. remove: detach the first component of
+    // `type_name` from each actor that has it; returns how many were removed.
+    // Both bump the revision (undoable) when they change anything. The
+    // "add a RigidBody to everything selected" / "strip all X" tools.
+    u32 bulk_add_component   (const cardinal::vector<ActorId>& ids, const cardinal::string& type_name);
+    u32 bulk_remove_component(const cardinal::vector<ActorId>& ids, const cardinal::string& type_name);
 
     // ---- Alignment / distribution (level layout) ---------------------
     //
