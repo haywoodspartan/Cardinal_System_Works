@@ -2084,13 +2084,23 @@ int main(int argc, char** argv) {
             // single global-aspect set_viewport_camera later in the frame
             // skewed every non-main viewport's overlays; correct docked.
             {
-                const u32   vw_i = sw->viewport_width (static_cast<u32>(i));
-                const u32   vh_i = sw->viewport_height(static_cast<u32>(i));
-                const float aspect_i = (vh_i > 0)
-                    ? static_cast<float>(vw_i) / static_cast<float>(vh_i)
-                    : 1.0f;
-                studio->set_viewport_camera(scene.camera().view(),
-                                            scene.camera().proj(aspect_i));
+                // Feed the overlay/gizmo the EXACT matrices this viewport was
+                // rasterised with this frame (rendered_vp[i], captured at the
+                // render site BEFORE fly_cam.tick) — so the gizmo, the
+                // click-pick (also rendered_vp), and the displayed image all
+                // share one camera. Fall back to a live derive only if this
+                // viewport wasn't rendered this frame.
+                if (i < static_cast<int>(rendered_vp.size()) && rendered_vp[i].valid) {
+                    studio->set_viewport_camera(rendered_vp[i].view, rendered_vp[i].proj);
+                } else {
+                    const u32   vw_i = sw->viewport_width (static_cast<u32>(i));
+                    const u32   vh_i = sw->viewport_height(static_cast<u32>(i));
+                    const float aspect_i = (vh_i > 0)
+                        ? static_cast<float>(vw_i) / static_cast<float>(vh_i)
+                        : 1.0f;
+                    studio->set_viewport_camera(scene.camera().view(),
+                                                scene.camera().proj(aspect_i));
+                }
             }
             studio->draw_viewport_panel(
                 vps.title.c_str(),
