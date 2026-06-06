@@ -19,6 +19,7 @@
 #include <cardinal/core/string/fixed_string.hpp>
 #include <cardinal/core/string/string_id.hpp>
 #include <cardinal/core/small_vector.hpp>
+#include <cardinal/core/dense_map.hpp>
 #include <cardinal/core/containers.hpp>
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/utility.hpp>
@@ -646,6 +647,88 @@ void test_string_id() {
     CHECK(rebuilt == lit);
 }
 
+void test_dense_map() {
+    cardinal::dense_map<int, int> m;
+    CHECK(m.empty() && m.size() == 0);
+
+    // Insert new + duplicate (dup leaves existing value).
+    auto [p1, ins1] = m.insert(1, 100);
+    CHECK(ins1 && *p1 == 100);
+    auto [p2, ins2] = m.insert(1, 999);
+    CHECK(!ins2 && *p2 == 100);
+    CHECK(m.size() == 1);
+
+    // find / contains / operator[].
+    CHECK(m.find(1) != nullptr && *m.find(1) == 100);
+    CHECK(m.find(2) == nullptr);
+    CHECK(m.contains(1) && !m.contains(2));
+    m[2] = 200;
+    CHECK(m.contains(2) && *m.find(2) == 200);
+    CHECK(m[1] == 100);
+    CHECK(m.size() == 2);
+
+    // insert_or_assign overwrites.
+    m.insert_or_assign(1, 111);
+    CHECK(*m.find(1) == 111);
+
+    // erase + re-find + tombstone reuse.
+    CHECK(m.erase(2));
+    CHECK(!m.contains(2));
+    CHECK(!m.erase(2));
+    CHECK(m.size() == 1);
+    m[2] = 222;
+    CHECK(*m.find(2) == 222 && m.size() == 2);
+
+    // Stress: many inserts force multiple rehashes; all stay findable.
+    cardinal::dense_map<int, int> big;
+    const int N = 2000;
+    for (int i = 0; i < N; ++i) big[i] = i * 3;
+    CHECK(big.size() == static_cast<cardinal::usize>(N));
+    bool all_found = true;
+    for (int i = 0; i < N; ++i) {
+        const int* v = big.find(i);
+        if (v == nullptr || *v != i * 3) { all_found = false; break; }
+    }
+    CHECK(all_found);
+
+    // Iteration visits each live entry exactly once.
+    long long sum = 0; cardinal::usize count = 0;
+    big.for_each([&](const int& k, int& v) { sum += v; ++count; (void)k; });
+    long long expect = 0; for (int i = 0; i < N; ++i) expect += static_cast<long long>(i) * 3;
+    CHECK(count == static_cast<cardinal::usize>(N));
+    CHECK(sum == expect);
+
+    cardinal::usize rc = 0;
+    for (auto kv : big) { (void)kv; ++rc; }            // range-for over iterator
+    CHECK(rc == static_cast<cardinal::usize>(N));
+
+    // Erase the evens → tombstone-heavy → odds still present, evens gone.
+    for (int i = 0; i < N; i += 2) big.erase(i);
+    CHECK(big.size() == static_cast<cardinal::usize>(N / 2));
+    bool parity_ok = true;
+    for (int i = 1; i < N; i += 2) if (!big.contains(i)) parity_ok = false;
+    for (int i = 0; i < N; i += 2) if (big.contains(i)) parity_ok = false;
+    CHECK(parity_ok);
+
+    // Re-insert erased keys (tombstone reuse) → back to N, all findable.
+    for (int i = 0; i < N; i += 2) big[i] = i * 3;
+    CHECK(big.size() == static_cast<cardinal::usize>(N));
+    CHECK(big.find(0) != nullptr && *big.find(0) == 0);
+    CHECK(big.find(N - 1) != nullptr && *big.find(N - 1) == (N - 1) * 3);
+
+    // StringId keys (uses the std::hash<StringId> specialisation).
+    cardinal::dense_map<cardinal::StringId, int> sm;
+    sm["alpha"_sid] = 1;
+    sm["beta"_sid]  = 2;
+    CHECK(sm.size() == 2);
+    CHECK(sm.find(cardinal::StringId("alpha")) != nullptr &&
+          *sm.find(cardinal::StringId("alpha")) == 1);   // runtime id finds literal-keyed entry
+    CHECK(sm.contains("beta"_sid));
+
+    big.clear();
+    CHECK(big.empty() && big.size() == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -657,6 +740,7 @@ int main() {
     test_string();
     test_small_vector();
     test_string_id();
+    test_dense_map();
     test_sync_queue();
     test_dedup_queue();
     test_waitable_queue();
