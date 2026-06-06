@@ -79,6 +79,12 @@ void register_builtin_commands(CommandRegistry& reg) {
                 return { false, "ray missed the ground plane" };
         } else {
             hit = ctx.place_position;
+            // Honour grid snap in direct-position mode too, so a menu/palette
+            // spawn snaps identically to a click spawn (same context fields).
+            if (ctx.snap_enabled && ctx.snap_step > 0.0f) {
+                hit.x = cardinal::round(hit.x / ctx.snap_step) * ctx.snap_step;
+                hit.z = cardinal::round(hit.z / ctx.snap_step) * ctx.snap_step;
+            }
         }
         const auto pr = ctx.placement->place(ctx.active_asset_id.c_str(),
                                              ctx.device, hit);

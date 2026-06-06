@@ -3240,8 +3240,11 @@ int main(int argc, char** argv) {
             // Marquee box-select — Studio reports a panel-local NDC rect;
             // we test each entity's projected centre against it (Studio
             // stays scene-agnostic). Ctrl/Shift during the box extends.
-            if (pick.marquee && aspect_pick > 0.0f) {
-                const auto  mvp = scene.camera().proj(aspect_pick) * scene.camera().view();
+            // Project with the CAPTURED matrices (pick_vp), same as click
+            // select/place — the live camera is a tick ahead (fly-cam already
+            // advanced post-end_frame), which would skew the box edges.
+            if (pick.marquee && pick_vp.valid) {
+                const auto  mvp = pick_vp.proj * pick_vp.view;
                 if (!pick.marquee_additive) selection.clear();
                 for (auto& e : scene.entities()) {
                     const auto& t = e.transform.translation;
