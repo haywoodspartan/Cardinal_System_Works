@@ -1532,6 +1532,21 @@ int main(int argc, char** argv) {
         sample_studio::register_engine_console_commands(cctx);
     }
 
+    // ---- Apply persisted user settings -----------------------------------
+    // Now that every cvar is registered, replay the saved settings file (if
+    // any) so last session's preferences (vsync, render flags, FPS caps, …)
+    // take effect. A settings file is just a list of console set-lines; this
+    // is the quiet, UE5-style autoexec. Re-saved on exit below.
+    {
+        const cardinal::usize applied =
+            cardinal::console::Registry::instance().load_cvars("studio_settings.cfg");
+        if (applied > 0) {
+            cardinal::log::infof("studio",
+                "settings: applied %zu saved cvars from studio_settings.cfg",
+                static_cast<cardinal::usize>(applied));
+        }
+    }
+
     const auto t0 = std::chrono::steady_clock::now();
     auto       prev_t = t0;
     u32        frame  = 0;
@@ -3315,6 +3330,17 @@ int main(int argc, char** argv) {
             }
         }
         ++frame;
+    }
+
+    // ---- Persist user settings on exit -----------------------------------
+    // Snapshot every cvar (vsync, render flags, FPS caps, …) to the settings
+    // file so the next launch restores them (see load_cvars at startup). Done
+    // before teardown so the cvar getters still read live engine state.
+    {
+        const cardinal::usize saved =
+            cardinal::console::Registry::instance().save_cvars("studio_settings.cfg");
+        clog::infof("studio", "settings: saved %zu cvars to studio_settings.cfg",
+                    static_cast<cardinal::usize>(saved));
     }
 
     plg::Registry::instance().shutdown();

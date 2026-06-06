@@ -228,6 +228,37 @@ void register_engine_console_commands(const ConsoleSetupContext& ctx) {
                 r.message.empty() ? "" : ": ",
                 r.message.empty() ? "" : r.message.c_str(), cx.result_count);
         });
+    // ---- Settings persistence (UE5-style config) -------------------------
+    // The default settings file the Studio auto-loads at startup + auto-saves
+    // on exit (see main.cpp). config.save/load take an optional explicit path.
+    CARDINAL_CCOMMAND("config.save",
+        "config.save [file] — write all cvars to a settings file (default studio_settings.cfg)",
+        [](const std::vector<std::string>& argv, cv::Output& out) {
+            const cardinal::string path =
+                (argv.size() > 1) ? cardinal::string(argv[1].c_str())
+                                  : cardinal::string("studio_settings.cfg");
+            const auto n = cv::Registry::instance().save_cvars(path);
+            out("config.save: wrote %zu cvars to %s",
+                static_cast<usize>(n), path.c_str());
+        });
+    CARDINAL_CCOMMAND("config.load",
+        "config.load [file] — apply a settings file (default studio_settings.cfg)",
+        [](const std::vector<std::string>& argv, cv::Output& out) {
+            const cardinal::string path =
+                (argv.size() > 1) ? cardinal::string(argv[1].c_str())
+                                  : cardinal::string("studio_settings.cfg");
+            const auto n = cv::Registry::instance().exec_file(path, out);
+            out("config.load: applied %zu lines from %s",
+                static_cast<usize>(n), path.c_str());
+        });
+    CARDINAL_CCOMMAND("exec",
+        "exec <file> — run a console script: replay each line of the file",
+        [](const std::vector<std::string>& argv, cv::Output& out) {
+            if (argv.size() < 2) { out("usage: exec <file>"); return; }
+            const cardinal::string path(argv[1].c_str());
+            const auto n = cv::Registry::instance().exec_file(path, out);
+            out("exec %s: %zu lines ran", path.c_str(), static_cast<usize>(n));
+        });
     CARDINAL_CCOMMAND("world.stats",
         "Print world-streaming stats",
         [world_grid, world_streamer](const std::vector<std::string>&, cv::Output& out) {
