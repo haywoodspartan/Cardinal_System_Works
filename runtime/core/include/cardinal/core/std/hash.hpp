@@ -41,7 +41,10 @@ inline u64 fnv1a64(const void* data, usize len, u64 seed = kFnvOffset64) noexcep
     }
     return h;
 }
-inline u64 fnv1a64(const char* s, u64 seed = kFnvOffset64) noexcept {
+// constexpr so it can hash string literals at COMPILE TIME (e.g. for
+// StringId / "..."_sid). Still callable at runtime on any null-terminated
+// string — constexpr only adds the compile-time-evaluable guarantee.
+inline constexpr u64 fnv1a64(const char* s, u64 seed = kFnvOffset64) noexcept {
     u64 h = seed;
     while (*s) { h ^= static_cast<u64>(static_cast<u8>(*s++)); h *= kFnvPrime64; }
     return h;

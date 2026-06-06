@@ -17,7 +17,9 @@
 #include <cardinal/core/os/directory.hpp>
 #include <cardinal/core/os/seh.hpp>
 #include <cardinal/core/string/fixed_string.hpp>
+#include <cardinal/core/string/string_id.hpp>
 #include <cardinal/core/small_vector.hpp>
+#include <cardinal/core/containers.hpp>
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/utility.hpp>
 
@@ -607,6 +609,43 @@ void test_small_vector() {
     CHECK(Tracked::s_alive == 0);                              // no leaks / double-frees
 }
 
+void test_string_id() {
+    using cardinal::StringId;
+
+    // Literal ids are COMPILE-TIME constants.
+    static_assert("world.undo"_sid == "world.undo"_sid, "literal id stable");
+    static_assert("a"_sid != "b"_sid,                   "distinct literals differ");
+    constexpr StringId k = "material.albedo"_sid;
+    static_assert(k.valid(), "non-empty literal id is valid");
+
+    // Literal, const char*, and cardinal::string of the SAME text all agree —
+    // a runtime id matches a compile-time literal id.
+    const StringId        lit  = "spawn.enemy"_sid;
+    const StringId        cstr{"spawn.enemy"};
+    const cardinal::string s   = "spawn.enemy";
+    const StringId        run{s};
+    CHECK(lit == cstr);
+    CHECK(lit == run);
+    CHECK(lit.value() == run.value());
+
+    // Distinctness, default-invalid, empty-string-valid.
+    CHECK(StringId("foo") != StringId("bar"));
+    CHECK(!StringId().valid());
+    CHECK(StringId("").valid());                 // "" hashes to the FNV basis
+    CHECK(StringId() != StringId(""));
+
+    // Usable as an unordered_map key; a runtime id finds a literal-keyed entry.
+    cardinal::unordered_map<StringId, int> m;
+    m[lit]        = 7;
+    m["other"_sid] = 9;
+    CHECK(m[run] == 7);
+    CHECK(m.size() == 2);
+
+    // Explicit u64 round-trip (e.g. (de)serialised ids).
+    const StringId rebuilt{ static_cast<cardinal::u64>(lit) };
+    CHECK(rebuilt == lit);
+}
+
 }  // namespace
 
 int main() {
@@ -617,6 +656,7 @@ int main() {
     test_access();
     test_string();
     test_small_vector();
+    test_string_id();
     test_sync_queue();
     test_dedup_queue();
     test_waitable_queue();
