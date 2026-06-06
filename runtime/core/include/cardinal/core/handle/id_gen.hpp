@@ -87,6 +87,13 @@ public:
     usize capacity() const noexcept { return generations_.size(); }
     usize live_count() const noexcept { return generations_.size() - free_.size(); }
 
+    // Current generation of a slot index (0 if out of range). Lets a higher-
+    // level container (SlotMap) reconstruct the live Handle for a slot it
+    // knows is occupied — e.g. to yield handles during iteration.
+    u32 generation_at(u32 idx) const noexcept {
+        return idx < generations_.size() ? generations_[idx] : 0u;
+    }
+
     void clear() noexcept { generations_.clear(); free_.clear(); }
 
 private:

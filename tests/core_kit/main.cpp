@@ -21,6 +21,7 @@
 #include <cardinal/core/small_vector.hpp>
 #include <cardinal/core/dense_map.hpp>
 #include <cardinal/core/sparse_set.hpp>
+#include <cardinal/core/slot_map.hpp>
 #include <cardinal/core/spsc_ring.hpp>
 #include <cardinal/core/inplace_function.hpp>
 #include <cardinal/core/flags.hpp>
@@ -854,6 +855,72 @@ void test_sparse_set() {
     CHECK(Tracked::s_alive == 0);
 }
 
+void test_slot_map() {
+    using SM = cardinal::slot_map<int>;
+    using H  = SM::handle_type;
+
+    SM m;
+    CHECK(m.empty() && m.size() == 0);
+    const H a = m.insert(10);
+    const H b = m.insert(20);
+    const H c = m.insert(30);
+    CHECK(m.size() == 3);
+    CHECK(a.valid() && m.contains(a));
+    CHECK(m.get(a) != nullptr && *m.get(a) == 10);
+    CHECK(*m.get(b) == 20 && *m.get(c) == 30);
+
+    // Erase b → its handle goes stale; others unaffected; no double-free.
+    CHECK(m.erase(b));
+    CHECK(!m.contains(b) && m.get(b) == nullptr);
+    CHECK(!m.erase(b));
+    CHECK(m.size() == 2 && *m.get(a) == 10 && *m.get(c) == 30);
+
+    // Stale-handle safety: the next insert RECYCLES b's slot index with a
+    // bumped generation. The old handle must NOT alias the new occupant.
+    const H d = m.insert(40);
+    CHECK(d.index == b.index);                  // slot index reused
+    CHECK(d.generation != b.generation);        // generation bumped
+    CHECK(m.get(d) != nullptr && *m.get(d) == 40);
+    CHECK(m.get(b) == nullptr);                 // stale handle → null, not 40
+
+    // for_each visits exactly the live entries.
+    long long sum = 0; cardinal::usize n = 0;
+    m.for_each([&](H, int& v) { sum += v; ++n; });
+    CHECK(n == 3 && sum == (10 + 30 + 40));
+
+    *m.get(a) = 11;
+    CHECK(*m.get(a) == 11);
+
+    // Stress: insert N, erase evens, survivors keep their handles, count exact.
+    cardinal::slot_map<int> big;
+    cardinal::vector<H> hs;
+    const int N = 1000;
+    for (int i = 0; i < N; ++i) hs.push_back(big.insert(i));
+    for (int i = 0; i < N; i += 2) big.erase(hs[i]);
+    CHECK(big.size() == static_cast<cardinal::usize>(N / 2));
+    bool ok = true;
+    for (int i = 0; i < N; ++i) {
+        const int* p = big.get(hs[i]);
+        if (i % 2 == 0) { if (p != nullptr) ok = false; }       // erased → stale
+        else            { if (p == nullptr || *p != i) ok = false; }
+    }
+    CHECK(ok);
+    big.clear();
+    CHECK(big.empty());
+
+    // Lifetime: erase drops live_count; everything destroyed on scope exit.
+    Tracked::s_alive = 0;
+    {
+        cardinal::slot_map<Tracked> tm;
+        const auto h1 = tm.insert(Tracked(1));
+        const auto h2 = tm.insert(Tracked(2));
+        CHECK(tm.size() == 2);
+        CHECK(tm.erase(h1));
+        CHECK(tm.size() == 1 && !tm.contains(h1) && tm.contains(h2));
+    }
+    CHECK(Tracked::s_alive == 0);
+}
+
 void test_spsc_ring() {
     // Single-threaded: fill to capacity, full rejects, FIFO drain, empty.
     cardinal::core::SpscRing<int, 4> r;
@@ -975,6 +1042,7 @@ int main() {
     test_flags();
     test_dense_map();
     test_sparse_set();
+    test_slot_map();
     test_spsc_ring();
     test_inplace_function();
     test_sync_queue();
