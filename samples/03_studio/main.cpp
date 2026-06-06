@@ -690,6 +690,10 @@ int main(int argc, char** argv) {
     cardinal::cmd::CommandRegistry commands;
     cardinal::cmd::register_builtin_commands(commands);
     std::vector<cardinal::cmd::ViewProj> rendered_vp;   // one per viewport, this frame
+    // Deferred spawn from the Create menu (drawn before spawn_asset_at is in
+    // scope) — set here, executed through the bus once the helper exists.
+    std::string pending_spawn_id;
+    scn::Vec3   pending_spawn_pos{};
 
     // Gizmo-drag coalescing: capture the entity's position the moment the
     // drag starts so when the drag releases we can record one "Move
@@ -1692,11 +1696,12 @@ int main(int argc, char** argv) {
                             if (ImGui::MenuItem(a.label.c_str())) {
                                 // Through AssetPlacement: spawns the render
                                 // entity AND a first-class actor (Outliner
-                                // / Game / serial / level all see it).
-                                auto pr = placement->place(
-                                    a.id.c_str(), device.get(), spawn_at);
-                                if (pr.primary_entity)
-                                    selected_id = pr.primary_entity;
+                                // / Game / serial / level all see it). Deferred
+                                // through the command bus (spawn_asset_at) so
+                                // the Create menu gets undo like every other
+                                // spawn path — was a direct place() with none.
+                                pending_spawn_id  = a.id;
+                                pending_spawn_pos = spawn_at;
                             }
                             if (ImGui::IsItemHovered() && !a.tooltip.empty()) {
                                 ImGui::SetTooltip("%s", a.tooltip.c_str());
@@ -2134,20 +2139,25 @@ int main(int argc, char** argv) {
         // record the action in the undo stack so the user can take it back.
         auto spawn_asset_at = [&](const char* asset_id, scn::Vec3 pos) {
             if (asset_id == nullptr || *asset_id == '\0') return;
-            // Route through AssetPlacement: the spawn is now a first-class
-            // actor (Actor Outliner / Game / serial save-load / level all
-            // see it) with a scene::Entity render mirror — not a
-            // scene-only entity that the rest of the toolchain can't touch.
-            auto pr = placement->place(asset_id, device.get(), pos);
-            if (pr.actor == 0u) return;
-            selected_id = pr.primary_entity;
+            // Route every direct-position spawn (palette right-click, Create
+            // menu, viewport ctx-menu) through the SAME command the viewport
+            // click uses — world.place_asset in its direct-position mode. One
+            // place path; the spawn becomes a first-class actor + scene mirror.
+            cardinal::cmd::CommandContext cx{};
+            cx.placement      = placement.get();
+            cx.device         = device.get();
+            cx.active_asset_id = asset_id;
+            cx.place_position = pos;          // no viewport -> direct-position mode
+            const auto r = commands.dispatch("world.place_asset", cx);
+            if (!r.ok) return;
+            selected_id = cx.result_entity;
 
             // Undo/redo removes + re-places the whole placement (actor +
             // render entities) as a unit. A shared cell tracks the live
             // actor id because each redo mints a fresh actor/entity set.
-            auto live = std::make_shared<cardinal::actor::ActorId>(pr.actor);
+            auto live = std::make_shared<cardinal::actor::ActorId>(cx.result_actor);
             std::string  id_copy = asset_id;
-            scn::Vec3    at      = pos;
+            scn::Vec3    at      = cx.result_hit;
             auto*        pl      = placement.get();
             rhi::Device* dev     = device.get();
             edit::Command cmd;
@@ -2162,6 +2172,14 @@ int main(int argc, char** argv) {
             };
             undo.push_executed(std::move(cmd));
         };
+
+        // Execute a Create-menu spawn requested earlier this frame (deferred
+        // because the menu bar draws before spawn_asset_at is in scope). Now
+        // it goes through the bus + gains undo.
+        if (!pending_spawn_id.empty()) {
+            spawn_asset_at(pending_spawn_id.c_str(), pending_spawn_pos);
+            pending_spawn_id.clear();
+        }
 
         // Asset Palette — left-click sets place tool, right-click context
         // menu lets the user spawn directly at camera or world origin.

@@ -69,11 +69,16 @@ void register_builtin_commands(CommandRegistry& reg) {
     place.run   = [](CommandContext& ctx) -> CommandResult {
         if (ctx.placement == nullptr)       return { false, "no AssetPlacement bound" };
         if (ctx.active_asset_id.empty())    return { false, "no active asset selected" };
-        if (!ctx.viewport.valid)            return { false, "no captured viewport projection" };
+        // Two input modes: a viewport CLICK (unproject the captured matrices)
+        // or a DIRECT position (menu spawn). One command, one place path.
         cardinal::core::Vec3 hit{};
-        if (!screen_to_ground(ctx.viewport, ctx.ndc_x, ctx.ndc_y, 0.0f,
-                              ctx.snap_enabled, ctx.snap_step, &hit))
-            return { false, "ray missed the ground plane" };
+        if (ctx.viewport.valid) {
+            if (!screen_to_ground(ctx.viewport, ctx.ndc_x, ctx.ndc_y, 0.0f,
+                                  ctx.snap_enabled, ctx.snap_step, &hit))
+                return { false, "ray missed the ground plane" };
+        } else {
+            hit = ctx.place_position;
+        }
         const auto pr = ctx.placement->place(ctx.active_asset_id.c_str(),
                                              ctx.device, hit);
         if (pr.actor == 0u) return { false, "placement produced no actor" };

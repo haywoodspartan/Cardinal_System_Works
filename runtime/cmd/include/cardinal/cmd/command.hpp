@@ -55,6 +55,9 @@ struct CommandContext {
     ViewProj viewport{};   // captured render matrices for the hovered viewport
     float    ndc_x{0.0f};  // panel-local NDC of the click (-1..+1)
     float    ndc_y{0.0f};
+    // Direct world position for place_asset's non-click mode (menu spawn).
+    // Used when `viewport` is invalid (no click to unproject).
+    cardinal::core::Vec3 place_position{0.0f, 0.0f, 0.0f};
 
     // Typed inputs (no bag-of-any).
     cardinal::string active_asset_id;   // world.place_asset
