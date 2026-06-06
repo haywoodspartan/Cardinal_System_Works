@@ -30,43 +30,51 @@ set(CARDINAL_UI_SOURCES
     # Apps that want the editor experience link cardinal::ui and use
     # cardinal::ui::StudioEngine instead of cardinal::engine::Engine.
     src/studio_engine.cpp
-    # Per-panel implementation files. Each panel lives in src/panels/<name>.cpp
-    # with a small header in src/panels/<name>.hpp. Studio's class methods
-    # forward to these via `cardinal::ui::panels::draw(...)`. Splitting the
-    # panels out keeps each editable file under a few hundred lines so a
-    # focused edit only re-compiles one TU.
-    src/panels/actor_outliner.cpp
-    src/panels/brush.cpp
-    src/panels/class_picker.cpp
-    src/panels/console.cpp
-    src/panels/cppscript.cpp
-    src/panels/curve_editor.cpp
-    src/panels/editor_modes.cpp
-    src/panels/game_bar.cpp
-    src/panels/hierarchy.cpp
-    src/panels/inspector.cpp
-    src/panels/prefab.cpp
-    src/panels/input_panel.cpp
-    src/panels/log.cpp
-    src/panels/memory.cpp
-    src/panels/mesh_tools.cpp
-    src/panels/mixer.cpp
-    src/panels/nav_panel.cpp
-    src/panels/particles_panel.cpp
-    src/panels/profiler.cpp
-    src/panels/save_load.cpp
-    src/panels/sequencer.cpp
-    src/panels/sim_bar.cpp
-    src/panels/simd.cpp
-    src/panels/vgeom.cpp
-    src/panels/sky_panel.cpp
-    src/panels/stats.cpp
-    src/panels/texture_tools.cpp
-    src/panels/vt.cpp
-    src/panels/project_panel.cpp
-    src/panels/cook_pack.cpp
-    src/panels/shader_compiler.cpp
-    src/panels/world_systems.cpp
+    # Per-panel implementation files, grouped by Studio concern into
+    # src/panels/<area>/<name>.cpp (+ a small same-dir <name>.hpp). Studio's
+    # class methods forward to these via `cardinal::ui::panels::draw(...)`.
+    # Splitting the panels out — and now foldering them by area — keeps each
+    # editable file small and the tree navigable by feature.
+    #  scene/      — actor/scene authoring
+    src/panels/scene/actor_outliner.cpp
+    src/panels/scene/hierarchy.cpp
+    src/panels/scene/inspector.cpp
+    src/panels/scene/prefab.cpp
+    src/panels/scene/class_picker.cpp
+    #  assets/     — project / cook+pack / save-load
+    src/panels/assets/project_panel.cpp
+    src/panels/assets/cook_pack.cpp
+    src/panels/assets/save_load.cpp
+    #  gameplay/   — play / sim / world systems / input / nav
+    src/panels/gameplay/game_bar.cpp
+    src/panels/gameplay/sim_bar.cpp
+    src/panels/gameplay/world_systems.cpp
+    src/panels/gameplay/input_panel.cpp
+    src/panels/gameplay/nav_panel.cpp
+    #  animation/  — sequencer / curves / audio mixer
+    src/panels/animation/sequencer.cpp
+    src/panels/animation/curve_editor.cpp
+    src/panels/animation/mixer.cpp
+    #  tools/      — brush / mesh + texture tools / editor modes
+    src/panels/tools/brush.cpp
+    src/panels/tools/mesh_tools.cpp
+    src/panels/tools/texture_tools.cpp
+    src/panels/tools/editor_modes.cpp
+    #  rendering/  — sky / virtual textures / vgeom / particles
+    src/panels/rendering/sky_panel.cpp
+    src/panels/rendering/vt.cpp
+    src/panels/rendering/vgeom.cpp
+    src/panels/rendering/particles_panel.cpp
+    #  scripting/  — C++ sandbox / shader compiler
+    src/panels/scripting/cppscript.cpp
+    src/panels/scripting/shader_compiler.cpp
+    #  diagnostics/ — log / console / stats / memory / profiler / simd
+    src/panels/diagnostics/log.cpp
+    src/panels/diagnostics/console.cpp
+    src/panels/diagnostics/stats.cpp
+    src/panels/diagnostics/memory.cpp
+    src/panels/diagnostics/profiler.cpp
+    src/panels/diagnostics/simd.cpp
     # We compile our own copy of imgui_impl_vulkan.cpp so it links against
     # volk's function pointers instead of the vcpkg `imgui[vulkan-binding]`
     # binary path — the latter crashed inside ImGui_ImplVulkan_Init under
