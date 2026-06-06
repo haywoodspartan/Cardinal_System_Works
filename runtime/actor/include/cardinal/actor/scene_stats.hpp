@@ -15,6 +15,7 @@
 
 #include <cardinal/core/types.hpp>        // cardinal::string
 #include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/math.hpp>         // cardinal::core::Vec3
 
 namespace cardinal::actor {
 
@@ -32,6 +33,16 @@ struct WorldStats {
     u32 prefab_instances{0};  // carry a PrefabLink
     cardinal::vector<NameCount> by_component;   // component type_name -> count, sorted
     cardinal::vector<NameCount> by_tag;         // tag -> count, sorted
+
+    // World-space AABB of all alive actors' Transform translations (point
+    // bounds, not mesh extents). has_bounds is false for an empty world or
+    // one with no Transform-bearing actors (min/max stay zero). The building
+    // block for "frame all" + a level-extent readout.
+    bool                 has_bounds{false};
+    cardinal::core::Vec3 bounds_min{0.0f, 0.0f, 0.0f};
+    cardinal::core::Vec3 bounds_max{0.0f, 0.0f, 0.0f};
+    cardinal::core::Vec3 bounds_center() const;   // (min + max) * 0.5
+    cardinal::core::Vec3 bounds_extent() const;   // max - min (full size)
 
     // Convenience lookups (0 if absent).
     u32 component_count(const cardinal::string& type) const;

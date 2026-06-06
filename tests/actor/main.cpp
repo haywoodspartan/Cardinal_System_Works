@@ -1321,10 +1321,30 @@ void test_world_stats() {
     for (cardinal::usize i = 1; i < s.by_component.size(); ++i)
         CHECK(s.by_component[i - 1].name < s.by_component[i].name);
 
-    // Empty world -> zeros.
+    // Empty world -> zeros + no bounds.
     ac::World empty;
     auto es = ac::compute_world_stats(empty);
     CHECK(es.actors == 0u && es.by_component.empty() && es.by_tag.empty());
+    CHECK(!es.has_bounds);
+    CHECK(ap(es.bounds_extent().x, 0.0f) && ap(es.bounds_extent().y, 0.0f));
+
+    // World AABB over actors' Transform translations.
+    ac::World bw;
+    bw.spawn_at("p0", { -4.0f,  1.0f,  2.0f });
+    bw.spawn_at("p1", {  6.0f,  3.0f, -5.0f });
+    bw.spawn_at("p2", {  0.0f, -2.0f,  9.0f });
+    auto bs = ac::compute_world_stats(bw);
+    CHECK(bs.has_bounds);
+    CHECK(ap(bs.bounds_min.x, -4.0f) && ap(bs.bounds_min.y, -2.0f) && ap(bs.bounds_min.z, -5.0f));
+    CHECK(ap(bs.bounds_max.x,  6.0f) && ap(bs.bounds_max.y,  3.0f) && ap(bs.bounds_max.z,  9.0f));
+    // center = (min+max)/2 ; extent = max-min.
+    CHECK(ap(bs.bounds_center().x, 1.0f) && ap(bs.bounds_center().y, 0.5f) && ap(bs.bounds_center().z, 2.0f));
+    CHECK(ap(bs.bounds_extent().x, 10.0f) && ap(bs.bounds_extent().y, 5.0f) && ap(bs.bounds_extent().z, 14.0f));
+    // A single actor -> degenerate (zero-extent) box at its position.
+    ac::World one; one.spawn_at("solo", { 7.0f, 8.0f, 9.0f });
+    auto os = ac::compute_world_stats(one);
+    CHECK(os.has_bounds && ap(os.bounds_extent().x, 0.0f));
+    CHECK(ap(os.bounds_center().y, 8.0f));
 
     // Multi-Tag actor: an actor legally holding TWO TagComponents must have
     // BOTH components' tags counted (the tally reads the iterated component,

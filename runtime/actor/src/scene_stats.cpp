@@ -31,6 +31,17 @@ u32 WorldStats::tag_count(const cardinal::string& tag) const {
     return 0;
 }
 
+cardinal::core::Vec3 WorldStats::bounds_center() const {
+    return { (bounds_min.x + bounds_max.x) * 0.5f,
+             (bounds_min.y + bounds_max.y) * 0.5f,
+             (bounds_min.z + bounds_max.z) * 0.5f };
+}
+cardinal::core::Vec3 WorldStats::bounds_extent() const {
+    return { bounds_max.x - bounds_min.x,
+             bounds_max.y - bounds_min.y,
+             bounds_max.z - bounds_min.z };
+}
+
 WorldStats compute_world_stats(const World& world) {
     WorldStats s;
     for (const auto& aptr : world.actors()) {
@@ -39,6 +50,23 @@ WorldStats compute_world_stats(const World& world) {
 
         ++s.actors;
         if (a.enabled()) ++s.enabled; else ++s.disabled;
+
+        // Expand the world AABB by this actor's Transform translation.
+        if (const auto* tc = a.get_component<TransformComponent>()) {
+            const auto& p = tc->translation;
+            if (!s.has_bounds) {
+                s.has_bounds = true;
+                s.bounds_min = { p.x, p.y, p.z };
+                s.bounds_max = { p.x, p.y, p.z };
+            } else {
+                if (p.x < s.bounds_min.x) s.bounds_min.x = p.x;
+                if (p.y < s.bounds_min.y) s.bounds_min.y = p.y;
+                if (p.z < s.bounds_min.z) s.bounds_min.z = p.z;
+                if (p.x > s.bounds_max.x) s.bounds_max.x = p.x;
+                if (p.y > s.bounds_max.y) s.bounds_max.y = p.y;
+                if (p.z > s.bounds_max.z) s.bounds_max.z = p.z;
+            }
+        }
 
         bool is_instance = false;
         for (const auto& c : a.components()) {
