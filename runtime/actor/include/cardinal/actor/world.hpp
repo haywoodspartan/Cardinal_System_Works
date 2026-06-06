@@ -21,6 +21,7 @@
 #include <cardinal/core/utility.hpp>      // cardinal::move
 #include <cardinal/core/containers.hpp>   // unordered_map/vector
 #include <cardinal/core/dense_map.hpp>    // dense_map (O(1) id index)
+#include <cardinal/core/small_vector.hpp> // small_vector (per-event subscriber lists)
 
 namespace cardinal::actor {
 
@@ -338,7 +339,9 @@ private:
     struct GroupPrefab_ { cardinal::vector<GroupMember_> members; };
     cardinal::unordered_map<cardinal::string, GroupPrefab_> group_prefabs_;
     struct Sub { HandlerId id; EventFn fn; };
-    cardinal::unordered_map<cardinal::string, cardinal::vector<Sub>>        subscribers_;
+    // Per-event subscriber lists are typically a handful — small_vector keeps
+    // them inline (no heap alloc per event) until a list exceeds 4.
+    cardinal::unordered_map<cardinal::string, cardinal::small_vector<Sub, 4>> subscribers_;
     HandlerId                                                next_handler_id_{1};
     u64                                                      revision_{0};
 };

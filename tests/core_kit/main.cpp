@@ -593,6 +593,16 @@ void test_small_vector() {
     CHECK(r.size() == 3 && r[1] == 20 && r[2] == 30);
     r.clear(); CHECK(r.empty());
 
+    // Range erase [first,last): middle, empty no-op, to-end.
+    cardinal::small_vector<int, 4> e;
+    for (int i = 1; i <= 6; ++i) e.push_back(i);          // {1..6} (heap, cap 4)
+    e.erase(e.begin() + 1, e.begin() + 4);               // remove {2,3,4} -> {1,5,6}
+    CHECK(e.size() == 3 && e[0] == 1 && e[1] == 5 && e[2] == 6);
+    e.erase(e.begin(), e.begin());                       // empty range = no-op
+    CHECK(e.size() == 3);
+    e.erase(e.begin() + 1, e.end());                     // remove {5,6} -> {1}
+    CHECK(e.size() == 1 && e[0] == 1);
+
     // swap across inline (a) + heap (b) storage.
     cardinal::small_vector<int, 4> a{1, 2};
     cardinal::small_vector<int, 4> b{9, 8, 7, 6, 5};     // b is on the heap

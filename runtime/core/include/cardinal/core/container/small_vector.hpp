@@ -174,6 +174,19 @@ public:
         return pos;
     }
 
+    // Erase the range [first, last); elements after it shift down to fill the
+    // gap. Returns `first`. Supports the erase-remove idiom:
+    //   v.erase(cardinal::remove_if(v.begin(), v.end(), pred), v.end());
+    iterator erase(iterator first, iterator last) {
+        if (first == last) return first;
+        iterator new_end = first;
+        for (iterator src = last; src != end(); ++src, ++new_end)
+            *new_end = std::move(*src);
+        for (iterator it = new_end; it != end(); ++it) it->~T();   // destroy the tail
+        size_ = static_cast<size_type>(new_end - data_);
+        return first;
+    }
+
     void swap(SmallVector& other) noexcept {
         // Correct regardless of inline/heap state on either side. Heap/heap
         // is the only case where pointer-swap would beat element moves, but
