@@ -2234,6 +2234,18 @@ public:
         if (!gizmo_has_target_ || !gizmo_have_camera_) return false;
         if (avail.x < 4.0f || avail.y < 4.0f)          return false;
 
+        // Only ONE viewport runs ImGuizmo per frame — the active-drag owner,
+        // else the last-hovered panel. ImGuizmo keeps a single global context;
+        // if every visible panel called Manipulate, each would re-solve the
+        // drag from its OWN camera and the last-drawn panel would win,
+        // teleporting the object (the severe multi-viewport offset). Gating to
+        // the owning panel keeps the gizmo in the focused viewport and the
+        // manipulation correct — with a single viewport this is always true,
+        // so normal single-viewport editing is unaffected.
+        const u32 gizmo_owner = gizmo_drag_in_progress_ ? gizmo_drag_viewport_id_
+                                                        : vp_last_hovered_id_;
+        if (viewport_id != gizmo_owner) return false;
+
         // Per-frame defaults — host reads these every frame.
         gizmo_drag_.active                = false;
         gizmo_drag_.mode                  = gizmo_mode_;
@@ -2246,16 +2258,6 @@ public:
         // when the user docks / resizes the viewport panel.
         ImGuizmo::SetDrawlist();
         ImGuizmo::SetRect(image_pos.x, image_pos.y, avail.x, avail.y);
-
-        // Scope ImGuizmo's single global context to THIS viewport. Without
-        // it, every visible viewport panel runs Manipulate each frame against
-        // its OWN camera and IsUsing() reports true GLOBALLY — so a drag
-        // started in one panel is re-solved by every other panel and the
-        // LAST-drawn panel's ray wins, teleporting the object (a severe,
-        // multi-viewport-dependent offset). With a per-viewport id, IsUsing()
-        // (and ImGuizmo's internal move-solve) fires only for the panel that
-        // owns the active drag; siblings render the gizmo but never commit.
-        ImGuizmo::SetID(static_cast<int>(viewport_id));
 
         // Build the gizmo's input model matrix from the host-published
         // target position + euler rotation + scale. ImGuizmo wants a
@@ -2333,16 +2335,13 @@ public:
 
             // Maintain the drag-in-progress edge for undo coalescing.
             if (!gizmo_drag_in_progress_) gizmo_drag_in_progress_ = true;
-        } else if (gizmo_drag_in_progress_ && viewport_id == gizmo_drag_viewport_id_) {
-            // Edge: was-using → not-using, on the OWNING panel only. Signal
-            // release for the next gizmo_drag_release_consume() poll. (Gating
-            // on the owner mirrors the hand-rolled path so a sibling panel's
-            // not-using state can't spuriously end the drag.)
+        } else if (gizmo_drag_in_progress_) {
+            // Edge: was-using → not-using. Signal release for the next
+            // gizmo_drag_release_consume() poll. Only the owning panel reaches
+            // here (the per-frame owner gate at the top returns siblings early).
             gizmo_drag_in_progress_ = false;
             gizmo_drag_release_     = true;
         }
-
-        ImGuizmo::SetID(-1);   // end the per-viewport scope before the orbit cube
 
         // Corner-cube camera orbiter — ViewManipulate. The widget mutates
         // the view matrix in place if the user drags it; downstream the
