@@ -9,6 +9,8 @@
 
 #include <cardinal/core/algorithm.hpp>
 #include <cardinal/core/containers.hpp>
+#include <cardinal/core/dense_map.hpp>          // O(1) id index
+#include <cardinal/core/string/string_id.hpp>   // hashed asset-id key
 #include <cardinal/core/utility.hpp>
 
 namespace cardinal::scene {
@@ -18,6 +20,11 @@ namespace cardinal::scene {
 // ---------------------------------------------------------------------------
 struct AssetCatalog::Impl {
     cardinal::vector<AssetDesc> entries;
+    // id (StringId hash) → index into `entries`, for O(1) find + dup-check.
+    // The catalog is append-only (entries are only ever added or cleared
+    // wholesale, never individually removed), so indices never shift and the
+    // map needs no per-removal maintenance.
+    cardinal::dense_map<cardinal::StringId, cardinal::usize> id_index;
 };
 
 AssetCatalog::AssetCatalog() : p_(cardinal::make_unique<Impl>()) {}
@@ -33,14 +40,14 @@ bool AssetCatalog::register_asset(AssetDesc d) {
             "register_asset rejected — empty id or null factory");
         return false;
     }
-    for (const auto& e : p_->entries) {
-        if (e.id == d.id) {
-            cardinal::log::warnf("scene/assets",
-                "register_asset duplicate id '%s' — keeping original",
-                d.id.c_str());
-            return false;
-        }
+    const cardinal::StringId sid(d.id);
+    if (p_->id_index.contains(sid)) {            // O(1) dup-check
+        cardinal::log::warnf("scene/assets",
+            "register_asset duplicate id '%s' — keeping original",
+            d.id.c_str());
+        return false;
     }
+    p_->id_index.insert(sid, p_->entries.size());
     p_->entries.push_back(cardinal::move(d));
     return true;
 }
@@ -51,10 +58,8 @@ const cardinal::vector<AssetDesc>& AssetCatalog::all() const noexcept {
 
 const AssetDesc* AssetCatalog::find(const char* id) const noexcept {
     if (id == nullptr) return nullptr;
-    for (const auto& e : p_->entries) {
-        if (e.id == id) return &e;
-    }
-    return nullptr;
+    const cardinal::usize* idx = p_->id_index.find(cardinal::StringId(id));  // O(1)
+    return idx != nullptr ? &p_->entries[*idx] : nullptr;
 }
 
 void AssetCatalog::clear() noexcept {
@@ -63,6 +68,7 @@ void AssetCatalog::clear() noexcept {
     // Must be driven from engine shutdown while the rhi::Device is still
     // alive; see the header comment for the static-teardown UAF this avoids.
     p_->entries.clear();
+    p_->id_index.clear();
 }
 
 cardinal::vector<cardinal::string> AssetCatalog::categories() const {
