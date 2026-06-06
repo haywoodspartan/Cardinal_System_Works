@@ -22,6 +22,7 @@
 #include <cardinal/core/dense_map.hpp>
 #include <cardinal/core/sparse_set.hpp>
 #include <cardinal/core/spsc_ring.hpp>
+#include <cardinal/core/inplace_function.hpp>
 #include <cardinal/core/flags.hpp>
 #include <cardinal/core/containers.hpp>
 #include <cardinal/core/log.hpp>
@@ -901,6 +902,65 @@ void test_spsc_ring() {
     CHECK(q.empty());
 }
 
+void test_inplace_function() {
+    using Fn = cardinal::inplace_function<int(int), 64>;
+
+    Fn f = [](int x) { return x + 1; };
+    CHECK(static_cast<bool>(f));
+    CHECK(f(41) == 42);
+
+    // Capture-by-value.
+    const int base = 100;
+    Fn g = [base](int x) { return base + x; };
+    CHECK(g(5) == 105);
+
+    // Copy is independent.
+    Fn gc = g;
+    CHECK(gc(5) == 105 && g(7) == 107);
+
+    // Move leaves the source empty.
+    Fn gm = cardinal::move(g);
+    CHECK(static_cast<bool>(gm) && gm(1) == 101);
+    CHECK(!static_cast<bool>(g));
+
+    // Reassign + reset + nullptr.
+    f = [](int x) { return x * 2; };
+    CHECK(f(21) == 42);
+    f = nullptr;
+    CHECK(!static_cast<bool>(f));
+
+    // Mutable lambda keeps state across calls (const operator() invokes it).
+    cardinal::inplace_function<int()> counter = [n = 0]() mutable { return ++n; };
+    CHECK(counter() == 1 && counter() == 2 && counter() == 3);
+
+    // void return + captured side effect.
+    int sink = 0;
+    cardinal::inplace_function<void(int)> sinker = [&sink](int v) { sink += v; };
+    sinker(10); sinker(5);
+    CHECK(sink == 15);
+
+    // Default-constructed is empty.
+    cardinal::inplace_function<void()> empty;
+    CHECK(!static_cast<bool>(empty));
+
+    // The real use case: heap-free callback lists (no std::function nodes).
+    cardinal::small_vector<cardinal::inplace_function<int(int)>, 4> fns;
+    fns.push_back([](int x) { return x; });
+    fns.push_back([](int x) { return x * x; });
+    fns.push_back([](int x) { return x + 100; });
+    CHECK(fns[0](7) == 7 && fns[1](7) == 49 && fns[2](7) == 107);
+
+    // Lifetime: a captured Tracked is destroyed exactly once on reset/scope.
+    Tracked::s_alive = 0;
+    {
+        cardinal::inplace_function<int()> holder = [t = Tracked(9)]() { return t.v; };
+        CHECK(holder() == 9 && Tracked::s_alive >= 1);
+        cardinal::inplace_function<int()> moved = cardinal::move(holder);
+        CHECK(moved() == 9);
+    }
+    CHECK(Tracked::s_alive == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -916,6 +976,7 @@ int main() {
     test_dense_map();
     test_sparse_set();
     test_spsc_ring();
+    test_inplace_function();
     test_sync_queue();
     test_dedup_queue();
     test_waitable_queue();
