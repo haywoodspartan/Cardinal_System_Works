@@ -17,6 +17,7 @@
 #include <cardinal/core/os/directory.hpp>
 #include <cardinal/core/os/seh.hpp>
 #include <cardinal/core/string/fixed_string.hpp>
+#include <cardinal/core/small_vector.hpp>
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/utility.hpp>
 
@@ -515,6 +516,97 @@ void test_seh() {
 #endif
 }
 
+// Lifetime probe for SmallVector — counts live instances so the test can
+// assert construct/destruct balance (no leaks, no double-frees) across spill,
+// copy, move + scope exit.
+struct Tracked {
+    static inline int s_alive = 0;
+    int v{0};
+    Tracked()                 { ++s_alive; }
+    Tracked(int x) : v(x)     { ++s_alive; }
+    Tracked(const Tracked& o) : v(o.v) { ++s_alive; }
+    Tracked(Tracked&& o) noexcept : v(o.v) { ++s_alive; }
+    Tracked& operator=(const Tracked&) = default;
+    Tracked& operator=(Tracked&&) noexcept = default;
+    ~Tracked()                { --s_alive; }
+};
+
+void test_small_vector() {
+    // Inline storage: no heap allocation until size exceeds N.
+    cardinal::small_vector<int, 4> v;
+    CHECK(v.empty());
+    CHECK(v.is_inline());
+    CHECK(v.capacity() == 4);
+    v.push_back(1); v.push_back(2); v.push_back(3); v.push_back(4);
+    CHECK(v.size() == 4);
+    CHECK(v.is_inline());                       // still inline AT capacity N
+    v.push_back(5);                             // spills to the heap
+    CHECK(v.size() == 5);
+    CHECK(!v.is_inline());
+    CHECK(v.capacity() >= 5);
+    CHECK(v[0] == 1 && v[4] == 5);
+    CHECK(v.front() == 1 && v.back() == 5);
+
+    bool threw = false;
+    try { (void)v.at(99); } catch (const std::out_of_range&) { threw = true; }
+    CHECK(threw);
+
+    int sum = 0; for (int x : v) sum += x;
+    CHECK(sum == 15);
+
+    v.pop_back();
+    CHECK(v.size() == 4 && v.back() == 4);
+
+    // Copy is a deep, equal copy; mutating the copy doesn't touch the source.
+    cardinal::small_vector<int, 4> c = v;
+    CHECK(c == v);
+    c.push_back(99);
+    CHECK(c != v);
+
+    // Move from a HEAP source steals the block; source left empty-valid.
+    cardinal::small_vector<int, 2> h;
+    for (int i = 0; i < 10; ++i) h.push_back(i);
+    CHECK(!h.is_inline());
+    cardinal::small_vector<int, 2> hm = cardinal::move(h);
+    CHECK(hm.size() == 10 && hm[9] == 9);
+    CHECK(h.empty());
+
+    // Move from an INLINE source move-constructs each element.
+    cardinal::small_vector<int, 4> s; s.push_back(7); s.push_back(8);
+    CHECK(s.is_inline());
+    cardinal::small_vector<int, 4> sm = cardinal::move(s);
+    CHECK(sm.size() == 2 && sm[0] == 7 && sm[1] == 8);
+    CHECK(s.empty());
+
+    // resize grow/shrink + erase shift + clear.
+    cardinal::small_vector<int, 4> r;
+    r.resize(3, 5); CHECK(r.size() == 3 && r[2] == 5);
+    r.resize(1);    CHECK(r.size() == 1);
+    r.push_back(10); r.push_back(20); r.push_back(30);   // {5,10,20,30}
+    r.erase(r.begin() + 1);                              // {5,20,30}
+    CHECK(r.size() == 3 && r[1] == 20 && r[2] == 30);
+    r.clear(); CHECK(r.empty());
+
+    // swap across inline (a) + heap (b) storage.
+    cardinal::small_vector<int, 4> a{1, 2};
+    cardinal::small_vector<int, 4> b{9, 8, 7, 6, 5};     // b is on the heap
+    a.swap(b);
+    CHECK(a.size() == 5 && a[0] == 9);
+    CHECK(b.size() == 2 && b[0] == 1);
+
+    // Lifetime balance: spill + copy + move + scope-exit leaves zero alive.
+    Tracked::s_alive = 0;
+    {
+        cardinal::small_vector<Tracked, 2> t;
+        t.emplace_back(); t.emplace_back(); t.emplace_back();   // spill to heap
+        cardinal::small_vector<Tracked, 2> t2 = t;              // copy
+        cardinal::small_vector<Tracked, 2> t3 = cardinal::move(t2);
+        t.pop_back();
+        CHECK(Tracked::s_alive > 0);
+    }
+    CHECK(Tracked::s_alive == 0);                              // no leaks / double-frees
+}
+
 }  // namespace
 
 int main() {
@@ -524,6 +616,7 @@ int main() {
     test_thread_lock();
     test_access();
     test_string();
+    test_small_vector();
     test_sync_queue();
     test_dedup_queue();
     test_waitable_queue();
