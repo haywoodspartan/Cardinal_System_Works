@@ -223,6 +223,14 @@ public:
     void   add_group_member(const cardinal::string& name,
                             cardinal::unique_ptr<Actor> proto,
                             const cardinal::scene::Vec3& rel);
+    // Group CRUD parity with single-actor prefabs: rename moves a group to a
+    // new key (fails if absent / new name taken / unchanged); duplicate deep-
+    // copies a group (each member proto cloned) under new_name (defaults to
+    // "<name> (copy)"; fails if absent / target taken).
+    bool   rename_group_prefab(const cardinal::string& old_name,
+                               const cardinal::string& new_name);
+    bool   duplicate_group_prefab(const cardinal::string& name,
+                                  const cardinal::string& new_name = "");
 
     // Library management — round out prefab CRUD.
     //   rename_prefab(old, new) — move a prototype to a new key. Fails

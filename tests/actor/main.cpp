@@ -639,6 +639,49 @@ void test_group_prefab() {
     CHECK(w.spawn_group_prefab("Nope", { 0, 0, 0 }).empty());
 }
 
+// ---- group prefab CRUD (rename + duplicate, parity w/ single prefabs) -
+void test_group_prefab_crud() {
+    ac::World w;
+    ac::Actor* a = w.spawn("A");
+    a->add_component<ac::MeshComponent>()->asset_id = "a";
+    a->get_component<ac::TransformComponent>()->translation = { 0.0f, 0.0f, 0.0f };
+    ac::Actor* b = w.spawn("B");
+    b->get_component<ac::TransformComponent>()->translation = { 0.0f, 0.0f, 4.0f };
+    CHECK(w.create_group_prefab("G", { a->id(), b->id() }));
+    CHECK(w.create_group_prefab("H", { a->id() }));
+
+    // rename
+    CHECK(w.rename_group_prefab("G", "G2"));
+    CHECK(!w.has_group_prefab("G") && w.has_group_prefab("G2"));
+    CHECK(w.group_prefab_member_count("G2") == 2u);
+    CHECK(!w.rename_group_prefab("Nope", "X"));     // absent source
+    CHECK(!w.rename_group_prefab("G2", "H"));       // target taken
+    CHECK(!w.rename_group_prefab("G2", "G2"));      // unchanged
+    CHECK(!w.rename_group_prefab("G2", ""));        // empty target
+
+    // duplicate — auto name + explicit name
+    CHECK(w.duplicate_group_prefab("G2"));          // -> "G2 (copy)"
+    CHECK(w.has_group_prefab("G2 (copy)"));
+    CHECK(w.group_prefab_member_count("G2 (copy)") == 2u);
+    CHECK(w.duplicate_group_prefab("G2", "Gdup"));
+    CHECK(w.has_group_prefab("Gdup"));
+    CHECK(!w.duplicate_group_prefab("Nope"));       // absent source
+    CHECK(!w.duplicate_group_prefab("G2", "H"));    // target taken
+
+    // The duplicate is independent + spawns with cloned members + rel layout.
+    auto inst = w.spawn_group_prefab("Gdup", { 10.0f, 0.0f, 0.0f });
+    CHECK(inst.size() == sz(2));
+    CHECK(inst[0]->get_component<ac::MeshComponent>() != nullptr);     // A's mesh cloned
+    CHECK(inst[0]->get_component<ac::MeshComponent>()->asset_id == "a");
+    CHECK(ap(inst[1]->get_component<ac::TransformComponent>()->translation.z, 4.0f));
+
+    // Editing the duplicate's source actor doesn't bleed into the original
+    // group (deep copy): mutate A, the original "G2" still has the old mesh.
+    a->get_component<ac::MeshComponent>()->asset_id = "edited";
+    auto g2i = w.spawn_group_prefab("G2", { 0.0f, 0.0f, 0.0f });
+    CHECK(g2i[0]->get_component<ac::MeshComponent>()->asset_id == "a");  // snapshot intact
+}
+
 // ---- starter prefab library ---------------------------------------
 void test_builtin_prefabs() {
     ac::World w;
@@ -1816,6 +1859,7 @@ int main() {
     test_prefabs();
     test_prefab_library_mgmt();
     test_group_prefab();
+    test_group_prefab_crud();
     test_builtin_prefabs();
     test_find_all_queries();
     test_bulk_ops();

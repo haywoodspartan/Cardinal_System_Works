@@ -709,6 +709,40 @@ void World::add_group_member(const cardinal::string& name,
     group_prefabs_[name].members.push_back(cardinal::move(m));
 }
 
+bool World::rename_group_prefab(const cardinal::string& old_name,
+                                const cardinal::string& new_name) {
+    if (old_name == new_name || new_name.empty()) return false;
+    auto it = group_prefabs_.find(old_name);
+    if (it == group_prefabs_.end()) return false;                 // no source
+    if (group_prefabs_.find(new_name) != group_prefabs_.end())    // target taken
+        return false;
+    GroupPrefab_ moved = cardinal::move(it->second);
+    group_prefabs_.erase(it);
+    group_prefabs_[new_name] = cardinal::move(moved);
+    return true;
+}
+
+bool World::duplicate_group_prefab(const cardinal::string& name,
+                                   const cardinal::string& new_name) {
+    auto it = group_prefabs_.find(name);
+    if (it == group_prefabs_.end()) return false;                 // no source
+    const cardinal::string target = new_name.empty() ? (name + " (copy)") : new_name;
+    if (group_prefabs_.find(target) != group_prefabs_.end())      // target taken
+        return false;
+    // Deep-copy every member's component-snapshot prototype + its rel offset.
+    GroupPrefab_ copy;
+    copy.members.reserve(it->second.members.size());
+    for (const auto& m : it->second.members) {
+        GroupMember_ nm;
+        nm.proto = cardinal::make_unique<Actor>(0u, m.proto->name());
+        m.proto->clone_components_into(*nm.proto, nullptr);
+        nm.rel = m.rel;
+        copy.members.push_back(cardinal::move(nm));
+    }
+    group_prefabs_[target] = cardinal::move(copy);   // `it` now stale — not reused
+    return true;
+}
+
 cardinal::string World::prefab_of(ActorId id) const {
     const Actor* a = find(id);
     if (a == nullptr) return {};
