@@ -419,6 +419,15 @@ cardinal::vector<Actor*> World::find_all_by_tag(const cardinal::string& tag) {
     return r;
 }
 
+cardinal::vector<Actor*> World::find_all_by_component(const cardinal::string& type_name) {
+    cardinal::vector<Actor*> r;
+    if (type_name.empty()) return r;
+    for (auto& a : actors_) {
+        if (a->alive() && a->has_component(type_name.c_str())) r.push_back(a.get());
+    }
+    return r;
+}
+
 cardinal::vector<Actor*> World::find_by_tag(const cardinal::string& tag) {
     cardinal::vector<Actor*> r;
     for (auto& a : actors_) {

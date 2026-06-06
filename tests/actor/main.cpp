@@ -760,10 +760,26 @@ void test_find_all_queries() {
     CHECK(w.find_all_by_tag("light").size() == sz(1));
     CHECK(w.find_all_by_tag("none").empty());
 
-    // Dead actors drop out of both queries (alive-filtered).
+    // Component-type query: select all actors holding a given component.
+    // crate1 has a Tag; lamp has a Tag + a Light. Add a Mesh to crate1.
+    crate1->add_component<ac::MeshComponent>();
+    lamp->add_component<ac::LightComponent>();
+    CHECK(w.find_all_by_component("Tag").size() == sz(2));      // crate1 + lamp
+    CHECK(w.find_all_by_component("Light").size() == sz(1));    // lamp
+    {
+        auto meshes = w.find_all_by_component("Mesh");
+        CHECK(meshes.size() == sz(1) && meshes[0] == crate1);
+    }
+    // Every spawned actor has a Transform (added on spawn).
+    CHECK(w.find_all_by_component("Transform").size() == sz(4));
+    CHECK(w.find_all_by_component("Nope").empty());             // unknown type
+    CHECK(w.find_all_by_component("").empty());                 // empty type
+
+    // Dead actors drop out of ALL queries (alive-filtered).
     w.destroy(crate2->id());                         // mark dead (not yet swept)
     CHECK(w.find_all_by_name("crate").size() == sz(1));   // only "Crate" now
     CHECK(w.find_all_by_name("").size() == sz(3));        // 4 - 1 dead
+    CHECK(w.find_all_by_component("Transform").size() == sz(3));   // dead excluded
 }
 
 // ---- bulk operations (on a set of ids, e.g. a filter result) ------

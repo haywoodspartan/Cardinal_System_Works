@@ -138,6 +138,12 @@ public:
     // Alive-filtered tag query (find_by_tag does NOT skip dead actors;
     // this one does — what the editor wants).
     cardinal::vector<Actor*> find_all_by_tag(const cardinal::string& tag);
+    // Alive actors holding a component of the given type_name ("Light",
+    // "RigidBody", "Mesh", "Camera", ...). Powers "select all <type>" and
+    // component-typed bulk ops (e.g. disable every Light). Empty type ->
+    // empty result. Matched by Component::type_name() (same rule as
+    // Actor::has_component).
+    cardinal::vector<Actor*> find_all_by_component(const cardinal::string& type_name);
 
     const cardinal::vector<cardinal::unique_ptr<Actor>>& actors() const noexcept { return actors_; }
     usize actor_count() const noexcept;
