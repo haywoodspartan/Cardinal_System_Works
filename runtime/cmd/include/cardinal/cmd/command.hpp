@@ -25,6 +25,7 @@
 namespace cardinal::actor { class World; }
 namespace cardinal::scene { class Scene; }
 namespace cardinal::level { class AssetPlacement; }
+namespace cardinal::edit  { class UndoStack; }
 namespace cardinal::rhi   { class Device; }
 
 namespace cardinal::cmd {
@@ -47,6 +48,7 @@ struct CommandContext {
     cardinal::actor::World*           world{nullptr};
     cardinal::scene::Scene*           scene{nullptr};
     cardinal::level::AssetPlacement*  placement{nullptr};
+    cardinal::edit::UndoStack*        scene_undo{nullptr};   // edit.undo / edit.redo
     cardinal::rhi::Device*            device{nullptr};
 
     // Viewport pick inputs (click-driven commands).

@@ -7,6 +7,7 @@
 #include <cardinal/level/level.hpp>    // AssetPlacement, PlaceResult
 #include <cardinal/actor/world.hpp>      // World (actor/layout commands)
 #include <cardinal/actor/validation.hpp> // validate_world / auto_fix_world
+#include <cardinal/edit/undo.hpp>        // UndoStack (edit.undo / edit.redo)
 #include <cardinal/core/cmath.hpp>     // cardinal::round
 #include <cardinal/core/algorithm.hpp> // cardinal::sort
 #include <cardinal/core/utility.hpp>   // cardinal::move
@@ -169,6 +170,28 @@ void register_builtin_commands(CommandRegistry& reg) {
             if (ctx.world == nullptr) return { false, "no world" };
             ctx.result_count = cardinal::actor::auto_fix_world(*ctx.world);
             return { true, {} };   // result_count = # fixes applied
+        };
+        reg.add(cardinal::move(c));
+    }
+    // ---- edit.undo / edit.redo — one dispatch path for the scene undo
+    // stack (toolbar buttons, Ctrl+Z, and the palette all resolve to these).
+    {
+        Command c;
+        c.id = "edit.undo"; c.label = "Undo";
+        c.run = [](CommandContext& ctx) -> CommandResult {
+            if (ctx.scene_undo == nullptr) return { false, "no undo stack" };
+            return ctx.scene_undo->undo() ? CommandResult{ true, {} }
+                                          : CommandResult{ false, "nothing to undo" };
+        };
+        reg.add(cardinal::move(c));
+    }
+    {
+        Command c;
+        c.id = "edit.redo"; c.label = "Redo";
+        c.run = [](CommandContext& ctx) -> CommandResult {
+            if (ctx.scene_undo == nullptr) return { false, "no undo stack" };
+            return ctx.scene_undo->redo() ? CommandResult{ true, {} }
+                                          : CommandResult{ false, "nothing to redo" };
         };
         reg.add(cardinal::move(c));
     }

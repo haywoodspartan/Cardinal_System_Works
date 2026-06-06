@@ -11,6 +11,7 @@ target_include_directories(cardinal_cmd PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 
 target_link_libraries(cardinal_cmd
-    PUBLIC  cardinal::core cardinal::scene cardinal::level cardinal::compile_flags)
+    PUBLIC  cardinal::core cardinal::scene cardinal::level cardinal::edit
+            cardinal::compile_flags)
 
 set_target_properties(cardinal_cmd PROPERTIES FOLDER runtime)

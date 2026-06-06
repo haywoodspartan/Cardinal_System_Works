@@ -9,6 +9,7 @@ target_link_libraries(Cardinal_Test_Cmd PRIVATE
     cardinal::cmd
     cardinal::scene
     cardinal::actor
+    cardinal::edit
     cardinal::core
     cardinal::compile_flags)
 set_target_properties(Cardinal_Test_Cmd PROPERTIES FOLDER tests)

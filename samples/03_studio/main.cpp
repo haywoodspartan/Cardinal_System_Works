@@ -2202,8 +2202,11 @@ int main(int argc, char** argv) {
             tool          = (tbar.tool == 1) ? Tool::PlaceAsset : Tool::Select;
             snap_enabled  = tbar.snap_enabled;
             snap_step     = tbar.snap_step;
-            if (ub.undo_clicked) undo.undo();
-            if (ub.redo_clicked) undo.redo();
+            if (ub.undo_clicked || ub.redo_clicked) {
+                cardinal::cmd::CommandContext ucx{};
+                ucx.scene_undo = &undo;
+                commands.dispatch(ub.undo_clicked ? "edit.undo" : "edit.redo", ucx);
+            }
             if (tbar.focus_selection && selected_id != 0) {
                 if (auto* e = scene.find_by_id(selected_id)) {
                     scene.camera().target = e->transform.translation;
@@ -2222,9 +2225,13 @@ int main(int argc, char** argv) {
             if (!io.WantCaptureKeyboard && (io.KeyCtrl || io.KeySuper)) {
                 const bool z = ImGui::IsKeyPressed(ImGuiKey_Z, false);
                 const bool y = ImGui::IsKeyPressed(ImGuiKey_Y, false);
-                if (z && io.KeyShift)      { undo.redo(); }
-                else if (z)                { undo.undo(); }
-                else if (y)                { undo.redo(); }
+                // Undo/redo route through the command bus (edit.undo/redo) —
+                // one dispatch path shared by the toolbar buttons + palette.
+                cardinal::cmd::CommandContext ucx{};
+                ucx.scene_undo = &undo;
+                if (z && io.KeyShift)      commands.dispatch("edit.redo", ucx);
+                else if (z)                commands.dispatch("edit.undo", ucx);
+                else if (y)                commands.dispatch("edit.redo", ucx);
                 if (ImGui::IsKeyPressed(ImGuiKey_P, false))
                     show_cmd_palette = !show_cmd_palette;          // Ctrl+P
             }
@@ -2263,10 +2270,11 @@ int main(int argc, char** argv) {
                     const cardinal::string row = label + "   (" + id + ")";
                     if (ImGui::Selectable(row.c_str())) {
                         cardinal::cmd::CommandContext cx{};
-                        cx.world     = &aworld;
-                        cx.scene     = &scene;
-                        cx.placement = placement.get();
-                        cx.device    = device.get();
+                        cx.world      = &aworld;
+                        cx.scene      = &scene;
+                        cx.placement  = placement.get();
+                        cx.scene_undo = &undo;
+                        cx.device     = device.get();
                         if (selected_actor_id != 0)
                             cx.selection = { selected_actor_id };
                         const auto r = commands.dispatch(id, cx);

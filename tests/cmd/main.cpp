@@ -4,6 +4,7 @@
 #include <cardinal/cmd/command.hpp>
 #include <cardinal/scene/math.hpp>
 #include <cardinal/actor/world.hpp>
+#include <cardinal/edit/undo.hpp>
 #include <cardinal/core/log.hpp>
 #include <cardinal/core/utility.hpp>   // cardinal::move
 
@@ -152,6 +153,27 @@ int main() {
     CHECK(vx.result_count >= 1u);          // at least the shared-name issue
     CHECK(reg.dispatch("world.autofix", vx).ok);    // runs (result_count = #fixes)
     CHECK(!reg.dispatch("world.validate", empty).ok);   // no world -> graceful
+
+    // ---- edit.undo / edit.redo over a real UndoStack (headless) ---------
+    CHECK(reg.has("edit.undo") && reg.has("edit.redo"));
+    cardinal::edit::UndoStack stack;
+    int counter = 0;
+    cardinal::edit::Command e1;
+    e1.label = "inc"; e1.apply = [&] { counter += 1; }; e1.revert = [&] { counter -= 1; };
+    e1.apply(); stack.push_executed(cardinal::move(e1));   // counter = 1
+    cardinal::edit::Command e2;
+    e2.label = "inc"; e2.apply = [&] { counter += 10; }; e2.revert = [&] { counter -= 10; };
+    e2.apply(); stack.push_executed(cardinal::move(e2));   // counter = 11
+    CHECK(counter == 11);
+
+    cc::CommandContext ux{}; ux.scene_undo = &stack;
+    CHECK(reg.dispatch("edit.undo", ux).ok); CHECK(counter == 1);    // reverted e2
+    CHECK(reg.dispatch("edit.undo", ux).ok); CHECK(counter == 0);    // reverted e1
+    CHECK(!reg.dispatch("edit.undo", ux).ok);                        // nothing to undo
+    CHECK(reg.dispatch("edit.redo", ux).ok); CHECK(counter == 1);    // re-applied e1
+    CHECK(reg.dispatch("edit.redo", ux).ok); CHECK(counter == 11);   // re-applied e2
+    CHECK(!reg.dispatch("edit.redo", ux).ok);                        // nothing to redo
+    CHECK(!reg.dispatch("edit.undo", empty).ok);                     // no stack -> graceful
 
     if (g_fail == 0) cardinal::log::infof("cmdtest", "OK  %d checks passed", g_checks);
     else             cardinal::log::errorf("cmdtest", "%d/%d checks FAILED", g_fail, g_checks);
