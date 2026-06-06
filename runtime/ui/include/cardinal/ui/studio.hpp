@@ -177,6 +177,11 @@ public:
                                   bool* p_open = nullptr) = 0;
 
     // ----- Game lifecycle / Class picker / Sky -------------------------
+    // Per-frame game logic (auto-checkpoint debounce + Play/Pause/Stop
+    // hotkeys + PIE lifecycle). Call EVERY frame, unconditionally — NOT
+    // gated by the Game panel's visibility — so undo checkpoints + hotkeys
+    // keep working when the panel is closed or a viewport is maximized.
+    virtual void update_game_logic(cardinal::game::Game* game) = 0;
     virtual void draw_game_bar_panel(cardinal::game::Game* game,
                                      const char* title = "Game",
                                      bool* p_open = nullptr) = 0;

@@ -813,9 +813,12 @@ public:
         panels::mixer_panel::draw(engine, title, p_open);
     }
 
+    void update_game_logic(cardinal::game::Game* game) override {
+        panels::game_bar_panel::update(game_bar_state_, game);
+    }
     void draw_game_bar_panel(cardinal::game::Game* game,
                              const char* title, bool* p_open) override {
-        panels::game_bar_panel::draw(game, title, p_open);
+        panels::game_bar_panel::draw(game_bar_state_, game, title, p_open);
     }
     void draw_class_picker_panel(cardinal::game::Game* game,
                                  u32* selected_actor_id_inout,
@@ -4158,6 +4161,7 @@ private:
     panels::texture_tools_panel::State   tex_tools_state_{};
     panels::cook_pack_panel::State       cook_pack_state_{};
     panels::prefab_panel::State          prefab_panel_state_{};
+    panels::game_bar_panel::State        game_bar_state_{};
 
     // World-grid level-editor: which chunk the cursor is over (filled by
     // draw_world_grid_overlay). Read by draw_viewport_context_menu so a

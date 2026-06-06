@@ -669,6 +669,17 @@ int main(int argc, char** argv) {
 
     // Undo / redo stack — wired to the toolbar buttons + Ctrl+Z / Ctrl+Y
     // hotkeys + the gizmo-drag-release edge.
+    //
+    // SCOPE: this is the SCENE render-graph undo (scene::Entity transforms via
+    // the gizmo, viewport place/delete). It is DISTINCT from the Game bar's
+    // WorldHistory, which snapshots the ACTOR world (inspector / outliner /
+    // layout edits). The two cover two different representations, so they are
+    // intentionally separate authorities: a single Ctrl+Z drives THIS scene
+    // stack (the Game bar's undo is button-driven, not chord-bound, to avoid a
+    // double-fire). A truly unified single-history undo would require capturing
+    // BOTH the scene graph AND the actor world in one ordered snapshot stream
+    // (serialize_scene + serialize_world together) — a larger effort tracked
+    // separately; a naive merge would let one undo desync the other half.
     edit::UndoStack undo;
     // Gizmo-drag coalescing: capture the entity's position the moment the
     // drag starts so when the drag releases we can record one "Move
@@ -2308,6 +2319,12 @@ int main(int argc, char** argv) {
         if (!any_maximized && show_memory)   studio->draw_memory_panel(&budget_broker, "Memory & Budgets", &show_memory);
         if (!any_maximized && show_profiler) studio->draw_profiler_panel(last_frame_ms_for_profiler, "Profiler", &show_profiler);
         if (!any_maximized && show_vt)       studio->draw_vt_panel(vt_system.get(), "Virtual Textures", &show_vt);
+        // Game logic (auto-checkpoint debounce + Play/Pause/Stop hotkeys + PIE
+        // lifecycle) runs EVERY frame, unconditionally — NOT gated by the Game
+        // panel's visibility — so undo checkpoints + hotkeys keep working when
+        // the panel is closed or a viewport is maximized. Only the bar's
+        // widgets are visibility-gated.
+        studio->update_game_logic(&game);
         if (!any_maximized && show_game)     studio->draw_game_bar_panel(&game, "Game", &show_game);
         if (!any_maximized && show_classes)  studio->draw_class_picker_panel(&game, &selected_actor_id, "Game Classes", &show_classes);
         if (!any_maximized && show_sky)      studio->draw_sky_panel(&sky, "Sky / Time of Day", &show_sky);
