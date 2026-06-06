@@ -78,6 +78,7 @@ namespace cardinal::input {
 #include <cardinal/scene/terrain.hpp>
 #include <cardinal/script/engine.hpp>
 #include <cardinal/ui/studio.hpp>
+#include <cardinal/ui/options_panel.hpp>   // Options / Settings panel (cvar editor)
 #include <cardinal/window/window.hpp>
 
 #include <imgui.h>
@@ -601,6 +602,7 @@ int main(int argc, char** argv) {
     bool show_pipeline  = true;
     bool show_memory    = true;
     bool show_profiler  = true;
+    bool show_options   = false;   // Options / Settings (cvar editor)
     bool show_modes     = true;
     bool show_brush     = false;
     bool show_mesh_tools= false;
@@ -1777,6 +1779,7 @@ int main(int argc, char** argv) {
                 ImGui::MenuItem("Stats",               nullptr, &show_stats);
                 ImGui::MenuItem("Log",                 nullptr, &show_log);
                 ImGui::MenuItem("Console",             nullptr, &show_console);
+                ImGui::MenuItem("Options / Settings",  nullptr, &show_options);
                 ImGui::MenuItem("Code Sandbox",        nullptr, &show_cppscript);
                 ImGui::Separator();
                 ImGui::MenuItem("Render Pipeline",     nullptr, &show_pipeline);
@@ -2445,6 +2448,8 @@ int main(int argc, char** argv) {
 
         if (!any_maximized && show_log)      studio->draw_log_panel  ("Log",   &show_log);
         if (!any_maximized && show_stats)    studio->draw_stats_panel("Stats", &show_stats);
+        if (!any_maximized && show_options)
+            cardinal::ui::panels::options_panel::draw("Options / Settings", &show_options);
         if (!any_maximized && show_pipeline) studio->draw_render_pipeline_panel(*pipelines, "Render Pipeline", &show_pipeline);
         if (!any_maximized && show_memory)   studio->draw_memory_panel(&budget_broker, "Memory & Budgets", &show_memory);
         if (!any_maximized && show_profiler) studio->draw_profiler_panel(last_frame_ms_for_profiler, "Profiler", &show_profiler);

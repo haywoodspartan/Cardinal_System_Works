@@ -12,6 +12,9 @@ set(CARDINAL_UI_HEADERS
     # Free-function diagnostic panel — per-mesh vgeom drawn / master
     # tri ratio + attach button. Same shape as simd_panel.
     include/cardinal/ui/vgeom_panel.hpp
+    # Free-function Options / Settings panel — categorised editor over the
+    # console CVar registry + Save/Load to a settings file. Same shape.
+    include/cardinal/ui/options_panel.hpp
 )
 
 set(CARDINAL_UI_SOURCES
@@ -75,6 +78,7 @@ set(CARDINAL_UI_SOURCES
     src/panels/diagnostics/memory.cpp
     src/panels/diagnostics/profiler.cpp
     src/panels/diagnostics/simd.cpp
+    src/panels/diagnostics/options.cpp
     # We compile our own copy of imgui_impl_vulkan.cpp so it links against
     # volk's function pointers instead of the vcpkg `imgui[vulkan-binding]`
     # binary path — the latter crashed inside ImGui_ImplVulkan_Init under
