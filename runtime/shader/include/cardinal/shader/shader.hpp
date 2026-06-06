@@ -40,6 +40,29 @@ struct CompileResult {
     f64                                  compile_seconds{0.0};
 };
 
+// When the engine's shaders are turned into cached bytecode:
+//   OnDemand — each shader is compiled lazily the first time compile() is
+//              called for it (fast startup, a one-time hitch on first use).
+//   UpFront  — the host warms the whole known set via precompile() at boot
+//              (no in-frame compile hitches; slower startup). The on-disk
+//              cache means a warmed set survives across runs, so "up front"
+//              after the first run is mostly cache-hit reload.
+// The mode is a POLICY the Compiler records for diagnostics/UI; compile()
+// behaves identically either way. The host enacts UpFront by calling
+// precompile() (typically with every pass's hlsl_source()) during init.
+enum class CompileMode : u32 { OnDemand = 0, UpFront = 1 };
+const char* compile_mode_name(CompileMode m) noexcept;
+
+// Summary of one precompile() batch.
+struct PrecompileReport {
+    u32 requested{0};    // requests submitted
+    u32 compiled{0};     // freshly compiled (cache miss)
+    u32 from_cache{0};   // served from the on-disk / in-memory cache
+    u32 failed{0};       // failed to compile (see per-result diagnostics)
+    f64 seconds{0.0};    // summed compile time across the batch
+    bool ok() const noexcept { return failed == 0; }
+};
+
 // ---------------------------------------------------------------------------
 // Compiler — process-level cache + facade.
 // ---------------------------------------------------------------------------
@@ -57,6 +80,23 @@ public:
     cardinal::vector<CompileResult> compile_variants(
         const CompileRequest& base,
         const cardinal::vector<cardinal::vector<cardinal::string>>& variant_defines);
+
+    // ---- Compile mode (on-demand vs up-front) ----------------------
+    // Record the host's compilation policy (default OnDemand). Pure state —
+    // does not change compile()'s behavior; lets the Studio's shader panel
+    // show + toggle the active mode, and lets the host decide whether to
+    // warm the cache at boot.
+    void        set_mode(CompileMode m) noexcept;
+    CompileMode mode() const noexcept;
+
+    // Up-front warm: compile every request now, filling the on-disk +
+    // in-memory cache so later compile() calls for the same requests are
+    // cache hits with no in-frame hitch. Idempotent + cheap to repeat (a
+    // second call is all cache hits). Returns a per-batch report; never
+    // throws (a failed entry is counted, not fatal). This is the explicit
+    // "compile up front" action — independent of the mode flag, though a
+    // host in UpFront mode calls it during init with every known shader.
+    PrecompileReport precompile(const cardinal::vector<CompileRequest>& requests);
 
     // ---- Hot-reload watch ------------------------------------------
     // Watch a source file for mtime changes. When a change is observed

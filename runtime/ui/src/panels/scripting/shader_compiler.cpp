@@ -42,6 +42,31 @@ void draw(cardinal::shader::Compiler* compiler, const char* title, bool* p_open)
         stats.watched_files,
         static_cast<unsigned long long>(stats.hot_reloads));
 
+    // Compile mode — on-demand (compile lazily on first use) vs up-front
+    // (warm the cache so there's no in-frame compile hitch). Toggling sets
+    // the Compiler's policy; "Precompile" warms the current source now as a
+    // one-entry batch (a host warms the whole pass set at boot the same way).
+    {
+        int mode_idx = static_cast<int>(compiler->mode());
+        const char* modes[] = { "On-Demand (lazy first use)",
+                                "Up-Front (warm cache)" };
+        ImGui::SetNextItemWidth(260.0f);
+        if (ImGui::Combo("Compile Mode", &mode_idx, modes, IM_ARRAYSIZE(modes)))
+            compiler->set_mode(static_cast<cardinal::shader::CompileMode>(mode_idx));
+        ImGui::SameLine();
+        if (ImGui::Button("Precompile")) {
+            cardinal::shader::CompileRequest r{};
+            r.source_text = source;
+            r.entry_point = entry;
+            r.stage       = static_cast<cardinal::shader::Stage>(stage_idx);
+            compiler->precompile({ r });   // up-front warm — fills the cache
+            last = compiler->compile(r);   // now a cache hit; show the result
+            ever_compiled = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%s)", cardinal::shader::compile_mode_name(compiler->mode()));
+    }
+
     ImGui::Separator();
 
     const char* stages[] = { "Vertex", "Fragment", "Compute" };

@@ -26,6 +26,14 @@ const char* stage_name(Stage s) noexcept {
     return "?";
 }
 
+const char* compile_mode_name(CompileMode m) noexcept {
+    switch (m) {
+        case CompileMode::OnDemand: return "on-demand";
+        case CompileMode::UpFront:  return "up-front";
+    }
+    return "?";
+}
+
 namespace {
 
 u64 fnv1a64(const u8* data, usize n) noexcept {
@@ -98,6 +106,9 @@ struct Compiler::Impl {
     cardinal::atomic<u64>       compiles_total{0};
     cardinal::atomic<u64>       cache_hits    {0};
     cardinal::atomic<u64>       hot_reloads   {0};
+    // Compilation policy (on-demand vs up-front). Pure state; compile()
+    // ignores it. Atomic so the Studio panel can read/toggle it off-thread.
+    cardinal::atomic<u32>       mode { static_cast<u32>(CompileMode::OnDemand) };
 
     struct Watch {
         WatchHandle id;
@@ -232,6 +243,31 @@ cardinal::vector<CompileResult> Compiler::compile_variants(
         out.push_back(compile(r));
     }
     return out;
+}
+
+void Compiler::set_mode(CompileMode m) noexcept {
+    impl_->mode.store(static_cast<u32>(m), cardinal::memory_order_relaxed);
+}
+
+CompileMode Compiler::mode() const noexcept {
+    return static_cast<CompileMode>(
+        impl_->mode.load(cardinal::memory_order_relaxed));
+}
+
+PrecompileReport Compiler::precompile(const cardinal::vector<CompileRequest>& requests) {
+    PrecompileReport rep;
+    rep.requested = static_cast<u32>(requests.size());
+    for (const auto& req : requests) {
+        const CompileResult r = compile(req);   // fills the cache as a side effect
+        rep.seconds += r.compile_seconds;
+        if (!r.ok)                    ++rep.failed;
+        else if (r.served_from_cache) ++rep.from_cache;
+        else                          ++rep.compiled;
+    }
+    cardinal::log::infof("shader",
+        "precompile: %u requested — %u compiled, %u cached, %u failed (%.2fs)",
+        rep.requested, rep.compiled, rep.from_cache, rep.failed, rep.seconds);
+    return rep;
 }
 
 Compiler::WatchHandle Compiler::watch(const cardinal::string& source_path,
