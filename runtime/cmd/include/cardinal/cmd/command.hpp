@@ -19,7 +19,9 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // cardinal::string / function / usize
-#include <cardinal/core/containers.hpp>   // cardinal::vector / unordered_map
+#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/dense_map.hpp>    // cardinal::dense_map (registry storage)
+#include <cardinal/core/string/string_id.hpp> // cardinal::StringId (registry key)
 #include <cardinal/core/math.hpp>         // cardinal::core::Mat4 / Vec3
 
 namespace cardinal::actor { class World; }
@@ -109,7 +111,13 @@ public:
     cardinal::usize size() const noexcept { return commands_.size(); }
 
 private:
-    cardinal::unordered_map<cardinal::string, Command> commands_;
+    // Keyed by the StringId hash of the (compile-time-stable) command id, not
+    // the string itself — find/has/dispatch/is_enabled become a u64-keyed
+    // O(1) DenseMap probe instead of string hashing + node chasing. The public
+    // API stays string-based (callers pass "world.undo" etc.); the id string
+    // is also kept inside each Command for ids() + display. 64-bit FNV over a
+    // controlled, dotted id namespace makes collisions a non-issue.
+    cardinal::dense_map<cardinal::StringId, Command> commands_;
 };
 
 // Pure, Device-free placement math (the offset bug lived here, fed the wrong

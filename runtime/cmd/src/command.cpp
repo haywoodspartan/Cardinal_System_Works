@@ -16,15 +16,17 @@
 namespace cardinal::cmd {
 
 // ---- CommandRegistry --------------------------------------------------
+// Keyed by StringId(id) — a u64 hash — so lookups are an O(1) DenseMap probe.
+// The public API stays string-based; each Command keeps its id string for
+// ids() + diagnostics.
 void CommandRegistry::add(Command cmd) {
-    commands_[cmd.id] = cardinal::move(cmd);
+    commands_[cardinal::StringId(cmd.id)] = cardinal::move(cmd);
 }
 bool CommandRegistry::has(const cardinal::string& id) const {
-    return commands_.find(id) != commands_.end();
+    return commands_.contains(cardinal::StringId(id));
 }
 const Command* CommandRegistry::find(const cardinal::string& id) const {
-    auto it = commands_.find(id);
-    return it == commands_.end() ? nullptr : &it->second;
+    return commands_.find(cardinal::StringId(id));   // const V* (nullptr if absent)
 }
 CommandResult CommandRegistry::dispatch(const cardinal::string& id,
                                         CommandContext& ctx) const {
@@ -41,7 +43,9 @@ bool CommandRegistry::is_enabled(const cardinal::string& id,
 cardinal::vector<cardinal::string> CommandRegistry::ids() const {
     cardinal::vector<cardinal::string> r;
     r.reserve(commands_.size());
-    for (const auto& kv : commands_) r.push_back(kv.first);
+    commands_.for_each([&](const cardinal::StringId&, const Command& c) {
+        r.push_back(c.id);
+    });
     cardinal::sort(r.begin(), r.end());
     return r;
 }
