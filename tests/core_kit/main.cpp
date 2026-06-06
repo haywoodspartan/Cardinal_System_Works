@@ -21,6 +21,7 @@
 #include <cardinal/core/small_vector.hpp>
 #include <cardinal/core/dense_map.hpp>
 #include <cardinal/core/sparse_set.hpp>
+#include <cardinal/core/spsc_ring.hpp>
 #include <cardinal/core/flags.hpp>
 #include <cardinal/core/containers.hpp>
 #include <cardinal/core/log.hpp>
@@ -842,6 +843,54 @@ void test_sparse_set() {
     CHECK(Tracked::s_alive == 0);
 }
 
+void test_spsc_ring() {
+    // Single-threaded: fill to capacity, full rejects, FIFO drain, empty.
+    cardinal::core::SpscRing<int, 4> r;
+    CHECK(r.empty() && r.capacity() == 4);
+    CHECK(r.try_push(1) && r.try_push(2) && r.try_push(3) && r.try_push(4));
+    CHECK(!r.try_push(5));                         // full (no overwrite, no block)
+    CHECK(r.size_approx() == 4);
+    int out = -1;
+    CHECK(r.try_pop(out) && out == 1);
+    CHECK(r.try_pop(out) && out == 2);
+    CHECK(r.try_push(5));                          // room freed
+    CHECK(r.try_pop(out) && out == 3);
+    CHECK(r.try_pop(out) && out == 4);
+    CHECK(r.try_pop(out) && out == 5);
+    CHECK(!r.try_pop(out));                        // empty
+    CHECK(r.empty());
+
+    // Cross-thread SPSC: one producer pushes 0..M, one consumer pops M, must
+    // see every value exactly once, in FIFO order, with the right sum. Only
+    // the consumer thread writes the check locals → no data race on them.
+    static constexpr int M = 100000;
+    cardinal::core::SpscRing<int, 1024> q;
+    std::thread producer([&] {
+        for (int i = 0; i < M; ++i) while (!q.try_push(i)) { /* spin until room */ }
+    });
+    int       expect    = 0;
+    int       got       = 0;
+    long long sum       = 0;
+    bool      order_ok  = true;
+    std::thread consumer([&] {
+        int v;
+        while (got < M) {
+            if (q.try_pop(v)) {
+                if (v != expect) order_ok = false;     // strict FIFO
+                ++expect; ++got; sum += v;
+            }
+        }
+    });
+    producer.join();
+    consumer.join();
+    CHECK(got == M);
+    CHECK(order_ok);
+    long long expect_sum = 0;
+    for (int i = 0; i < M; ++i) expect_sum += i;
+    CHECK(sum == expect_sum);                      // nothing lost or duplicated
+    CHECK(q.empty());
+}
+
 }  // namespace
 
 int main() {
@@ -856,6 +905,7 @@ int main() {
     test_flags();
     test_dense_map();
     test_sparse_set();
+    test_spsc_ring();
     test_sync_queue();
     test_dedup_queue();
     test_waitable_queue();
