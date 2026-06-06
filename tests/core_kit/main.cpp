@@ -20,6 +20,7 @@
 #include <cardinal/core/string/string_id.hpp>
 #include <cardinal/core/small_vector.hpp>
 #include <cardinal/core/dense_map.hpp>
+#include <cardinal/core/sparse_set.hpp>
 #include <cardinal/core/flags.hpp>
 #include <cardinal/core/containers.hpp>
 #include <cardinal/core/log.hpp>
@@ -773,6 +774,74 @@ void test_dense_map() {
     CHECK(big.empty() && big.size() == 0);
 }
 
+void test_sparse_set() {
+    cardinal::sparse_set<int> s;
+    CHECK(s.empty() && s.size() == 0);
+    CHECK(!s.contains(5));
+
+    s.insert(5, 50);
+    s.insert(1, 10);
+    s.insert(100, 1000);
+    CHECK(s.size() == 3);
+    CHECK(s.contains(5) && s.contains(1) && s.contains(100));
+    CHECK(s.get(5) != nullptr && *s.get(5) == 50);
+    CHECK(s.get(7) == nullptr);
+
+    // Overwrite existing key.
+    s.insert(5, 55);
+    CHECK(*s.get(5) == 55 && s.size() == 3);
+
+    // Remove the middle key → swap-with-last keeps the others valid.
+    CHECK(s.remove(1));
+    CHECK(!s.contains(1) && s.size() == 2);
+    CHECK(*s.get(5) == 55 && *s.get(100) == 1000);
+    CHECK(!s.remove(1));
+
+    // Dense iteration covers exactly the remaining entries.
+    long long ks = 0, vs = 0; cardinal::usize n = 0;
+    s.for_each([&](cardinal::u32 k, int& v) { ks += k; vs += v; ++n; });
+    CHECK(n == 2 && ks == (5 + 100) && vs == (55 + 1000));
+    long long vspan = 0; for (int v : s.values()) vspan += v;
+    CHECK(vspan == 55 + 1000);
+
+    // Stress: many sparse keys → all findable; remove-evens parity holds.
+    cardinal::sparse_set<int> big;
+    const cardinal::u32 N = 2000;
+    for (cardinal::u32 i = 0; i < N; ++i) big.insert(i * 3, static_cast<int>(i));
+    CHECK(big.size() == N);
+    bool all_ok = true;
+    for (cardinal::u32 i = 0; i < N; ++i) {
+        const int* p = big.get(i * 3);
+        if (p == nullptr || *p != static_cast<int>(i)) { all_ok = false; break; }
+    }
+    CHECK(all_ok);
+    for (cardinal::u32 i = 0; i < N; i += 2) big.remove(i * 3);
+    CHECK(big.size() == N / 2);
+    bool parity = true;
+    for (cardinal::u32 i = 1; i < N; i += 2) if (!big.contains(i * 3)) parity = false;
+    for (cardinal::u32 i = 0; i < N; i += 2) if (big.contains(i * 3))  parity = false;
+    CHECK(parity);
+
+    // clear + reuse.
+    big.clear();
+    CHECK(big.empty());
+    big.insert(7, 77);
+    CHECK(big.size() == 1 && *big.get(7) == 77);
+
+    // Lifetime balance across insert/remove/scope-exit.
+    Tracked::s_alive = 0;
+    {
+        cardinal::sparse_set<Tracked> ts;
+        ts.insert(0, Tracked(1));
+        ts.insert(2, Tracked(2));
+        ts.insert(4, Tracked(3));
+        CHECK(ts.size() == 3 && Tracked::s_alive == 3);
+        ts.remove(2);                                   // swap-pop
+        CHECK(ts.size() == 2 && Tracked::s_alive == 2);
+    }
+    CHECK(Tracked::s_alive == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -786,6 +855,7 @@ int main() {
     test_string_id();
     test_flags();
     test_dense_map();
+    test_sparse_set();
     test_sync_queue();
     test_dedup_queue();
     test_waitable_queue();
