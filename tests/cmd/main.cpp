@@ -196,6 +196,34 @@ int main() {
     cc::CommandContext fnone{}; fnone.scene = &sc_scene;
     CHECK(!reg.dispatch("camera.focus_selection", fnone).ok);        // empty selection
 
+    // ---- command enablement (palette grey-out predicates) --------------
+    CHECK(!reg.is_enabled("does.not.exist", empty));   // unknown -> disabled
+    CHECK(reg.is_enabled("test.noop", empty));         // no predicate -> always enabled
+    // actor.* / layout.* need a world + non-empty selection.
+    ac::World ew;
+    cc::CommandContext en_no{};  en_no.world = &ew;                  // no selection
+    cc::CommandContext en_yes{}; en_yes.world = &ew; en_yes.selection = { 1u };
+    CHECK(!reg.is_enabled("actor.delete", en_no));
+    CHECK(reg.is_enabled("actor.delete", en_yes));
+    CHECK(!reg.is_enabled("layout.align", en_no));
+    CHECK(reg.is_enabled("layout.align", en_yes));
+    // world.validate needs only a world.
+    CHECK(reg.is_enabled("world.validate", en_no));
+    CHECK(!reg.is_enabled("world.validate", empty));
+    // edit.undo enabled only when the stack can undo.
+    cardinal::edit::UndoStack es2;
+    cc::CommandContext eu{}; eu.scene_undo = &es2;
+    CHECK(!reg.is_enabled("edit.undo", eu));            // empty stack
+    cardinal::edit::Command ec; ec.label="x"; ec.apply=[]{}; ec.revert=[]{};
+    es2.push_executed(cardinal::move(ec));
+    CHECK(reg.is_enabled("edit.undo", eu));             // now has one
+    CHECK(!reg.is_enabled("edit.redo", eu));            // nothing to redo
+    // camera.focus_selection needs a scene + scene_selection.
+    cc::CommandContext ef{}; ef.scene = &sc_scene;
+    CHECK(!reg.is_enabled("camera.focus_selection", ef));
+    ef.scene_selection = { sid1 };
+    CHECK(reg.is_enabled("camera.focus_selection", ef));
+
     if (g_fail == 0) cardinal::log::infof("cmdtest", "OK  %d checks passed", g_checks);
     else             cardinal::log::errorf("cmdtest", "%d/%d checks FAILED", g_fail, g_checks);
     return g_fail == 0 ? 0 : 1;

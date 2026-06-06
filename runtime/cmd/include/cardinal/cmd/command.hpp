@@ -87,6 +87,11 @@ struct Command {
     cardinal::string id;      // dotted, e.g. "world.place_asset"
     cardinal::string label;   // human label, e.g. "Place Asset"
     cardinal::function<CommandResult(CommandContext&)> run;
+    // Optional predicate: can this command run in the given context? Used to
+    // grey out unavailable entries in the palette / menus. Null == always
+    // enabled. dispatch() does NOT consult it — a disabled command still
+    // fails gracefully via its own run() guards; this is purely for UI.
+    cardinal::function<bool(const CommandContext&)> enabled;
 };
 
 class CommandRegistry {
@@ -97,6 +102,9 @@ public:
     // Dispatch by id. Unknown id / empty handler -> ok=false (never throws),
     // so callers can route hotkeys/console blindly.
     CommandResult dispatch(const cardinal::string& id, CommandContext& ctx) const;
+    // Is the command runnable in this context? false for an unknown id; for a
+    // known command with no `enabled` predicate -> true (always enabled).
+    bool is_enabled(const cardinal::string& id, const CommandContext& ctx) const;
     cardinal::vector<cardinal::string> ids() const;            // sorted (palette/console)
     cardinal::usize size() const noexcept { return commands_.size(); }
 

@@ -32,6 +32,12 @@ CommandResult CommandRegistry::dispatch(const cardinal::string& id,
     if (c == nullptr || !c->run) return { false, "unknown command: " + id };
     return c->run(ctx);
 }
+bool CommandRegistry::is_enabled(const cardinal::string& id,
+                                 const CommandContext& ctx) const {
+    const Command* c = find(id);
+    if (c == nullptr) return false;
+    return c->enabled ? c->enabled(ctx) : true;
+}
 cardinal::vector<cardinal::string> CommandRegistry::ids() const {
     cardinal::vector<cardinal::string> r;
     r.reserve(commands_.size());
@@ -94,7 +100,15 @@ void register_builtin_commands(CommandRegistry& reg) {
         ctx.result_hit    = hit;
         return { true, {} };
     };
+    place.enabled = [](const CommandContext& ctx) {
+        return ctx.placement != nullptr && !ctx.active_asset_id.empty();
+    };
     reg.add(cardinal::move(place));
+
+    // Selection-driven enablement predicate shared by actor.* / layout.*.
+    const auto has_selection = [](const CommandContext& ctx) {
+        return ctx.world != nullptr && !ctx.selection.empty();
+    };
 
     // ---- actor / layout commands (pure World ops — headless-testable) ----
     // These act on ctx.world + ctx.selection, so the same operation the
@@ -113,6 +127,7 @@ void register_builtin_commands(CommandRegistry& reg) {
             return n ? CommandResult{ true, {} }
                      : CommandResult{ false, "nothing duplicated" };
         };
+        c.enabled = has_selection;
         reg.add(cardinal::move(c));
     }
     {
@@ -124,6 +139,7 @@ void register_builtin_commands(CommandRegistry& reg) {
             return ctx.result_count ? CommandResult{ true, {} }
                                     : CommandResult{ false, "nothing deleted" };
         };
+        c.enabled = has_selection;
         reg.add(cardinal::move(c));
     }
     {
@@ -139,6 +155,7 @@ void register_builtin_commands(CommandRegistry& reg) {
             ctx.result_count = ctx.world->align_actors(ctx.selection, ax, md);
             return { true, {} };
         };
+        c.enabled = has_selection;
         reg.add(cardinal::move(c));
     }
     {
@@ -151,6 +168,7 @@ void register_builtin_commands(CommandRegistry& reg) {
             ctx.result_count = ctx.world->distribute_actors(ctx.selection, ax);
             return { true, {} };
         };
+        c.enabled = has_selection;
         reg.add(cardinal::move(c));
     }
     {
@@ -162,8 +180,10 @@ void register_builtin_commands(CommandRegistry& reg) {
                 ctx.world->snap_actors_to_grid(ctx.selection, ctx.grid_step);
             return { true, {} };
         };
+        c.enabled = has_selection;
         reg.add(cardinal::move(c));
     }
+    const auto has_world = [](const CommandContext& ctx) { return ctx.world != nullptr; };
     {
         Command c;
         c.id = "world.validate"; c.label = "Validate Scene";
@@ -173,6 +193,7 @@ void register_builtin_commands(CommandRegistry& reg) {
             ctx.result_count = static_cast<cardinal::u32>(issues.size());
             return { true, {} };   // ok regardless; result_count = # issues
         };
+        c.enabled = has_world;
         reg.add(cardinal::move(c));
     }
     {
@@ -183,6 +204,7 @@ void register_builtin_commands(CommandRegistry& reg) {
             ctx.result_count = cardinal::actor::auto_fix_world(*ctx.world);
             return { true, {} };   // result_count = # fixes applied
         };
+        c.enabled = has_world;
         reg.add(cardinal::move(c));
     }
     // ---- edit.undo / edit.redo — one dispatch path for the scene undo
@@ -195,6 +217,9 @@ void register_builtin_commands(CommandRegistry& reg) {
             return ctx.scene_undo->undo() ? CommandResult{ true, {} }
                                           : CommandResult{ false, "nothing to undo" };
         };
+        c.enabled = [](const CommandContext& ctx) {
+            return ctx.scene_undo != nullptr && ctx.scene_undo->can_undo();
+        };
         reg.add(cardinal::move(c));
     }
     {
@@ -204,6 +229,9 @@ void register_builtin_commands(CommandRegistry& reg) {
             if (ctx.scene_undo == nullptr) return { false, "no undo stack" };
             return ctx.scene_undo->redo() ? CommandResult{ true, {} }
                                           : CommandResult{ false, "nothing to redo" };
+        };
+        c.enabled = [](const CommandContext& ctx) {
+            return ctx.scene_undo != nullptr && ctx.scene_undo->can_redo();
         };
         reg.add(cardinal::move(c));
     }
@@ -230,6 +258,9 @@ void register_builtin_commands(CommandRegistry& reg) {
             ctx.scene->camera().target = { sum.x * inv, sum.y * inv, sum.z * inv };
             ctx.result_count = n;
             return { true, {} };
+        };
+        c.enabled = [](const CommandContext& ctx) {
+            return ctx.scene != nullptr && !ctx.scene_selection.empty();
         };
         reg.add(cardinal::move(c));
     }

@@ -2278,6 +2278,19 @@ int main(int argc, char** argv) {
                         if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
                     return s;
                 };
+                // Build the dispatch context once; reused for enablement
+                // (grey-out) AND the actual dispatch on click.
+                auto make_ctx = [&]() {
+                    cardinal::cmd::CommandContext cx{};
+                    cx.world      = &aworld;
+                    cx.scene      = &scene;
+                    cx.placement  = placement.get();
+                    cx.scene_undo = &undo;
+                    cx.device     = device.get();
+                    if (selected_actor_id != 0) cx.selection = { selected_actor_id };
+                    if (selected_id != 0)       cx.scene_selection = { selected_id };
+                    return cx;
+                };
                 const cardinal::string flt = lower(cmd_filter);
                 for (const auto& id : commands.ids()) {
                     const auto* c = commands.find(id);
@@ -2287,15 +2300,13 @@ int main(int argc, char** argv) {
                         lower(label).find(flt) == cardinal::string::npos)
                         continue;
                     const cardinal::string row = label + "   (" + id + ")";
-                    if (ImGui::Selectable(row.c_str())) {
-                        cardinal::cmd::CommandContext cx{};
-                        cx.world      = &aworld;
-                        cx.scene      = &scene;
-                        cx.placement  = placement.get();
-                        cx.scene_undo = &undo;
-                        cx.device     = device.get();
-                        if (selected_actor_id != 0)
-                            cx.selection = { selected_actor_id };
+                    cardinal::cmd::CommandContext probe = make_ctx();
+                    const bool enabled = commands.is_enabled(id, probe);
+                    ImGui::BeginDisabled(!enabled);
+                    const bool clicked = ImGui::Selectable(row.c_str());
+                    ImGui::EndDisabled();
+                    if (clicked) {
+                        cardinal::cmd::CommandContext cx = make_ctx();
                         const auto r = commands.dispatch(id, cx);
                         clog::infof("palette", "%s -> %s (%s) [n=%u]",
                             id.c_str(), r.ok ? "ok" : "FAIL",
