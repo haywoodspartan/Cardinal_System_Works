@@ -33,6 +33,8 @@ add_subdirectory(import)
 # hal + io + geom were merged into cardinal::core — no separate libs.
 add_subdirectory(partition)
 add_subdirectory(level)
+# Unified editor command bus — after its deps (scene, level/actor).
+add_subdirectory(cmd)
 add_subdirectory(mass)
 add_subdirectory(navmesh)
 add_subdirectory(ai)

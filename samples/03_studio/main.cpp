@@ -29,6 +29,7 @@
 #include <cardinal/edit/editor_mode.hpp>
 #include <cardinal/edit/mesh_ops.hpp>
 #include <cardinal/edit/undo.hpp>
+#include <cardinal/cmd/command.hpp>
 #include <cardinal/vt/vt.hpp>
 #include <cardinal/actor/world.hpp>
 #include <cardinal/actor/builtin_prefabs.hpp>
@@ -681,6 +682,14 @@ int main(int argc, char** argv) {
     // (serialize_scene + serialize_world together) — a larger effort tracked
     // separately; a naive merge would let one undo desync the other half.
     edit::UndoStack undo;
+
+    // Unified command bus — engine ops registered as named commands that UI
+    // entry points dispatch by id (Phase 1: world.place_asset). Plus the
+    // per-viewport captured (view, proj) the picking commands unproject with.
+    cardinal::cmd::CommandRegistry commands;
+    cardinal::cmd::register_builtin_commands(commands);
+    std::vector<cardinal::cmd::ViewProj> rendered_vp;   // one per viewport, this frame
+
     // Gizmo-drag coalescing: capture the entity's position the moment the
     // drag starts so when the drag releases we can record one "Move
     // entity" undo with old → new positions, not one per frame.
@@ -1592,6 +1601,10 @@ int main(int argc, char** argv) {
         // world from the same angle — only the visualisation differs.
         // Per-viewport Camera is a follow-up (would need split fly-cam state
         // mapped to the focused panel).
+        // Reset the per-viewport captured matrices each frame (entries stay
+        // invalid for viewports not rendered below, so a pick over them is
+        // rejected rather than silently using a stale/foreign projection).
+        rendered_vp.assign(viewports.size(), cardinal::cmd::ViewProj{});
         for (int i = 0; i < static_cast<int>(viewports.size()); ++i) {
             const auto& vps = viewports[i];
             if (!vps.show)      continue;
@@ -1630,6 +1643,12 @@ int main(int argc, char** argv) {
                 ? static_cast<float>(vw_i) / static_cast<float>(vh_i)
                 : 1.0f;
             pipelines->render(scene, aspect_i);
+            // Capture the EXACT view/proj this viewport was rasterised with,
+            // so a later viewport click unprojects with bit-identical matrices
+            // (the placement-offset fix — no aspect/camera re-derivation).
+            if (i < static_cast<int>(rendered_vp.size()))
+                rendered_vp[static_cast<usize>(i)] =
+                    { scene.camera().view(), scene.camera().proj(aspect_i), true };
         }
         // NOTE: set_viewport_camera does NOT re-derive aspect — it just
         // stores the view/proj it is given. The per-panel overlay camera
@@ -3060,11 +3079,23 @@ int main(int argc, char** argv) {
                     ? static_cast<float>(v0w) / static_cast<float>(v0h)
                     : 1.0f;
             }
-            if (pick.click_left && aspect_pick > 0.0f) {
-                const auto  view_m = scene.camera().view();
-                const auto  proj_m = scene.camera().proj(aspect_pick);
-                const auto  ray    = scn::unproject_ndc_ray(pick.ndc_x, pick.ndc_y,
-                                                            view_m, proj_m);
+            // Resolve the CAPTURED view/proj for the hovered viewport — the
+            // exact matrices the scene was rasterised with this frame (stored
+            // in the render loop). Unprojecting the click with THESE instead of
+            // re-deriving proj(aspect)/view from the live camera at click time
+            // is what makes placement land under the cursor: no aspect-vs-NDC
+            // or camera-staleness drift can creep in. Fall back to viewport 0,
+            // then skip if nothing was rendered.
+            cardinal::cmd::ViewProj pick_vp{};
+            if (pick.viewport_id < rendered_vp.size() &&
+                rendered_vp[pick.viewport_id].valid)
+                pick_vp = rendered_vp[pick.viewport_id];
+            else if (!rendered_vp.empty() && rendered_vp[0].valid)
+                pick_vp = rendered_vp[0];
+
+            if (pick.click_left && pick_vp.valid) {
+                const auto  ray = scn::unproject_ndc_ray(pick.ndc_x, pick.ndc_y,
+                                                         pick_vp.view, pick_vp.proj);
 
                 if (tool == Tool::Select) {
                     const u32 hit_id = scn::pick_entity(scene, ray);
@@ -3087,13 +3118,41 @@ int main(int argc, char** argv) {
                     }
                     selected_id = selection.empty() ? 0u : selection.back();
                 } else if (tool == Tool::PlaceAsset && !placement_asset_id.empty()) {
-                    scn::Vec3 hit{};
-                    if (scn::ray_plane_y_intersect(ray, 0.0f, &hit)) {
-                        if (snap_enabled && snap_step > 0.0f) {
-                            hit.x = std::round(hit.x / snap_step) * snap_step;
-                            hit.z = std::round(hit.z / snap_step) * snap_step;
-                        }
-                        spawn_asset_at(placement_asset_id.c_str(), hit);
+                    // Route placement through the unified command bus. The
+                    // command unprojects with the captured pick_vp + places;
+                    // we keep the undo recording here (Phase-2 will fold it in).
+                    cardinal::cmd::CommandContext cx{};
+                    cx.placement       = placement.get();
+                    cx.device          = device.get();
+                    cx.viewport        = pick_vp;
+                    cx.ndc_x           = pick.ndc_x;
+                    cx.ndc_y           = pick.ndc_y;
+                    cx.active_asset_id = placement_asset_id;
+                    cx.snap_enabled    = snap_enabled;
+                    cx.snap_step       = snap_step;
+                    const auto r = commands.dispatch("world.place_asset", cx);
+                    if (r.ok) {
+                        selected_id = cx.result_entity;
+                        // Undo removes the placement; redo re-places at the
+                        // captured hit (mirrors spawn_asset_at).
+                        auto live = std::make_shared<cardinal::actor::ActorId>(cx.result_actor);
+                        std::string  id_copy = placement_asset_id;
+                        scn::Vec3    at      = cx.result_hit;
+                        auto*        pl      = placement.get();
+                        rhi::Device* dev     = device.get();
+                        edit::Command cmd;
+                        cmd.label  = "Place " + id_copy;
+                        cmd.revert = [live, pl]() {
+                            if (*live != 0u) { pl->remove(*live); *live = 0u; }
+                        };
+                        cmd.apply  = [live, pl, id_copy, at, dev, &selected_id]() {
+                            auto rr = pl->place(id_copy.c_str(), dev, at);
+                            *live = rr.actor;
+                            if (rr.primary_entity) selected_id = rr.primary_entity;
+                        };
+                        undo.push_executed(std::move(cmd));
+                    } else if (!r.message.empty()) {
+                        clog::infof("sample", "place_asset: %s", r.message.c_str());
                     }
                 }
             }
