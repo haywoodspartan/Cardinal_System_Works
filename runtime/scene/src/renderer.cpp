@@ -18,6 +18,7 @@
 // =============================================================================
 
 #include <cardinal/scene/renderer.hpp>
+#include <cardinal/scene/math.hpp>     // directional_light_vp (shadow light VP)
 
 #include <cardinal/core/async.hpp>
 #include <cardinal/core/geom.hpp>
@@ -651,36 +652,10 @@ inline Vec3 hsv_to_rgb(float h, float s, float v) {
     }
 }
 
-// Light-space view-projection for the directional shadow pass. An RH
-// orthographic box of half-extent `half` centred on the world origin,
-// looked at from along the (incoming) sun direction. ortho matches the
-// engine's RH / depth-0..1 convention (see Mat4::perspective): a glm
-// orthoRH_ZO. `sun_dir` is the direction the light travels (points AT
-// the scene, i.e. scene::Light::direction for a Directional).
-[[maybe_unused]] inline Mat4 directional_light_vp(
-    const Vec3& sun_dir, float half, float near_z, float far_z)
-{
-    // Normalise; guard a degenerate zero direction.
-    const float dl = cardinal::sqrt(sun_dir.x*sun_dir.x + sun_dir.y*sun_dir.y
-                             + sun_dir.z*sun_dir.z);
-    const Vec3 d = (dl > 1e-6f)
-        ? Vec3{sun_dir.x/dl, sun_dir.y/dl, sun_dir.z/dl}
-        : Vec3{0.0f, -1.0f, 0.0f};
-    // Place the light "camera" back along -travel so the whole box is
-    // in front of it; distance = far_z*0.5 keeps the scene mid-frustum.
-    const float dist = far_z * 0.5f;
-    const Vec3 eye{ -d.x * dist, -d.y * dist, -d.z * dist };
-    const Vec3 up = (cardinal::abs(d.y) < 0.95f) ? Vec3{0,1,0} : Vec3{0,0,1};
-    const Mat4 view = Mat4::look_at(eye, Vec3{0,0,0}, up);
-
-    Mat4 proj{};                       // zero-init
-    proj.m[0][0] =  1.0f / half;       // 2/(r-l) with r=-l=half
-    proj.m[1][1] =  1.0f / half;
-    proj.m[2][2] = -1.0f / (far_z - near_z);          // RH, z∈[0,1]
-    proj.m[3][2] = -near_z / (far_z - near_z);
-    proj.m[3][3] =  1.0f;
-    return proj * view;
-}
+// directional_light_vp (the shadow-map light view-projection) now lives in
+// <cardinal/scene/math.hpp> — reusable + headless-testable, and it follows the
+// camera target + texel-snaps the box (the old local copy was world-origin-
+// centred, so off-origin objects read as unshadowed).
 
 // Pick a per-vertex color based on the view mode. World-space pos / normal
 // are passed in so heightmap / normals can use them. The optional LightSet
@@ -1214,9 +1189,9 @@ public:
         // and resume the viewport cleanly. Triangle modes only (the
         // wire scratch is line-list); needs a Directional light + the
         // shadow resources (null on backends/GPUs that lack them).
-        // PCF sampling in PSMain lands next — this iteration proves the
-        // suspend → depth-render → resume scaffolding doesn't disturb
-        // the main image. light_vp is also stashed for that next step.
+        // The main pass samples this depth via 3×3 PCF in PSMain
+        // (directional_shadow); light_vp_ is published to the push block so
+        // the shader can reproject each fragment into this light clip space.
         if (!wire && pso_shadow_ != nullptr && shadow_tex_ != nullptr
             && lights_ != nullptr && lights_->shadows_enabled()) {
             const scene::Light* sun = nullptr;
@@ -1224,11 +1199,16 @@ public:
                 if (L.kind == LightKind::Directional) { sun = &L; break; }
             }
             if (sun != nullptr) {
-                // Ortho box half-extent 16 covers the demo scene; the
-                // helper places the light 0.5*far back along the sun
-                // travel direction.
+                // Centre the shadow box on the camera's look-at target so the
+                // shadowed region follows the view (the old code hardcoded the
+                // world origin → off-origin objects were never shadowed). A
+                // 64-unit box (half=32) over the focus keeps shadows sharp;
+                // the helper texel-snaps the box to stop edge crawl and places
+                // the light 0.5*far back along the sun direction.
                 light_vp_ = directional_light_vp(sun->direction,
-                                                 16.0f, 0.05f, 64.0f);
+                                                 scene.camera().target,
+                                                 32.0f, 0.05f, 200.0f,
+                                                 kShadowDim);
                 swapchain_->begin_shadow_pass(shadow_tex_.get());
                 swapchain_->bind_pipeline(pso_shadow_.get());
                 swapchain_->bind_vertex_buffer(slot.buffer.get(), 0);

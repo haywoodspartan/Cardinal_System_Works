@@ -334,6 +334,59 @@ void test_unproject_aspect_invariant() {
     CHECK(point_ray_dist(P, bad) > 0.05f);
 }
 
+// Mat4::ortho + the directional shadow-map light VP. The light VP centres an
+// ortho box on a point (the camera target) and texel-snaps it; the regression
+// the test pins: an OFF-ORIGIN focus must map INSIDE the shadow box (the old
+// world-origin box left off-origin objects unshadowed), and a caster above a
+// ground point must reproject to a SMALLER depth (so the PCF compare shadows
+// the ground). Convention-free: checked via geometric mappings.
+void test_directional_shadow_vp() {
+    auto approx = [](float a, float b, float e) { return cardinal::abs(a - b) < e; };
+
+    // ---- Mat4::ortho maps the box to the [-1,1]² × [0,1] clip cube --------
+    const Mat4 o = Mat4::ortho(-2.0f, 2.0f, -2.0f, 2.0f, 0.0f, 10.0f);
+    auto ondc = [&](float x, float y, float z) {
+        const Vec4 c = o * Vec4{ x, y, z, 1.0f };
+        return Vec3{ c.x / c.w, c.y / c.w, c.z / c.w };
+    };
+    const Vec3 cen = ondc(0.0f, 0.0f, -5.0f);   // box centre → NDC origin, mid-depth
+    CHECK(approx(cen.x, 0.0f, 1e-5f) && approx(cen.y, 0.0f, 1e-5f));
+    CHECK(approx(cen.z, 0.5f, 1e-5f));
+    const Vec3 corner = ondc(2.0f, 2.0f, -10.0f);  // far top-right corner → (1,1,1)
+    CHECK(approx(corner.x, 1.0f, 1e-5f) && approx(corner.y, 1.0f, 1e-5f));
+    CHECK(approx(corner.z, 1.0f, 1e-5f));
+
+    // ---- Off-origin directional light VP ---------------------------------
+    const Vec3 sun{ 0.0f, -1.0f, 0.0f };          // straight-down sun
+    const Vec3 focus{ 50.0f, 0.0f, -30.0f };      // OFF the world origin
+    const float half = 32.0f;
+    const Mat4 vp = sc::directional_light_vp(sun, focus, half, 0.05f, 200.0f, 2048u);
+    auto lndc = [&](const Vec3& p) {
+        const Vec4 c = vp * Vec4{ p.x, p.y, p.z, 1.0f };
+        const float iw = (cardinal::abs(c.w) > 1e-6f) ? 1.0f / c.w : 1.0f;
+        return Vec3{ c.x * iw, c.y * iw, c.z * iw };
+    };
+    // The focus point must land INSIDE the shadow box (the bug: off-origin
+    // points fell outside the world-origin box and read as unshadowed).
+    const Vec3 nf = lndc(focus);
+    CHECK(cardinal::abs(nf.x) <= 1.0f && cardinal::abs(nf.y) <= 1.0f);
+    CHECK(nf.z >= 0.0f && nf.z <= 1.0f);
+    // Texel-snap keeps the focus very near (but not exactly at) box centre.
+    CHECK(cardinal::abs(nf.x) < 0.05f && cardinal::abs(nf.y) < 0.05f);
+
+    // A caster 5 units ABOVE the focus reprojects to the same XY but a
+    // SMALLER depth (nearer the top-down sun) → the PCF compare shadows the
+    // ground beneath it.
+    const Vec3 occ = lndc(Vec3{ focus.x, focus.y + 5.0f, focus.z });
+    CHECK(approx(occ.x, nf.x, 1e-3f) && approx(occ.y, nf.y, 1e-3f));
+    CHECK(occ.z < nf.z);
+
+    // A point well outside the box (80 units east, box half=32) falls outside
+    // [-1,1] → correctly reads as lit (no false shadow at the map edge).
+    const Vec3 out = lndc(Vec3{ focus.x + 80.0f, focus.y, focus.z });
+    CHECK(cardinal::abs(out.x) > 1.0f);
+}
+
 }  // namespace
 
 int main() {
@@ -344,6 +397,7 @@ int main() {
     test_mat4();
     test_ray();
     test_unproject_aspect_invariant();
+    test_directional_shadow_vp();
 
     if (g_fail == 0) {
         cardinal::log::infof("mathtest", "OK  %d checks passed", g_checks);

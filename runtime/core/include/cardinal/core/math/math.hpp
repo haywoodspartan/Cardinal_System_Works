@@ -278,6 +278,24 @@ struct Mat4 {
         return r;
     }
 
+    // Right-handed orthographic projection, depth mapped to z ∈ [0, 1]
+    // (D3D/Vulkan convention — matches perspective() above). Column-major
+    // m[col][row]. For a symmetric box (l=-h, r=h, b=-h, t=h) this reduces to
+    // m[0][0]=1/h, m[1][1]=1/h, m[2][2]=-1/(f-n), m[3][2]=-n/(f-n) — the form
+    // the directional shadow box was hand-rolling, so single-box behaviour is
+    // bit-identical. Used for directional shadow-map light projections.
+    static Mat4 ortho(f32 l, f32 r, f32 b, f32 t, f32 n, f32 f) noexcept {
+        Mat4 o{};
+        o.m[0][0] =  2.0f / (r - l);
+        o.m[1][1] =  2.0f / (t - b);
+        o.m[2][2] = -1.0f / (f - n);
+        o.m[3][0] = -(r + l) / (r - l);
+        o.m[3][1] = -(t + b) / (t - b);
+        o.m[3][2] = -n / (f - n);
+        o.m[3][3] =  1.0f;
+        return o;
+    }
+
     static Mat4 look_at(const Vec3& eye, const Vec3& target, const Vec3& up) noexcept {
         const Vec3 f = normalize(target - eye);
         const Vec3 s = normalize(cross(f, up));

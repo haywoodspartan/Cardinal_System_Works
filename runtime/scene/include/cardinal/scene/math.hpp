@@ -92,4 +92,49 @@ inline bool ray_plane_y_intersect(const Ray& r, float plane_y,
     return true;
 }
 
+// Light-space view-projection for a directional (sun) shadow map. Builds an
+// RH, z∈[0,1] orthographic box of half-extent `half`, centred on `center`,
+// viewed from along the incoming `sun_dir`. Pass the camera's look-at target
+// as `center` so the shadowed region FOLLOWS the view — the prior version
+// hardcoded the world origin, so anything off-origin fell outside the box and
+// read as unshadowed (shadows only appeared near 0,0). The box origin is
+// snapped to whole shadow-texel increments (via `shadow_dim`) so the texel
+// grid stays world-aligned as the box moves — this removes the crawling /
+// shimmering shadow edge. `near_z`/`far_z` are the light-space depth range;
+// widen them past the scene so casters above the focus still occlude.
+inline Mat4 directional_light_vp(const Vec3& sun_dir, const Vec3& center,
+                                 float half, float near_z, float far_z,
+                                 cardinal::u32 shadow_dim) noexcept
+{
+    const float dl = cardinal::sqrt(sun_dir.x * sun_dir.x +
+                                    sun_dir.y * sun_dir.y +
+                                    sun_dir.z * sun_dir.z);
+    const Vec3 d = (dl > 1e-6f)
+        ? Vec3{ sun_dir.x / dl, sun_dir.y / dl, sun_dir.z / dl }
+        : Vec3{ 0.0f, -1.0f, 0.0f };
+    // Place the light "camera" back along -travel so the whole box is in front.
+    const float dist = far_z * 0.5f;
+    const Vec3 eye{ center.x - d.x * dist,
+                    center.y - d.y * dist,
+                    center.z - d.z * dist };
+    const Vec3 up = (cardinal::abs(d.y) < 0.95f) ? Vec3{0,1,0} : Vec3{0,0,1};
+    const Mat4 view = Mat4::look_at(eye, center, up);
+    Mat4 proj = Mat4::ortho(-half, half, -half, half, near_z, far_z);
+
+    // Texel-snap: project the WORLD ORIGIN through the light VP (a fixed
+    // reference) and nudge the box so that point lands on a texel boundary.
+    // This pins the texel grid to world space, so panning the box doesn't
+    // make shadow edges crawl. (Ortho => w == 1, no perspective divide.)
+    if (shadow_dim > 0u && half > 0.0f) {
+        const Mat4 vp0 = proj * view;
+        const Vec4 o   = vp0 * Vec4{ 0.0f, 0.0f, 0.0f, 1.0f };
+        const float dimf = static_cast<float>(shadow_dim);
+        const float tx = (o.x * 0.5f + 0.5f) * dimf;
+        const float ty = (o.y * 0.5f + 0.5f) * dimf;
+        proj.m[3][0] += (cardinal::round(tx) - tx) * 2.0f / dimf;
+        proj.m[3][1] += (cardinal::round(ty) - ty) * 2.0f / dimf;
+    }
+    return proj * view;
+}
+
 }  // namespace cardinal::scene
