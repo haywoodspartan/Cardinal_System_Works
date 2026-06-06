@@ -4,6 +4,7 @@
 #include <cardinal/cmd/command.hpp>
 
 #include <cardinal/scene/math.hpp>     // unproject_ndc_ray, ray_plane_y_intersect
+#include <cardinal/scene/scene.hpp>    // Scene / Entity / Camera (camera.*)
 #include <cardinal/level/level.hpp>    // AssetPlacement, PlaceResult
 #include <cardinal/actor/world.hpp>      // World (actor/layout commands)
 #include <cardinal/actor/validation.hpp> // validate_world / auto_fix_world
@@ -197,6 +198,32 @@ void register_builtin_commands(CommandRegistry& reg) {
             if (ctx.scene_undo == nullptr) return { false, "no undo stack" };
             return ctx.scene_undo->redo() ? CommandResult{ true, {} }
                                           : CommandResult{ false, "nothing to redo" };
+        };
+        reg.add(cardinal::move(c));
+    }
+    // camera.focus_selection — aim the scene camera at the centroid of the
+    // selected scene entities (collapses the host's 3 inline focus copies).
+    {
+        Command c;
+        c.id = "camera.focus_selection"; c.label = "Focus Selection";
+        c.run = [](CommandContext& ctx) -> CommandResult {
+            if (ctx.scene == nullptr)            return { false, "no scene" };
+            if (ctx.scene_selection.empty())     return { false, "empty selection" };
+            cardinal::core::Vec3 sum{ 0, 0, 0 };
+            cardinal::u32 n = 0;
+            for (const auto id : ctx.scene_selection) {
+                if (auto* e = ctx.scene->find_by_id(id)) {
+                    sum.x += e->transform.translation.x;
+                    sum.y += e->transform.translation.y;
+                    sum.z += e->transform.translation.z;
+                    ++n;
+                }
+            }
+            if (n == 0) return { false, "no entities found" };
+            const float inv = 1.0f / static_cast<float>(n);
+            ctx.scene->camera().target = { sum.x * inv, sum.y * inv, sum.z * inv };
+            ctx.result_count = n;
+            return { true, {} };
         };
         reg.add(cardinal::move(c));
     }

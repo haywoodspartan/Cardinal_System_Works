@@ -3,6 +3,7 @@
 // =============================================================================
 #include <cardinal/cmd/command.hpp>
 #include <cardinal/scene/math.hpp>
+#include <cardinal/scene/scene.hpp>
 #include <cardinal/actor/world.hpp>
 #include <cardinal/edit/undo.hpp>
 #include <cardinal/core/log.hpp>
@@ -174,6 +175,26 @@ int main() {
     CHECK(reg.dispatch("edit.redo", ux).ok); CHECK(counter == 11);   // re-applied e2
     CHECK(!reg.dispatch("edit.redo", ux).ok);                        // nothing to redo
     CHECK(!reg.dispatch("edit.undo", empty).ok);                     // no stack -> graceful
+
+    // ---- camera.focus_selection on a real Scene (headless) -------------
+    CHECK(reg.has("camera.focus_selection"));
+    cardinal::scene::Scene sc_scene;
+    // Capture ids from the immediate return (add_entity returns a ref into a
+    // vector that reallocates on the next add); set translations via find_by_id.
+    const cardinal::u32 sid1 = sc_scene.add_entity("se1").id;
+    const cardinal::u32 sid2 = sc_scene.add_entity("se2").id;
+    sc_scene.find_by_id(sid1)->transform.translation = { 2.0f, 0.0f, 0.0f };
+    sc_scene.find_by_id(sid2)->transform.translation = { 4.0f, 6.0f, 0.0f };
+    cc::CommandContext fx{}; fx.scene = &sc_scene;
+    fx.scene_selection = { sid1, sid2 };
+    CHECK(reg.dispatch("camera.focus_selection", fx).ok);
+    CHECK(fx.result_count == 2u);
+    // camera target = centroid of the two entities (3, 3, 0).
+    CHECK(ap(sc_scene.camera().target.x, 3.0f, 1e-3f));
+    CHECK(ap(sc_scene.camera().target.y, 3.0f, 1e-3f));
+    CHECK(!reg.dispatch("camera.focus_selection", empty).ok);        // no scene -> graceful
+    cc::CommandContext fnone{}; fnone.scene = &sc_scene;
+    CHECK(!reg.dispatch("camera.focus_selection", fnone).ok);        // empty selection
 
     if (g_fail == 0) cardinal::log::infof("cmdtest", "OK  %d checks passed", g_checks);
     else             cardinal::log::errorf("cmdtest", "%d/%d checks FAILED", g_fail, g_checks);

@@ -65,7 +65,8 @@ struct CommandContext {
     float            snap_step{0.0f};
 
     // Selection + layout inputs (actor.* / layout.* commands act on these).
-    cardinal::vector<cardinal::u32> selection;   // selected actor ids
+    cardinal::vector<cardinal::u32> selection;       // selected ACTOR ids
+    cardinal::vector<cardinal::u32> scene_selection; // selected SCENE entity ids (camera.* / scene.*)
     int   axis{0};         // 0=X 1=Y 2=Z   (layout.align / layout.distribute)
     int   align_mode{1};   // 0=Min 1=Center 2=Max (layout.align)
     float grid_step{1.0f}; // layout.snap

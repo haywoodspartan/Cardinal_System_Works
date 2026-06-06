@@ -2226,9 +2226,10 @@ int main(int argc, char** argv) {
                 commands.dispatch(ub.undo_clicked ? "edit.undo" : "edit.redo", ucx);
             }
             if (tbar.focus_selection && selected_id != 0) {
-                if (auto* e = scene.find_by_id(selected_id)) {
-                    scene.camera().target = e->transform.translation;
-                }
+                cardinal::cmd::CommandContext fcx{};
+                fcx.scene = &scene;
+                fcx.scene_selection = { selected_id };
+                commands.dispatch("camera.focus_selection", fcx);
             }
             if (tbar.reset_camera) {
                 scene.camera().position = { 0.0f, 1.5f, 4.0f };
@@ -3117,9 +3118,10 @@ int main(int argc, char** argv) {
                 }
             }
             if (vca.focus_selected && selected_id != 0) {
-                if (auto* e = scene.find_by_id(selected_id)) {
-                    scene.camera().target = e->transform.translation;
-                }
+                cardinal::cmd::CommandContext fcx{};
+                fcx.scene = &scene;
+                fcx.scene_selection = { selected_id };
+                commands.dispatch("camera.focus_selection", fcx);
             }
             if (vca.clear_selection) selected_id = 0;
             if (vca.spawn_active_asset_at_cursor && !placement_asset_id.empty()) {
