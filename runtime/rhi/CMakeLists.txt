@@ -31,6 +31,9 @@ set(CARDINAL_RHI_SOURCES
     src/d3d12/commands.cpp       # D3D12Swapchain command-recording surface:
                                  # bind / draw / push / shadow pass + GPU
                                  # debug-marker regions (PIX / RenderDoc)
+    src/d3d12/compute.cpp        # async compute (AEGIS Block 10): COMPUTE
+                                 # queue, D3D12Fence, D3D12ComputeQueue::submit,
+                                 # Swapchain signal_fence / wait_fence
 )
 
 add_library(cardinal_rhi STATIC ${CARDINAL_RHI_SOURCES} ${CARDINAL_RHI_HEADERS})

@@ -398,6 +398,13 @@ public:
     void end_event() override;
     void insert_marker(const char* name) override;
 
+    // Multi-queue sync (AEGIS Block 10). signal_fence signals the GRAPHICS
+    // queue's progress to `f` (returns the value signalled); wait_fence makes
+    // the graphics queue wait for `f` to reach `value` before proceeding —
+    // the graphics<->async-compute handshake. Implemented in compute.cpp.
+    u64  signal_fence(Fence* f) override;
+    void wait_fence  (Fence* f, u64 value) override;
+
     // Interop accessors.
     IDXGISwapChain3*           swap_chain()       const noexcept { return swap_.Get(); }
     DXGI_FORMAT                back_buffer_format() const noexcept { return DXGI_FORMAT_B8G8R8A8_UNORM; }
@@ -568,10 +575,18 @@ public:
 
     VramSnapshot query_vram_usage() const noexcept override;
 
+    // Async compute (AEGIS Block 10) — implemented in compute.cpp. create_fence
+    // makes an ID3D12Fence-backed timeline Fence; create_async_compute_queue
+    // returns a D3D12ComputeQueue bound to the dedicated COMPUTE queue (nullptr
+    // when the device has none / caps.async_compute is false).
+    cardinal::unique_ptr<Fence>        create_fence(u64 initial_value = 0) override;
+    cardinal::unique_ptr<ComputeQueue> create_async_compute_queue() override;
+
     // Interop accessors.
-    ID3D12Device*       device()    const noexcept { return device_.Get(); }
-    ID3D12CommandQueue* gfx_queue() const noexcept { return gfx_queue_.Get(); }
-    IDXGIFactory6*      factory()   const noexcept { return factory_.Get(); }
+    ID3D12Device*       device()        const noexcept { return device_.Get(); }
+    ID3D12CommandQueue* gfx_queue()     const noexcept { return gfx_queue_.Get(); }
+    ID3D12CommandQueue* compute_queue() const noexcept { return compute_queue_.Get(); }
+    IDXGIFactory6*      factory()       const noexcept { return factory_.Get(); }
 
 private:
     bool create_factory();
@@ -585,6 +600,7 @@ private:
     ComPtr<IDXGIAdapter1>       adapter_;
     ComPtr<ID3D12Device>        device_;
     ComPtr<ID3D12CommandQueue>  gfx_queue_;
+    ComPtr<ID3D12CommandQueue>  compute_queue_;   // dedicated async-compute lane
 
     // DXC (HLSL → DXIL).
     ComPtr<IDxcUtils>           dxc_utils_;

@@ -139,6 +139,20 @@ bool D3D12Device::create_queues() {
     q.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
     q.Flags    = D3D12_COMMAND_QUEUE_FLAG_NONE;
     D3D_CHECK(device_->CreateCommandQueue(&q, IID_PPV_ARGS(&gfx_queue_)));
+
+    // Dedicated async-compute queue (AEGIS Block 10). Every FL11+ device
+    // exposes a COMPUTE engine, so this succeeds on conformant drivers — but
+    // treat failure as "no async compute" (caps.async_compute stays false)
+    // rather than failing device init, so graphics still comes up.
+    D3D12_COMMAND_QUEUE_DESC cq{};
+    cq.Type     = D3D12_COMMAND_LIST_TYPE_COMPUTE;
+    cq.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+    cq.Flags    = D3D12_COMMAND_QUEUE_FLAG_NONE;
+    if (FAILED(device_->CreateCommandQueue(&cq, IID_PPV_ARGS(&compute_queue_)))) {
+        cardinal::log::warnf("rhi/d3d12",
+            "async-compute queue creation failed — async compute disabled");
+        compute_queue_.Reset();
+    }
     return true;
 }
 
@@ -170,6 +184,8 @@ void D3D12Device::populate_capabilities() {
     caps_.runtime_descriptor_array = true;
     caps_.scalar_block_layout      = true;
     caps_.timeline_semaphore       = true;   // ID3D12Fence is timeline-equivalent
+    caps_.async_compute            = (compute_queue_ != nullptr);  // dedicated COMPUTE queue
+    caps_.max_async_compute_queues = caps_.async_compute ? 1u : 0u;
     caps_.shader_int16             = true;
     caps_.shader_float16           = (sm.HighestShaderModel >= D3D_SHADER_MODEL_6_2);
     caps_.shader_int8              = (sm.HighestShaderModel >= D3D_SHADER_MODEL_6_4);
