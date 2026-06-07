@@ -176,6 +176,67 @@ void D3D12Swapchain::dispatch(u32 gx, u32 gy, u32 gz) {
     frames_[frame_index_].cmd->Dispatch(gx, gy, gz);
 }
 
+void D3D12Swapchain::dispatch_indirect(Buffer* args, u32 args_offset) {
+    auto* db = static_cast<D3D12Buffer*>(args);
+    if (db == nullptr) return;
+    if (!dispatch_sig_) {            // lazily build the process-wide DISPATCH signature
+        D3D12_INDIRECT_ARGUMENT_DESC arg{};
+        arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH;
+        D3D12_COMMAND_SIGNATURE_DESC csd{};
+        csd.ByteStride       = sizeof(D3D12_DISPATCH_ARGUMENTS);   // 3x u32
+        csd.NumArgumentDescs = 1;
+        csd.pArgumentDescs   = &arg;
+        if (FAILED(dev_.device()->CreateCommandSignature(&csd, nullptr,
+                                                         IID_PPV_ARGS(&dispatch_sig_)))) {
+            cardinal::log::errorf("rhi/d3d12", "CreateCommandSignature(DISPATCH) failed");
+            return;
+        }
+    }
+    // Caller is expected to have transitioned `args` to IndirectArgument state.
+    frames_[frame_index_].cmd->ExecuteIndirect(dispatch_sig_.Get(), 1,
+                                               db->resource(), args_offset, nullptr, 0);
+}
+
+// ---- Resource barriers (graph::RhiBackend RAW/WAW/WAR between passes) --------
+namespace {
+D3D12_RESOURCE_STATES to_d3d_state(Swapchain::ResourceState s) {
+    switch (s) {
+        case Swapchain::ResourceState::Common:          return D3D12_RESOURCE_STATE_COMMON;
+        case Swapchain::ResourceState::VertexBuffer:
+        case Swapchain::ResourceState::ConstantBuffer:  return D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+        case Swapchain::ResourceState::IndexBuffer:     return D3D12_RESOURCE_STATE_INDEX_BUFFER;
+        case Swapchain::ResourceState::ShaderResource:  return D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+                                                             | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        case Swapchain::ResourceState::UnorderedAccess: return D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        case Swapchain::ResourceState::IndirectArgument:return D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+        case Swapchain::ResourceState::CopySource:      return D3D12_RESOURCE_STATE_COPY_SOURCE;
+        case Swapchain::ResourceState::CopyDest:        return D3D12_RESOURCE_STATE_COPY_DEST;
+        default:                                        return D3D12_RESOURCE_STATE_COMMON;
+    }
+}
+}  // namespace
+
+void D3D12Swapchain::uav_barrier(Buffer* b) {
+    auto* db = static_cast<D3D12Buffer*>(b);
+    if (db == nullptr) return;
+    D3D12_RESOURCE_BARRIER bar{};
+    bar.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    bar.UAV.pResource = db->resource();
+    frames_[frame_index_].cmd->ResourceBarrier(1, &bar);
+}
+
+void D3D12Swapchain::transition_buffer_state(Buffer* b, ResourceState before, ResourceState after) {
+    auto* db = static_cast<D3D12Buffer*>(b);
+    if (db == nullptr || before == after) return;
+    D3D12_RESOURCE_BARRIER bar{};
+    bar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    bar.Transition.pResource   = db->resource();
+    bar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    bar.Transition.StateBefore = to_d3d_state(before);
+    bar.Transition.StateAfter  = to_d3d_state(after);
+    frames_[frame_index_].cmd->ResourceBarrier(1, &bar);
+}
+
 void D3D12Swapchain::bind_sampled_texture(u32 slot, Texture* tex) {
     if (bound_pipeline_ == nullptr || tex == nullptr) return;
     auto* dp = static_cast<D3D12Pipeline*>(bound_pipeline_);

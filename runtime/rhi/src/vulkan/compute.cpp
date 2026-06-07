@@ -107,14 +107,32 @@ public:
     u32    begin_frame(float, float, float, float) override { return 0; }
     void   end_frame() override {}
     void   set_overlay(OverlayCallback, void*) override {}
-    void   bind_pipeline(Pipeline*) override {}
+    // Real compute recording on the async list. Push constants ride the
+    // pipeline layout; storage/UAV descriptor binds on the async lane need a
+    // per-submit descriptor pool (deferred) — push-only compute kernels work
+    // today, and the main-queue recorder handles full buffer binding.
+    void   bind_pipeline(Pipeline* p) override {
+        auto* vp = static_cast<VulkanPipeline*>(p);
+        if (cmd_ == VK_NULL_HANDLE || vp == nullptr || !vp->is_compute()) return;
+        bound_ = vp;
+        vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, vp->handle());
+    }
+    void   dispatch(u32 gx, u32 gy = 1, u32 gz = 1) override {
+        if (cmd_ != VK_NULL_HANDLE) vkCmdDispatch(cmd_, gx, gy, gz);
+    }
+    void   set_push_constants(u32 offset, const void* data, u32 size) override {
+        if (cmd_ == VK_NULL_HANDLE || bound_ == nullptr ||
+            bound_->push_constant_size() == 0) return;
+        vkCmdPushConstants(cmd_, bound_->layout(), VK_SHADER_STAGE_COMPUTE_BIT,
+                           offset, size, data);
+    }
     void   bind_vertex_buffer(Buffer*, usize) override {}
     void   draw(u32, u32, u32, u32) override {}
-    void   set_push_constants(u32, const void*, u32) override {}
 
 private:
     VkDevice        dev_{VK_NULL_HANDLE};
     VkCommandBuffer cmd_{VK_NULL_HANDLE};
+    VulkanPipeline* bound_{nullptr};   // for push-constant layout
 };
 
 // Owns a command pool + buffer on the compute family; submit() records the

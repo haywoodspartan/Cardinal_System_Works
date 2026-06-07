@@ -96,7 +96,29 @@ public:
     u32    begin_frame(float, float, float, float) override { return 0; }
     void   end_frame() override {}
     void   set_overlay(OverlayCallback, void*) override {}
-    void   bind_pipeline(Pipeline*) override {}
+    // Real compute recording on the async list.
+    void   bind_pipeline(Pipeline* p) override {
+        auto* dp = static_cast<D3D12Pipeline*>(p);
+        if (!cmd_ || dp == nullptr || !dp->is_compute()) return;
+        bound_ = dp;
+        cmd_->SetComputeRootSignature(dp->root_signature());
+        cmd_->SetPipelineState(dp->pso());
+    }
+    void   dispatch(u32 gx, u32 gy = 1, u32 gz = 1) override {
+        if (cmd_) cmd_->Dispatch(gx, gy, gz);
+    }
+    void   bind_storage_buffer(u32 slot, Buffer* b) override {
+        auto* dp = static_cast<D3D12Pipeline*>(bound_); auto* db = static_cast<D3D12Buffer*>(b);
+        if (!cmd_ || !dp || !db || slot >= dp->storage_buffer_slots()) return;
+        cmd_->SetComputeRootShaderResourceView(dp->storage_root_base() + slot,
+                                               db->resource()->GetGPUVirtualAddress());
+    }
+    void   bind_storage_buffer_uav(u32 slot, Buffer* b) override {
+        auto* dp = static_cast<D3D12Pipeline*>(bound_); auto* db = static_cast<D3D12Buffer*>(b);
+        if (!cmd_ || !dp || !db || slot >= dp->uav_slots()) return;
+        cmd_->SetComputeRootUnorderedAccessView(dp->uav_root_base() + slot,
+                                                db->resource()->GetGPUVirtualAddress());
+    }
     void   bind_vertex_buffer(Buffer*, usize) override {}
     void   draw(u32, u32, u32, u32) override {}
     void   set_push_constants(u32, const void*, u32) override {}
@@ -104,6 +126,7 @@ public:
 private:
     ID3D12Device*              dev_{nullptr};
     ID3D12GraphicsCommandList* cmd_{nullptr};
+    D3D12Pipeline*             bound_{nullptr};   // for SetComputeRoot* binding
 };
 
 // ---------------------------------------------------------------------------

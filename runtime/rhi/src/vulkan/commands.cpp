@@ -359,5 +359,57 @@ void VulkanSwapchain::dispatch(u32 gx, u32 gy, u32 gz) {
     vkCmdDispatch(frames_[frame_index_].cmd, gx, gy, gz);
 }
 
+void VulkanSwapchain::dispatch_indirect(Buffer* args, u32 args_offset) {
+    auto* vb = static_cast<VulkanBuffer*>(args);
+    if (vb == nullptr) return;
+    vkCmdDispatchIndirect(frames_[frame_index_].cmd, vb->handle(),
+                          static_cast<VkDeviceSize>(args_offset));
+}
+
+// ---- Resource barriers (graph::RhiBackend RAW/WAW/WAR between passes) --------
+void VulkanSwapchain::uav_barrier(Buffer* /*b*/) {
+    // Compute-shader write -> compute/graphics read flush across the whole
+    // command buffer (a global memory barrier is sufficient for SSBO RAW/WAW).
+    VkMemoryBarrier mb{};
+    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(frames_[frame_index_].cmd,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT
+            | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+        0, 1, &mb, 0, nullptr, 0, nullptr);
+}
+
+void VulkanSwapchain::transition_buffer_state(Buffer* b, ResourceState before, ResourceState after) {
+    auto* vb = static_cast<VulkanBuffer*>(b);
+    if (vb == nullptr || before == after) return;
+    auto access = [](ResourceState s) -> VkAccessFlags {
+        switch (s) {
+            case ResourceState::UnorderedAccess:  return VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+            case ResourceState::ShaderResource:   return VK_ACCESS_SHADER_READ_BIT;
+            case ResourceState::IndirectArgument: return VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+            case ResourceState::CopySource:       return VK_ACCESS_TRANSFER_READ_BIT;
+            case ResourceState::CopyDest:         return VK_ACCESS_TRANSFER_WRITE_BIT;
+            case ResourceState::VertexBuffer:     return VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+            case ResourceState::IndexBuffer:      return VK_ACCESS_INDEX_READ_BIT;
+            case ResourceState::ConstantBuffer:   return VK_ACCESS_UNIFORM_READ_BIT;
+            default:                              return 0;
+        }
+    };
+    VkBufferMemoryBarrier bb{};
+    bb.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    bb.srcAccessMask       = access(before);
+    bb.dstAccessMask       = access(after);
+    bb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bb.buffer              = vb->handle();
+    bb.offset              = 0;
+    bb.size                = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(frames_[frame_index_].cmd,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        0, 0, nullptr, 1, &bb, 0, nullptr);
+}
+
 
 }  // namespace cardinal::rhi

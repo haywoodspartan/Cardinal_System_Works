@@ -175,6 +175,11 @@ inline VkBufferUsageFlags to_vk_buffer_usage(u32 usage) {
     }
     // RT extension consumers also need TRANSFER_DST so we can copy into them.
     out |= VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    // Storage buffers may also back GPU-driven indirect dispatch/draw args
+    // (AEGIS DrawIndirectGen) — cheap to always allow.
+    if (usage & static_cast<u32>(BufferUsage::Storage)) {
+        out |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+    }
     return out;
 }
 
@@ -251,6 +256,10 @@ public:
     void bind_storage_buffer(u32 slot, Buffer* b) override;
     void bind_storage_buffer_uav(u32 slot, Buffer* b) override;   // compute RW UAV
     void dispatch(u32 gx, u32 gy = 1, u32 gz = 1) override;       // compute dispatch
+    void dispatch_indirect(Buffer* args, u32 args_offset) override;  // GPU-driven
+    void uav_barrier(Buffer* b) override;                        // RAW/WAW flush
+    void transition_buffer_state(Buffer* b, ResourceState before,
+                                 ResourceState after) override;
     void begin_shadow_pass(Texture* depth) override;
     void end_shadow_pass() override;
     void bind_sampled_texture(u32 slot, Texture* tex) override;

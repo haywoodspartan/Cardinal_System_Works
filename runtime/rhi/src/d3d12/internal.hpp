@@ -415,6 +415,10 @@ public:
     void bind_storage_buffer(u32 slot, Buffer* b) override;
     void bind_storage_buffer_uav(u32 slot, Buffer* b) override;   // compute RW UAV
     void dispatch(u32 gx, u32 gy = 1, u32 gz = 1) override;       // compute dispatch
+    void dispatch_indirect(Buffer* args, u32 args_offset) override;  // GPU-driven
+    void uav_barrier(Buffer* b) override;                        // RAW/WAW flush
+    void transition_buffer_state(Buffer* b, ResourceState before,
+                                 ResourceState after) override;
     void begin_shadow_pass(Texture* depth) override;
     void end_shadow_pass() override;
     void bind_sampled_texture(u32 slot, Texture* tex) override;
@@ -511,6 +515,7 @@ private:
     ComPtr<ID3D12Fence>              fence_;
     HANDLE                           fence_event_{nullptr};
     u64                              next_fence_value_{1};
+    ComPtr<ID3D12CommandSignature>   dispatch_sig_;   // lazily-built DISPATCH indirect sig
 
     // Multi-viewport off-screen RTTs. viewports_ holds N per-panel slots
     // (count tracked by viewport_count_); viewport_active_id_ is the panel
