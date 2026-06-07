@@ -67,6 +67,15 @@ public:
     // execute() invocations; the previous backend is released.
     void set_backend(cardinal::shared_ptr<graph::Backend> backend) noexcept;
 
+    // Replace the runner's AegisConfig at runtime (precision caps + max_tier +
+    // features). MUST rebuild the AegisPipeline because it caches the config at
+    // create() (gpu_aegis.cpp) and reads caps/max_tier when it declares the
+    // adaptive-geometry pass at build() — so select_tier re-runs against the new
+    // caps/max_tier on the next build(). The live Backend is preserved (only
+    // set_backend changes it). Diff-gate at the call site: rebuilding the
+    // pipeline every frame is wasteful.
+    void reconfigure(gpu::AegisConfig cfg);
+
     // Editor surface — graph stats from the most recent build().
     graph::CompileStats         compile_stats() const noexcept { return last_compile_; }
 
@@ -90,5 +99,45 @@ private:
     graph::CompileStats                      last_compile_;
     bool                                     built_ {false};
 };
+
+// ---------------------------------------------------------------------------
+// AegisConfig resolution — pure, host-driven clamping of REQUESTED features +
+// precision tier against what the DEVICE actually supports. Kept free of rhi
+// and Knob types (the bridge maps rhi::GpuCapabilities -> AegisDeviceSupport
+// and the pipeline-panel knobs -> AegisFeatureRequest) so the clamp logic is
+// directly unit-testable.
+// ---------------------------------------------------------------------------
+struct AegisDeviceSupport {
+    bool fp16 {true};
+    bool fp8  {false};
+    bool fp4  {false};
+    bool async_compute         {false};
+    bool variable_rate_shading {false};
+    bool bindless_resources    {false};
+    bool direct_storage        {false};
+};
+struct AegisFeatureRequest {
+    int  max_tier_want {1};        // 0..3 = FP32 / FP16 / FP8 / FP4 (from the knob)
+    bool allow_fp8 {false};
+    bool allow_fp4 {false};
+    bool async_compute         {false};
+    bool variable_rate_shading {false};
+    bool bindless_resources    {false};
+    bool direct_storage        {false};
+};
+
+// Returns `base` with caps (fp16/fp8/fp4 = device truth), max_tier (the
+// requested ceiling, clamped down to what the device supports + the user
+// allows), and features (requested AND device-supported) applied. width/height,
+// when non-zero, override base (resize fold-in).
+gpu::AegisConfig aegis_resolve_config(gpu::AegisConfig base,
+                                      const AegisDeviceSupport& dev,
+                                      const AegisFeatureRequest& req,
+                                      cardinal::u32 width  = 0,
+                                      cardinal::u32 height = 0) noexcept;
+
+// True when two configs are equal across every field the resolver can change
+// (so the bridge only reconfigures on a real change, not every frame).
+bool aegis_config_equal(const gpu::AegisConfig& a, const gpu::AegisConfig& b) noexcept;
 
 }  // namespace cardinal::render

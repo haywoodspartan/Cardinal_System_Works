@@ -3333,6 +3333,109 @@ void test_aegis_runner_null_mode_records_full_topology() {
     CHECK(!cs.cycle_detected);
 }
 
+// AEGIS GPU-feature integration: the pure request->config clamp. Proves the
+// DirectStorage/Bindless/Async/VRS flags + the FP8/FP4 tier ceiling are
+// resolved against device support (the wiring that was dead before).
+void test_aegis_resolve_config() {
+    namespace rd = cardinal::render;
+    gpu::AegisConfig base;
+
+    rd::AegisDeviceSupport dev;
+    dev.fp16 = true; dev.fp8 = true; dev.fp4 = true;
+    dev.async_compute = true; dev.variable_rate_shading = true;
+    dev.bindless_resources = true; dev.direct_storage = true;
+    rd::AegisFeatureRequest req;
+    req.max_tier_want = 3;                 // FP4
+    req.allow_fp8 = true; req.allow_fp4 = true;
+    req.async_compute = true; req.variable_rate_shading = true;
+    req.bindless_resources = true; req.direct_storage = true;
+
+    auto c1 = rd::aegis_resolve_config(base, dev, req);
+    CHECK(c1.caps.fp8_supported && c1.caps.fp4_supported);
+    CHECK(c1.max_tier == gpu::GeometryTier::Fp4);
+    CHECK(c1.features.async_compute && c1.features.variable_rate_shading);
+    CHECK(c1.features.bindless_resources && c1.features.direct_storage);
+
+    // Device lacks FP4 -> ceiling clamps to FP8 (caps reflect device truth).
+    dev.fp4 = false;
+    auto c2 = rd::aegis_resolve_config(base, dev, req);
+    CHECK(c2.max_tier == gpu::GeometryTier::Fp8);
+    CHECK(!c2.caps.fp4_supported && c2.caps.fp8_supported);
+
+    // Device lacks FP8 too -> clamps to FP16.
+    dev.fp8 = false;
+    auto c3 = rd::aegis_resolve_config(base, dev, req);
+    CHECK(c3.max_tier == gpu::GeometryTier::Fp16);
+    CHECK(!c3.caps.fp8_supported && !c3.caps.fp4_supported);
+
+    // User toggle off (allow_fp4=false) with full device support -> FP8 ceiling.
+    rd::AegisDeviceSupport dev2; dev2.fp16 = true; dev2.fp8 = true; dev2.fp4 = true;
+    rd::AegisFeatureRequest req2; req2.max_tier_want = 3;
+    req2.allow_fp8 = true; req2.allow_fp4 = false;
+    CHECK(rd::aegis_resolve_config(base, dev2, req2).max_tier == gpu::GeometryTier::Fp8);
+
+    // Feature clamp: a requested feature the device lacks is dropped.
+    rd::AegisDeviceSupport dev3;            // all features false
+    rd::AegisFeatureRequest req3; req3.async_compute = true; req3.direct_storage = true;
+    auto c5 = rd::aegis_resolve_config(base, dev3, req3);
+    CHECK(!c5.features.async_compute && !c5.features.direct_storage);
+
+    // Resize fold-in.
+    auto c6 = rd::aegis_resolve_config(base, dev, req, 640u, 480u);
+    CHECK(c6.width == 640u && c6.height == 480u);
+
+    // config-equality diff gate.
+    CHECK(rd::aegis_config_equal(c1, c1));
+    CHECK(!rd::aegis_config_equal(c1, c2));
+}
+
+// AEGIS reconfigure() retargets the precision tier — proves caps/max_tier
+// actually reach select_tier through a pipeline rebuild (the integration that
+// makes FP8/FP4 functional, previously impossible because the bridge dropped
+// the caps + the runner had no setter).
+void test_aegis_runner_reconfigure_escalates_tier() {
+    namespace rd = cardinal::render;
+    gpu::AegisConfig cfg;
+    cfg.width = 8; cfg.height = 4; cfg.material_count = 1; cfg.light_count = 1;
+    cfg.caps.fp16_supported = true;        // fp8/fp4 absent => FP16 ceiling
+    cfg.max_tier = gpu::GeometryTier::Fp16;
+    auto runner = rd::AegisPipelineRunner::create(cfg, rd::AegisBackendMode::Cpu);
+
+    auto declare = [&]() {
+        auto& g = runner->graph();
+        gpu::AegisSceneInputs in;
+        in.tris         = g.declare_buffer(rg::BufferDesc{"tris", 0, 0, true});
+        in.material_ids = g.declare_buffer(rg::BufferDesc{"mids", 0, 0, true});
+        in.materials    = g.declare_buffer(rg::BufferDesc{"mats", 0, 0, true});
+        in.lights       = g.declare_buffer(rg::BufferDesc{"lts",  0, 0, true});
+        in.ambient      = g.declare_buffer(rg::BufferDesc{"amb",  12, 0, true});
+        in.view_proj    = g.declare_buffer(rg::BufferDesc{"vp",   64, 0, true});
+        in.camera_dir   = g.declare_buffer(rg::BufferDesc{"dir",  12, 0, true});
+        in.triangle_count = 0;
+        return in;
+    };
+
+    { auto in = declare(); CHECK(runner->build(in)); runner->execute(); }
+    CHECK(runner->config().max_tier == gpu::GeometryTier::Fp16);
+    CHECK(runner->stages().adaptive != nullptr);
+    if (runner->stages().adaptive)
+        CHECK(runner->stages().adaptive->selected_tier == gpu::GeometryTier::Fp16);
+
+    // Reconfigure with FP8+FP4 caps + an FP4 ceiling — previously unreachable.
+    gpu::AegisConfig hi = runner->config();
+    hi.caps.fp8_supported = true; hi.caps.fp4_supported = true;
+    hi.max_tier = gpu::GeometryTier::Fp4;
+    hi.features.async_compute = true;
+    runner->reconfigure(hi);
+
+    { auto in = declare(); CHECK(runner->build(in)); runner->execute(); }
+    CHECK(runner->config().max_tier == gpu::GeometryTier::Fp4);
+    CHECK(runner->config().caps.fp4_supported);
+    CHECK(runner->config().features.async_compute);   // feature flag rode along
+    if (runner->stages().adaptive)                     // pipeline re-selected the tier
+        CHECK(runner->stages().adaptive->selected_tier == gpu::GeometryTier::Fp4);
+}
+
 void test_aegis_runner_rhi_mode_falls_back_to_null() {
     namespace rd = cardinal::render;
     gpu::AegisConfig cfg;
@@ -4614,6 +4717,8 @@ int main() {
     test_null_backend_reset_clears_events();
     test_aegis_runner_cpu_mode_executes_and_exposes_outputs();
     test_aegis_runner_null_mode_records_full_topology();
+    test_aegis_resolve_config();
+    test_aegis_runner_reconfigure_escalates_tier();
     test_aegis_runner_rhi_mode_falls_back_to_null();
     test_precision_caps_select_tier();
     test_restir_sample_picks_visible_light();

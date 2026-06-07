@@ -345,6 +345,19 @@ public:
 // pass in the correct dependency order.
 // ===========================================================================
 
+// Toggle state for the GPU features the AEGIS pipeline can request. These are
+// the async/VRS/bindless/DirectStorage axis (the precision tier is the separate
+// PrecisionCaps + max_tier axis). A flag being true means "requested AND the
+// device supports it" — the host (bridge) clamps requested-vs-supported before
+// setting these (see aegis_resolve_config). Honoured by a real graph::RhiBackend
+// when GPU execution lands; surfaced in stats for the editor meanwhile.
+struct AegisFeatures {
+    bool async_compute         {false};
+    bool variable_rate_shading {false};
+    bool bindless_resources    {false};
+    bool direct_storage        {false};
+};
+
 struct AegisConfig {
     cardinal::u32 width  {1920};
     cardinal::u32 height {1080};
@@ -353,6 +366,7 @@ struct AegisConfig {
     float         exposure {1.0f};
     PrecisionCaps caps;                    // FP32 / FP16 / FP8 / FP4 tier support
     GeometryTier  max_tier {GeometryTier::Fp4};
+    AegisFeatures features;                // async / VRS / bindless / DirectStorage
 };
 
 struct AegisSceneInputs {

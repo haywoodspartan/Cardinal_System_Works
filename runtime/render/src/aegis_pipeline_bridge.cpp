@@ -44,10 +44,10 @@ public:
         gpu::AegisConfig cfg;
         cfg.width  = sw.width();
         cfg.height = sw.height();
-        cfg.caps.fp16_supported = true;
-        cfg.caps.fp8_supported  = false;
-        cfg.caps.fp4_supported  = false;
-        cfg.max_tier            = gpu::GeometryTier::Fp16;
+        // No precision ceiling hardcode: the AegisConfig defaults (fp8/fp4
+        // unsupported, so select_tier maxes at FP16) hold until on_caps() runs
+        // at registry construction, which applies the real device caps + the
+        // knob intent via apply_config() -> reconfigure().
 
         // Construct with a placeholder Null backend (create() has no device,
         // so it can't build the real RhiBackend). The backend_mode Knob below
@@ -94,6 +94,42 @@ public:
         }
     }
 
+    // Read the precision + GPU-Feature knobs into an AegisFeatureRequest.
+    AegisFeatureRequest read_request() const {
+        AegisFeatureRequest r;
+        auto kbool = [&](const char* id) -> bool {
+            for (const auto& k : knobs_)
+                if (k.id == id && k.kind == KnobKind::Bool) return k.b;
+            return false;
+        };
+        auto kenum = [&](const char* id, int dflt) -> int {
+            for (const auto& k : knobs_)
+                if (k.id == id && k.kind == KnobKind::Enum) return k.e;
+            return dflt;
+        };
+        r.max_tier_want          = kenum("max_tier", 1);   // 0..3 = FP32/16/8/4
+        r.allow_fp8              = kbool("max_tier_fp8");
+        r.allow_fp4              = kbool("max_tier_fp4");
+        r.async_compute         = kbool("async_compute");
+        r.variable_rate_shading = kbool("variable_rate_shading");
+        r.bindless_resources    = kbool("bindless_resources");
+        r.direct_storage        = kbool("direct_storage");
+        return r;
+    }
+
+    // Resolve the desired AegisConfig from the cached device support + the
+    // current knob request, and reconfigure the runner ONLY when it changed
+    // (rebuilding the AEGIS pipeline every frame would be wasteful). This is
+    // what makes FP8/FP4 escalation + the feature flags actually take effect.
+    void apply_config() {
+        const cardinal::u32 w = sw_ ? sw_->width()  : 0u;
+        const cardinal::u32 h = sw_ ? sw_->height() : 0u;
+        gpu::AegisConfig want =
+            aegis_resolve_config(runner_->config(), dev_caps_, read_request(), w, h);
+        if (!aegis_config_equal(want, runner_->config()))
+            runner_->reconfigure(want);
+    }
+
     PipelineId  id()          const noexcept override { return PipelineId::Aegis; }
     const char* name()        const noexcept override { return "AEGIS Pipeline 2.0"; }
     const char* description() const noexcept override {
@@ -107,10 +143,15 @@ public:
     cardinal::vector<Knob>& knobs() noexcept override { return knobs_; }
 
     void on_caps(const rhi::GpuCapabilities& caps) override {
-        // Wire RHI device caps into the runner's PrecisionCaps so the
-        // tier selector knows what FP16/8/4 the device actually supports.
-        gpu::AegisConfig cfg = runner_->config();
-        cfg.caps.fp16_supported = caps.shader_float16;
+        // Cache the device's AEGIS-relevant support so the per-frame
+        // apply_config() can clamp the knob requests against real hardware.
+        dev_caps_.fp16 = caps.shader_float16;
+        dev_caps_.fp8  = caps.fp8_math;
+        dev_caps_.fp4  = caps.fp4_math;
+        dev_caps_.async_compute         = caps.async_compute;
+        dev_caps_.variable_rate_shading = caps.variable_rate_shading;
+        dev_caps_.bindless_resources    = caps.bindless_resources;
+        dev_caps_.direct_storage        = caps.direct_storage_capable;
 
         // Per-knob availability gating. Walks every knob whose ID matches a
         // GpuCapabilities feature flag and sets `available` + a friendly
@@ -146,6 +187,9 @@ public:
              "Device lacks FP8 math (Hopper / Ada / RDNA4 required)");
         gate("max_tier_fp4",          caps.fp4_math,
              "Device lacks FP4 math (Blackwell / RDNA5 required)");
+
+        // Device support just resolved — push the clamped config into the runner.
+        apply_config();
     }
 
     void render(scene::Scene& scn, float aspect) override {
@@ -154,6 +198,9 @@ public:
         // Pick up any editor-driven backend change before this frame's
         // build + execute.
         update_backend_from_knob();
+        // Push knob/caps changes (precision tier + GPU features) into the
+        // runner config — diff-gated, so it only reconfigures on a real change.
+        apply_config();
 
         // Run the AEGIS graph for telemetry. The runner manages its own
         // graph + backend; we just hand it minimal inputs each frame.
@@ -423,6 +470,7 @@ private:
     cardinal::shared_ptr<AegisPipelineRunner>          runner_;
     cardinal::vector<Knob>                             knobs_;
     AegisBackendMode                                   current_mode_ {AegisBackendMode::Null};
+    AegisDeviceSupport                                 dev_caps_ {};   // from on_caps
 };
 
 }  // namespace
