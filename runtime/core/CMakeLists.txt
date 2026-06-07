@@ -249,6 +249,8 @@ set(CARDINAL_CORE_SOURCES
     src/budget/memory.cpp
     # service/
     src/service/global_object_manager.cpp
+    # compress/  (hand-rolled, zero-dep DEFLATE inflate — RFC 1951/1950)
+    src/compress/inflate.cpp
 )
 
 if(WIN32)

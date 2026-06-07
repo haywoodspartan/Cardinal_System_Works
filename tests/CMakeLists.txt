@@ -7,6 +7,7 @@
 # Or just:  build/<preset>/bin/Cardinal_Test_Net
 add_subdirectory(net)
 add_subdirectory(import)
+add_subdirectory(compress)
 add_subdirectory(serial)
 add_subdirectory(serial_world)
 add_subdirectory(pack)
