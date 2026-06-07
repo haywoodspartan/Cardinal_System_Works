@@ -82,6 +82,14 @@ u32 ImportScene::total_triangles() const noexcept {
 // ---------------------------------------------------------------------------
 namespace {
 
+// Last whitespace token on an MTL map line is the path; earlier tokens are
+// `-bm`/`-o`/… options we skip (same rule for every map_*).
+cardinal::string mtl_last_token(cardinal::istringstream& ls) {
+    cardinal::string last, t;
+    while (ls >> t) last = t;
+    return last;
+}
+
 void parse_mtl(const cardinal::string& mtl_path,
                cardinal::vector<ImportMaterial>& out,
                cardinal::unordered_map<cardinal::string, int>& by_name) {
@@ -117,11 +125,23 @@ void parse_mtl(const cardinal::string& mtl_path,
             ls >> cur->roughness;
         } else if (tok == "Pm") {            // PBR ext: metallic
             ls >> cur->metallic;
-        } else if (tok == "map_Kd") {
-            // Last whitespace token is the path (skip -options).
-            cardinal::string last, t;
-            while (ls >> t) last = t;
-            cur->base_color_texture = last;
+        } else if (tok == "map_Kd" || tok == "map_kd") {
+            cur->base_color_texture = mtl_last_token(ls);
+        } else if (tok == "map_Pr" || tok == "map_pr") {        // PBR roughness
+            cur->roughness_texture = mtl_last_token(ls);
+        } else if (tok == "map_Pm" || tok == "map_pm") {        // PBR metallic
+            cur->metallic_texture = mtl_last_token(ls);
+        } else if (tok == "map_Bump" || tok == "map_bump" ||
+                   tok == "bump"     || tok == "norm") {        // normal/bump
+            cur->normal_texture = mtl_last_token(ls);
+        } else if (tok == "map_Ke" || tok == "map_ke") {        // emissive
+            cur->emissive_texture = mtl_last_token(ls);
+        } else if (tok == "disp" || tok == "map_disp") {        // displacement
+            cur->height_texture = mtl_last_token(ls);
+        } else if (tok == "map_d") {                            // alpha/opacity
+            cur->opacity_texture = mtl_last_token(ls);
+        } else if (tok == "map_Ka" || tok == "map_ka") {        // ambient/AO-ish
+            cur->occlusion_texture = mtl_last_token(ls);
         }
     }
 }

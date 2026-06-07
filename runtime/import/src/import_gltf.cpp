@@ -305,6 +305,11 @@ ImportScene import_gltf(const cardinal::string& path, cardinal::string* error) {
         const JVal* iu = imgs->arr[src].find("uri");
         return iu ? iu->str() : cardinal::string{};
     };
+    // glTF texture-reference object → image uri ({ "index", "texCoord", … }).
+    auto tex_ref_uri = [&](const JVal* ref) -> cardinal::string {
+        if (!ref) return {};
+        return tex_uri(ref->find("index") ? ref->find("index")->inum(-1) : -1);
+    };
     if (const JVal* mats = g.doc.find("materials")) {
         for (const JVal& m : mats->arr) {
             ImportMaterial im;
@@ -320,9 +325,26 @@ ImportScene import_gltf(const cardinal::string& path, cardinal::string* error) {
                 if (const JVal* rf = pbr->find("roughnessFactor"))
                     im.roughness = (float)rf->num(1.0);
                 if (const JVal* bt = pbr->find("baseColorTexture"))
-                    im.base_color_texture =
-                        tex_uri(bt->find("index") ? bt->find("index")->inum(-1) : -1);
+                    im.base_color_texture = tex_ref_uri(bt);
+                // metallicRoughnessTexture is ORM-packed (G=roughness, B=metal)
+                // — recorded as a single ref + mr_packed, NOT split at import.
+                if (const JVal* mrt = pbr->find("metallicRoughnessTexture")) {
+                    im.metallic_roughness_texture = tex_ref_uri(mrt);
+                    if (!im.metallic_roughness_texture.empty()) im.mr_packed = true;
+                }
             }
+            if (const JVal* nt = m.find("normalTexture")) {
+                im.normal_texture = tex_ref_uri(nt);
+                if (const JVal* sc = nt->find("scale"))
+                    im.normal_scale = static_cast<float>(sc->num(1.0));
+            }
+            if (const JVal* ot = m.find("occlusionTexture")) {
+                im.occlusion_texture = tex_ref_uri(ot);
+                if (const JVal* st = ot->find("strength"))
+                    im.occlusion_strength = static_cast<float>(st->num(1.0));
+            }
+            if (const JVal* et = m.find("emissiveTexture"))
+                im.emissive_texture = tex_ref_uri(et);
             if (const JVal* ef = m.find("emissiveFactor");
                 ef && ef->arr.size() >= 3) {
                 im.emission = { (float)ef->arr[0].num(),

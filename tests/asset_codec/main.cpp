@@ -154,14 +154,32 @@ void test_shader() {
 
 // ---- material: round-trip + 36-byte back-compat + bounds ----------
 void test_material() {
+    // PBR-map extension block when all 9 map strings are empty:
+    //   magic(4) + mr_packed(1) + invert(1) + 3 scalars(12) + 9*len-prefix(36).
+    const cardinal::usize EXT_EMPTY = 4 + 1 + 1 + 12 + 9 * 4;   // 54
+
     as::MaterialAsset m;
     m.base_color = {0.1f, 0.2f, 0.3f};
     m.metallic = 0.4f; m.roughness = 0.5f;
     m.emission = {0.6f, 0.7f, 0.8f};
     m.emission_strength = 0.9f;
     m.base_color_texture = "tex.albedo";              // 10 chars
+    m.metallic_roughness_texture = "t.mr";            // 4
+    m.roughness_texture = "t.rough";                  // 7
+    m.metallic_texture  = "t.metal";                  // 7
+    m.normal_texture    = "t.normal";                 // 8
+    m.occlusion_texture = "t.ao";                     // 4
+    m.emissive_texture  = "t.emis";                   // 6
+    m.height_texture    = "t.height";                 // 8
+    m.specular_texture  = "t.spec";                   // 6
+    m.opacity_texture   = "t.op";                     // 4
+    m.normal_scale = 0.5f; m.occlusion_strength = 0.75f; m.height_scale = 2.0f;
+    m.mr_packed = true; m.invert_roughness = true;
+
     B enc = as::codec::encode_material(m);
-    CHECK(enc.size() == sz(36 + 4 + 10));
+    const cardinal::usize map_bytes =
+        sz(4+4)+sz(4+7)+sz(4+7)+sz(4+8)+sz(4+4)+sz(4+6)+sz(4+8)+sz(4+6)+sz(4+4);
+    CHECK(enc.size() == sz(36 + 4 + 10) + sz(4 + 2 + 12) + map_bytes);
 
     as::MaterialAsset out;
     CHECK(as::codec::decode_material(enc, out));
@@ -171,37 +189,72 @@ void test_material() {
     CHECK(veq(out.emission, m.emission));
     CHECK(out.emission_strength == m.emission_strength);
     CHECK(out.base_color_texture == "tex.albedo");
+    // Full PBR map set round-trips exactly.
+    CHECK(out.metallic_roughness_texture == "t.mr");
+    CHECK(out.roughness_texture == "t.rough");
+    CHECK(out.metallic_texture  == "t.metal");
+    CHECK(out.normal_texture    == "t.normal");
+    CHECK(out.occlusion_texture == "t.ao");
+    CHECK(out.emissive_texture  == "t.emis");
+    CHECK(out.height_texture    == "t.height");
+    CHECK(out.specular_texture  == "t.spec");
+    CHECK(out.opacity_texture   == "t.op");
+    CHECK(out.normal_scale == 0.5f && out.occlusion_strength == 0.75f &&
+          out.height_scale == 2.0f);
+    CHECK(out.mr_packed && out.invert_roughness);
 
-    // Empty-texture material encodes to exactly 40 bytes (36 + len 0)
-    // and round-trips with an empty string (the nl==0 path).
+    // Empty-everything material: 36 + (4+0) base + 54-byte ext (9 empty maps).
     as::MaterialAsset noTex;
     noTex.base_color = {1.0f, 0.0f, 0.0f};
     noTex.metallic = 0.25f;
     B ne = as::codec::encode_material(noTex);
-    CHECK(ne.size() == sz(40));
+    CHECK(ne.size() == sz(40) + EXT_EMPTY);            // 94
     as::MaterialAsset no;
     CHECK(as::codec::decode_material(ne, no));
     CHECK(no.base_color_texture.empty());
+    CHECK(no.normal_texture.empty() && no.metallic_roughness_texture.empty());
+    CHECK(no.normal_scale == 1.0f && no.occlusion_strength == 1.0f &&
+          no.height_scale == 1.0f);
+    CHECK(!no.mr_packed && !no.invert_roughness);
     CHECK(veq(no.base_color, noTex.base_color) && no.metallic == 0.25f);
 
-    // Back-compat: a legacy 36..39-byte blob (floats only, no string
-    // field at all) must still decode — texture cleared, floats kept.
+    // Back-compat: a legacy 36..39-byte blob (floats only) still decodes —
+    // texture AND every new map cleared, scalars defaulted, floats kept.
     for (int extra = 0; extra <= 3; ++extra) {
         B legacy(ne.begin(), ne.begin() + 36 + extra);
         CHECK(legacy.size() == sz(36 + extra));
         as::MaterialAsset lo;
         lo.base_color_texture = "STALE";              // must be cleared
+        lo.normal_texture     = "STALE";
         CHECK(as::codec::decode_material(legacy, lo));
         CHECK(lo.base_color_texture.empty());
+        CHECK(lo.normal_texture.empty());
+        CHECK(lo.normal_scale == 1.0f);
         CHECK(veq(lo.base_color, noTex.base_color));
         CHECK(lo.metallic == 0.25f);
     }
 
-    // Bounds: < 36 → reject; >=40 with a lying string length → reject.
+    // Back-compat: a 40-byte legacy blob (head + empty base_color_texture, NO
+    // magic) decodes with the new fields defaulted (the no-extension path).
+    {
+        B legacy40(ne.begin(), ne.begin() + 40);
+        as::MaterialAsset lo;
+        CHECK(as::codec::decode_material(legacy40, lo));
+        CHECK(lo.base_color_texture.empty() && lo.normal_texture.empty());
+        CHECK(!lo.mr_packed && lo.height_scale == 1.0f);
+    }
+
+    // Bounds: < 36 → reject; >=40 with a lying base_color_texture length →
+    // reject; a truncated ext block (magic present, body cut) → reject (no OOB).
     as::MaterialAsset bo;
     CHECK(!as::codec::decode_material(B(35, 0), bo));
     B lie(40, 0); lie[36]=50;                          // claims 50-char tex
     CHECK(!as::codec::decode_material(lie, bo));
+    {
+        B trunc(44, 0);                                // 36 head + 4 (len 0) + magic
+        trunc[40]=0x31; trunc[41]=0x56; trunc[42]=0x50; trunc[43]=0x4D;  // 'MPV1' LE
+        CHECK(!as::codec::decode_material(trunc, bo));
+    }
 }
 
 // ---- in-memory register/load_material cache -----------------------

@@ -37,6 +37,13 @@ void wr_str(cardinal::vector<u8>& o, const cardinal::string& s) {
     wr_u32(o, static_cast<u32>(s.size()));
     wr_bytes(o, reinterpret_cast<const u8*>(s.data()), s.size());
 }
+void wr_u8(cardinal::vector<u8>& o, u8 v) { o.push_back(v); }
+
+// Sentinel gating the optional PBR-map extension block appended after a
+// material's base_color_texture. Legacy decoders stop after base_color_texture
+// and never see it; new decoders read the block only when this magic follows
+// (so old .cooked materials still decode, with the new maps left defaulted).
+constexpr u32 kMaterialExtMagic = 0x4D505631u;  // 'MPV1'
 
 u32 rd_u32(const u8* p) {
     return static_cast<u32>(p[0]) | (static_cast<u32>(p[1]) << 8) |
@@ -148,6 +155,24 @@ cardinal::vector<u8> encode_material(const MaterialAsset& m) {
     wr_f(o, m.emission.x);   wr_f(o, m.emission.y);   wr_f(o, m.emission.z);
     wr_f(o, m.emission_strength);
     wr_str(o, m.base_color_texture);
+    // ---- PBR-map extension block (always written by this encoder; legacy
+    // decoders stop above and ignore it). Gated by kMaterialExtMagic so a new
+    // decoder reading a LEGACY blob (no magic) leaves the new fields default.
+    wr_u32(o, kMaterialExtMagic);
+    wr_u8 (o, m.mr_packed        ? 1u : 0u);
+    wr_u8 (o, m.invert_roughness ? 1u : 0u);
+    wr_f  (o, m.normal_scale);
+    wr_f  (o, m.occlusion_strength);
+    wr_f  (o, m.height_scale);
+    wr_str(o, m.metallic_roughness_texture);
+    wr_str(o, m.roughness_texture);
+    wr_str(o, m.metallic_texture);
+    wr_str(o, m.normal_texture);
+    wr_str(o, m.occlusion_texture);
+    wr_str(o, m.emissive_texture);
+    wr_str(o, m.height_texture);
+    wr_str(o, m.specular_texture);
+    wr_str(o, m.opacity_texture);
     return o;
 }
 
@@ -162,11 +187,72 @@ bool decode_material(const cardinal::vector<u8>& bytes, MaterialAsset& out) {
     out.emission.y         = rd_f(bytes.data() + 24);
     out.emission.z         = rd_f(bytes.data() + 28);
     out.emission_strength  = rd_f(bytes.data() + 32);
-    if (bytes.size() < 40) { out.base_color_texture.clear(); return true; }
-    const u32 nl = rd_u32(bytes.data() + 36);
-    // u32 `40 + nl` wraps for huge nl → bypasses the check (OOB assign).
-    if (static_cast<usize>(40) + nl > bytes.size()) return false;
-    out.base_color_texture.assign(reinterpret_cast<const char*>(bytes.data() + 40), nl);
+    // Default the optional fields so legacy blobs (and a STALE `out`) come back
+    // clean. The string clears also restore the documented 36..39-byte path.
+    out.base_color_texture.clear();
+    out.metallic_roughness_texture.clear();
+    out.roughness_texture.clear();
+    out.metallic_texture.clear();
+    out.normal_texture.clear();
+    out.occlusion_texture.clear();
+    out.emissive_texture.clear();
+    out.height_texture.clear();
+    out.specular_texture.clear();
+    out.opacity_texture.clear();
+    out.normal_scale = 1.0f;
+    out.occlusion_strength = 1.0f;
+    out.height_scale = 1.0f;
+    out.mr_packed = false;
+    out.invert_roughness = false;
+
+    // A running cursor with checked 64-bit arithmetic on EVERY read (the
+    // `static_cast<usize>(off) + n` form can't wrap a u32 length past the
+    // buffer — the same guard the other decoders use).
+    usize off = 36;
+    auto rd_str_at = [&](cardinal::string& dst) -> bool {
+        if (off + 4 > bytes.size()) return false;
+        const u32 nl = rd_u32(bytes.data() + off);
+        off += 4;
+        if (static_cast<usize>(off) + nl > bytes.size()) return false;
+        dst.assign(reinterpret_cast<const char*>(bytes.data() + off), nl);
+        off += nl;
+        return true;
+    };
+    auto rd_f_at = [&](float& dst) -> bool {
+        if (off + 4 > bytes.size()) return false;
+        dst = rd_f(bytes.data() + off);
+        off += 4;
+        return true;
+    };
+    auto rd_u8_at = [&](bool& dst) -> bool {
+        if (off + 1 > bytes.size()) return false;
+        dst = bytes[off] != 0;
+        off += 1;
+        return true;
+    };
+
+    // base_color_texture: optional tail (legacy & current). <40 bytes ⇒ none.
+    if (off + 4 > bytes.size()) return true;
+    if (!rd_str_at(out.base_color_texture)) return false;
+
+    // PBR-map extension block, only if the magic sentinel follows.
+    if (off + 4 > bytes.size()) return true;
+    if (rd_u32(bytes.data() + off) != kMaterialExtMagic) return true;
+    off += 4;
+    if (!rd_u8_at(out.mr_packed))           return false;
+    if (!rd_u8_at(out.invert_roughness))    return false;
+    if (!rd_f_at (out.normal_scale))        return false;
+    if (!rd_f_at (out.occlusion_strength))  return false;
+    if (!rd_f_at (out.height_scale))        return false;
+    if (!rd_str_at(out.metallic_roughness_texture)) return false;
+    if (!rd_str_at(out.roughness_texture))          return false;
+    if (!rd_str_at(out.metallic_texture))           return false;
+    if (!rd_str_at(out.normal_texture))             return false;
+    if (!rd_str_at(out.occlusion_texture))          return false;
+    if (!rd_str_at(out.emissive_texture))           return false;
+    if (!rd_str_at(out.height_texture))             return false;
+    if (!rd_str_at(out.specular_texture))           return false;
+    if (!rd_str_at(out.opacity_texture))            return false;
     return true;
 }
 

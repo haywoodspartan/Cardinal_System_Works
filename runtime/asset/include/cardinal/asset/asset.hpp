@@ -57,7 +57,28 @@ struct MaterialAsset {
     float                 roughness  {0.5f};
     cardinal::scene::Vec3 emission   {0.0f, 0.0f, 0.0f};
     float                 emission_strength{0.0f};
-    cardinal::string           base_color_texture;     // asset key (optional)
+    cardinal::string           base_color_texture;     // albedo asset key (optional)
+
+    // ---- Full PBR texture-map set (asset keys; empty ⇒ that map absent) ----
+    // Mirrors import::ImportMaterial 1:1 so to_asset_material is a flat copy.
+    // Stored now (so imports persist losslessly); the renderer samples them in
+    // a later GPU phase. metallic_roughness_texture is the glTF ORM-packed
+    // form (G=roughness, B=metallic) gated by mr_packed; roughness_texture /
+    // metallic_texture are the separate (OBJ / Megascans) form.
+    cardinal::string metallic_roughness_texture;
+    cardinal::string roughness_texture;
+    cardinal::string metallic_texture;
+    cardinal::string normal_texture;
+    float            normal_scale{1.0f};
+    cardinal::string occlusion_texture;
+    float            occlusion_strength{1.0f};
+    cardinal::string emissive_texture;
+    cardinal::string height_texture;
+    float            height_scale{1.0f};
+    cardinal::string specular_texture;
+    cardinal::string opacity_texture;
+    bool             mr_packed{false};
+    bool             invert_roughness{false};
 };
 
 // ---------------------------------------------------------------------------

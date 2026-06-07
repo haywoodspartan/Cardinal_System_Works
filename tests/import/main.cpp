@@ -222,7 +222,13 @@ void test_obj_mtl(const std::filesystem::path& dir) {
         "Kd 0.9 0.1 0.05\n"
         "Ke 0 0 0\n"
         "Pr 0.25\n"
-        "Pm 0.80\n");
+        "Pm 0.80\n"
+        "map_Kd albedo.png\n"
+        "map_Pr rough.png\n"
+        "map_Pm metal.png\n"
+        "map_Bump -bm 0.5 normal.png\n"     // -bm option skipped, path is last
+        "map_Ke emis.png\n"
+        "disp height.png\n");
     const auto p = dir / "matobj.obj";
     write_file(p,
         "mtllib mat.mtl\n"
@@ -242,8 +248,65 @@ void test_obj_mtl(const std::filesystem::path& dir) {
         CHECK(approx(mt.roughness, 0.25f, 1e-3f));    // Pr overrides Ns
         CHECK(approx(mt.metallic, 0.80f, 1e-3f));     // Pm ext
         CHECK(approx(mt.emission_strength, 0.0f, 1e-6f));
+        // Full PBR map set parsed from MTL (separate maps, not packed).
+        CHECK(mt.base_color_texture == "albedo.png");
+        CHECK(mt.roughness_texture  == "rough.png");
+        CHECK(mt.metallic_texture   == "metal.png");
+        CHECK(mt.normal_texture     == "normal.png");
+        CHECK(mt.emissive_texture   == "emis.png");
+        CHECK(mt.height_texture     == "height.png");
+        CHECK(!mt.mr_packed);
     }
     if (!s.meshes.empty()) CHECK(s.meshes[0].material == 0);
+}
+
+// ---- glTF 2.0: full PBR texture set (MR-packed + normal/occl/emissive) ---
+void test_gltf_pbr_maps(const std::filesystem::path& dir) {
+    const float pos[9] = { 0,0,0, 1,0,0, 0,1,0 };
+    std::vector<unsigned char> bytes(sizeof(pos));
+    std::memcpy(bytes.data(), pos, sizeof(pos));
+    const cardinal::string uri =
+        "data:application/octet-stream;base64," + b64(bytes);
+
+    const cardinal::string json =
+        cardinal::string("{\"asset\":{\"version\":\"2.0\"},")
+        + "\"images\":[{\"uri\":\"alb.png\"},{\"uri\":\"mr.png\"},"
+          "{\"uri\":\"nrm.png\"},{\"uri\":\"ao.png\"},{\"uri\":\"emi.png\"}],"
+          "\"textures\":[{\"source\":0},{\"source\":1},{\"source\":2},"
+          "{\"source\":3},{\"source\":4}],"
+          "\"materials\":[{\"name\":\"PBR\",\"pbrMetallicRoughness\":{"
+          "\"baseColorTexture\":{\"index\":0},"
+          "\"metallicRoughnessTexture\":{\"index\":1}},"
+          "\"normalTexture\":{\"index\":2,\"scale\":0.7},"
+          "\"occlusionTexture\":{\"index\":3,\"strength\":0.4},"
+          "\"emissiveTexture\":{\"index\":4},\"emissiveFactor\":[1,1,1]}],"
+          "\"buffers\":[{\"byteLength\":36,\"uri\":\"" + uri + "\"}],"
+          "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],"
+          "\"accessors\":[{\"bufferView\":0,\"byteOffset\":0,"
+          "\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"}],"
+          "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},"
+          "\"material\":0}]}],"
+          "\"nodes\":[{\"mesh\":0}],"
+          "\"scenes\":[{\"nodes\":[0]}],\"scene\":0}";
+
+    const auto p = dir / "pbr.gltf";
+    write_file(p, json);
+    cardinal::string err;
+    imp::ImportScene s = imp::import_file(str_of(p), &err);
+    CHECK(s.ok);
+    CHECK(s.materials.size() == sz(1));
+    if (!s.materials.empty()) {
+        const imp::ImportMaterial& mt = s.materials[0];
+        CHECK(mt.name == "PBR");
+        CHECK(mt.base_color_texture == "alb.png");
+        CHECK(mt.metallic_roughness_texture == "mr.png");
+        CHECK(mt.mr_packed);                          // glTF packs MR
+        CHECK(mt.normal_texture == "nrm.png");
+        CHECK(approx(mt.normal_scale, 0.7f, 1e-5f));
+        CHECK(mt.occlusion_texture == "ao.png");
+        CHECK(approx(mt.occlusion_strength, 0.4f, 1e-5f));
+        CHECK(mt.emissive_texture == "emi.png");
+    }
 }
 
 // ---- OBJ: per-vertex colour is preserved ----------------------------
@@ -602,6 +665,7 @@ int main() {
     test_obj_mtl(dir);
     test_obj_vertex_color(dir);
     test_gltf_triangle(dir);
+    test_gltf_pbr_maps(dir);
     test_megascans_surface(dir);
     test_megascans_3d(dir);
     test_megascans_gloss(dir);

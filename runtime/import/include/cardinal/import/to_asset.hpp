@@ -45,6 +45,23 @@ inline cardinal::asset::MaterialAsset to_asset_material(const ImportMaterial& m)
     out.emission           = m.emission;
     out.emission_strength  = m.emission_strength;
     out.base_color_texture = m.base_color_texture;
+    // Full PBR map set — field names mirror ImportMaterial 1:1.
+    out.metallic_roughness_texture = m.metallic_roughness_texture;
+    out.roughness_texture          = m.roughness_texture;
+    out.metallic_texture           = m.metallic_texture;
+    out.normal_texture             = m.normal_texture;
+    out.normal_scale               = m.normal_scale;
+    out.occlusion_texture          = m.occlusion_texture;
+    out.occlusion_strength         = m.occlusion_strength;
+    out.emissive_texture           = m.emissive_texture;
+    out.height_texture             = m.height_texture;
+    out.height_scale               = m.height_scale;
+    out.specular_texture           = m.specular_texture;
+    out.opacity_texture            = m.opacity_texture;
+    out.mr_packed                  = m.mr_packed;
+    out.invert_roughness           = m.invert_roughness;
+    // (m.unmapped_textures has no MaterialAsset counterpart — intentionally
+    //  dropped at the bridge; those maps have no engine slot to feed.)
     return out;
 }
 
