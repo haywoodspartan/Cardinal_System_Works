@@ -902,6 +902,94 @@ void test_fbx_failures(const std::filesystem::path& dir) {
     CHECK(!err.empty());
 }
 
+// ---- USDA: a def Mesh quad (points / counts / indices / normals / st) ----
+void test_usda(const std::filesystem::path& dir) {
+    const auto p = dir / "quad.usda";
+    write_file(p,
+        "#usda 1.0\n"
+        "def Xform \"root\" {\n"
+        "  def Mesh \"quad\" {\n"
+        "    point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)]\n"
+        "    int[] faceVertexCounts = [4]\n"
+        "    int[] faceVertexIndices = [0, 1, 3, 2]\n"
+        "    normal3f[] normals = [(0,0,1), (0,0,1), (0,0,1), (0,0,1)]\n"
+        "    texCoord2f[] primvars:st = [(0,0), (1,0), (1,1), (0,1)]\n"
+        "  }\n"
+        "}\n");
+
+    cardinal::string err;
+    imp::ImportScene s = imp::import_file(str_of(p), &err);
+    CHECK(s.ok);
+    CHECK(s.source_format == "usda");
+    CHECK(s.meshes.size() == sz(1));
+    CHECK(s.total_vertices() == 4u);
+    CHECK(s.total_triangles() == 2u);          // quad -> 2 fan triangles
+    if (!s.meshes.empty()) {
+        const imp::ImportMesh& m = s.meshes[0];
+        CHECK(m.positions.size() == sz(4));
+        CHECK(m.normals.size() == sz(4));      // per-vertex
+        CHECK(m.uvs.size() == sz(4));
+        if (m.positions.size() == sz(4)) {
+            CHECK(approx(m.positions[1].x, 1.0f, 1e-5f));
+            CHECK(approx(m.positions[3].y, 1.0f, 1e-5f));
+        }
+        if (m.normals.size() == sz(4)) CHECK(approx(m.normals[0].z, 1.0f, 1e-5f));
+        if (m.uvs.size() == sz(4))     CHECK(approx(m.uvs[2].u, 1.0f, 1e-5f));
+    }
+}
+
+// ---- USD: USDC binary crate is detected + rejected cleanly ----------
+void test_usdc_reject(const std::filesystem::path& dir) {
+    const auto p = dir / "crate.usd";          // .usd that is actually a crate
+    write_bytes(p, std::vector<unsigned char>{'P','X','R','-','U','S','D','C',0,0,0,0});
+    cardinal::string err;
+    imp::ImportScene s = imp::import_file(str_of(p), &err);
+    CHECK(!s.ok);
+    CHECK(!err.empty());
+}
+
+// ---- USDZ: a STORED zip wrapping a USDA root layer ------------------
+void test_usdz(const std::filesystem::path& dir) {
+    const std::string usda =
+        "#usda 1.0\n"
+        "def Mesh \"m\" {\n"
+        "  point3f[] points = [(0,0,0),(1,0,0),(0,1,0)]\n"
+        "  int[] faceVertexCounts = [3]\n"
+        "  int[] faceVertexIndices = [0,1,2]\n"
+        "}\n";
+    const std::string name = "root.usda";
+    std::vector<unsigned char> z;
+    auto u16 = [&](unsigned v){ z.push_back(static_cast<unsigned char>(v & 0xFFu));
+                                z.push_back(static_cast<unsigned char>((v >> 8) & 0xFFu)); };
+    auto u32 = [&](unsigned v){ for (int k = 0; k < 4; ++k)
+                                z.push_back(static_cast<unsigned char>((v >> (8*k)) & 0xFFu)); };
+    const unsigned dataLen = static_cast<unsigned>(usda.size());
+    const unsigned nameLen = static_cast<unsigned>(name.size());
+    // Local file header @ offset 0 (STORED, method 0).
+    u32(0x04034b50); u16(20); u16(0); u16(0); u16(0); u16(0);
+    u32(0); u32(dataLen); u32(dataLen); u16(nameLen); u16(0);
+    for (char c : name) z.push_back(static_cast<unsigned char>(c));
+    for (char c : usda) z.push_back(static_cast<unsigned char>(c));
+    const unsigned cdOff = static_cast<unsigned>(z.size());
+    // Central directory record (local header offset = 0).
+    u32(0x02014b50); u16(20); u16(20); u16(0); u16(0); u16(0); u16(0);
+    u32(0); u32(dataLen); u32(dataLen); u16(nameLen); u16(0); u16(0);
+    u16(0); u16(0); u32(0); u32(0);
+    for (char c : name) z.push_back(static_cast<unsigned char>(c));
+    const unsigned cdSize = static_cast<unsigned>(z.size()) - cdOff;
+    // End of central directory.
+    u32(0x06054b50); u16(0); u16(0); u16(1); u16(1); u32(cdSize); u32(cdOff); u16(0);
+
+    const auto p = dir / "model.usdz";
+    write_bytes(p, z);
+    cardinal::string err;
+    imp::ImportScene s = imp::import_file(str_of(p), &err);
+    CHECK(s.ok);
+    CHECK(s.source_format == "usdz");
+    CHECK(s.total_vertices() == 3u);
+    CHECK(s.total_triangles() == 1u);
+}
+
 // ---- Heightmap: graceful failure on a not-yet-supported format ------
 void test_heightmap_unsupported(const std::filesystem::path& dir) {
     // A .png is recognised but needs DEFLATE (not yet) — must fail cleanly.
@@ -948,6 +1036,9 @@ int main() {
     test_fbx_triangle(dir);
     test_fbx_compressed(dir);
     test_fbx_failures(dir);
+    test_usda(dir);
+    test_usdc_reject(dir);
+    test_usdz(dir);
     test_format_detect();
     test_failures(dir);
 

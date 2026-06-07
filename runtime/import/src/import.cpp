@@ -32,6 +32,9 @@ const char* format_name(Format f) noexcept {
         case Format::Gltf: return "gltf";
         case Format::Glb:  return "glb";
         case Format::Fbx:  return "fbx";
+        case Format::Usda: return "usda";
+        case Format::Usdz: return "usdz";
+        case Format::Usdc: return "usdc";
         default:           return "unknown";
     }
 }
@@ -61,6 +64,9 @@ Format detect_format(const cardinal::string& path) noexcept {
     if (e == ".gltf") return Format::Gltf;
     if (e == ".glb")  return Format::Glb;
     if (e == ".fbx")  return Format::Fbx;
+    if (e == ".usda" || e == ".usd") return Format::Usda;  // .usd: ASCII or crate; sniffed in import_usd
+    if (e == ".usdz") return Format::Usdz;
+    if (e == ".usdc") return Format::Usdc;
     return Format::Unknown;
 }
 
@@ -346,6 +352,9 @@ ImportScene import_file(const cardinal::string& path, cardinal::string* error) {
         case Format::Gltf:
         case Format::Glb:  return import_gltf(path, error);
         case Format::Fbx:  return import_fbx(path, error);
+        case Format::Usda:
+        case Format::Usdz:
+        case Format::Usdc: return import_usd(path, error);
         default: {
             ImportScene s;
             s.diagnostics = "unrecognised extension: " + path;

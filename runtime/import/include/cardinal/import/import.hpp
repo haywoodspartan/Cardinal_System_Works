@@ -40,7 +40,7 @@ namespace cardinal::import {
 
 struct Vec2 { float u{0.0f}, v{0.0f}; };
 
-enum class Format : u32 { Unknown = 0, Obj, Gltf, Glb, Fbx };
+enum class Format : u32 { Unknown = 0, Obj, Gltf, Glb, Fbx, Usda, Usdz, Usdc };
 
 const char* format_name(Format f) noexcept;
 // Extension-based detection (".obj" → Obj, ".glb" → Glb, …).
@@ -129,6 +129,11 @@ ImportScene import_gltf(const cardinal::string& path, cardinal::string* error = 
 // per-vertex normals; zlib-compressed property arrays via core::compress. ASCII
 // FBX is detected and rejected cleanly. Materials/skinning/anim deferred.
 ImportScene import_fbx (const cardinal::string& path, cardinal::string* error = nullptr);
+// Pixar USD. USDA (ASCII .usda/.usd) mesh prims are parsed directly; USDZ
+// (.usdz, a STORED/DEFLATE zip) is extracted to its root layer and parsed;
+// USDC (binary crate) is detected and rejected cleanly. Handles all three
+// (dispatch by extension, content-sniffed for ambiguous .usd).
+ImportScene import_usd (const cardinal::string& path, cardinal::string* error = nullptr);
 
 // ---------------------------------------------------------------------------
 // Megascans / Quixel Bridge — a scanned-PBR asset is a metadata JSON plus a
