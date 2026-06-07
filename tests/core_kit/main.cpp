@@ -21,6 +21,7 @@
 #include <cardinal/core/string/string_builder.hpp>
 #include <cardinal/core/rng.hpp>
 #include <cardinal/core/noise.hpp>
+#include <cardinal/core/easing.hpp>
 #include <cardinal/core/small_vector.hpp>
 #include <cardinal/core/dense_map.hpp>
 #include <cardinal/core/sparse_set.hpp>
@@ -916,6 +917,55 @@ void test_rng() {
     CHECK(r.chance(1.0));                 // and always < 1
 }
 
+void test_curve() {
+    namespace cv = cardinal::curve;
+    auto af = [](float a, float b) { return cardinal::abs(a - b) < 1e-4f; };
+
+    // Interpolation helpers.
+    CHECK(af(cv::lerp(0.0f, 10.0f, 0.5f), 5.0f));
+    CHECK(af(cv::inverse_lerp(0.0f, 10.0f, 5.0f), 0.5f));
+    CHECK(af(cv::remap(5.0f, 0.0f, 10.0f, 100.0f, 200.0f), 150.0f));
+    CHECK(af(cv::saturate(-1.0f), 0.0f) && af(cv::saturate(2.0f), 1.0f) && af(cv::saturate(0.5f), 0.5f));
+    CHECK(af(cv::smoothstep(0.0f), 0.0f) && af(cv::smoothstep(1.0f), 1.0f) && af(cv::smoothstep(0.5f), 0.5f));
+    CHECK(af(cv::smootherstep(0.0f), 0.0f) && af(cv::smootherstep(1.0f), 1.0f) && af(cv::smootherstep(0.5f), 0.5f));
+
+    // Every easing pins f(0)=0 and f(1)=1.
+    float (*const eases[])(float) = {
+        cv::in_quad, cv::out_quad, cv::in_out_quad,
+        cv::in_cubic, cv::out_cubic, cv::in_out_cubic,
+        cv::in_sine, cv::out_sine, cv::in_out_sine,
+        cv::in_expo, cv::out_expo, cv::in_out_expo,
+        cv::in_back, cv::out_back,
+        cv::in_bounce, cv::out_bounce, cv::in_out_bounce,
+    };
+    bool ends_ok = true;
+    for (auto fn : eases)
+        if (!af(fn(0.0f), 0.0f) || !af(fn(1.0f), 1.0f)) ends_ok = false;
+    CHECK(ends_ok);
+
+    // Symmetric in-out curves pass through 0.5 at the midpoint.
+    CHECK(af(cv::in_out_cubic(0.5f), 0.5f) && af(cv::in_out_quad(0.5f), 0.5f));
+
+    // Splines through / between control points.
+    CHECK(af(cv::catmull_rom(0.0f, 1.0f, 2.0f, 3.0f, 0.0f), 1.0f));   // passes through p1 at t=0
+    CHECK(af(cv::catmull_rom(0.0f, 1.0f, 2.0f, 3.0f, 1.0f), 2.0f));   // and p2 at t=1
+    CHECK(af(cv::bezier(0.0f, 1.0f, 2.0f, 10.0f, 0.0f), 0.0f));       // p0 at t=0
+    CHECK(af(cv::bezier(0.0f, 1.0f, 2.0f, 10.0f, 1.0f), 10.0f));      // p3 at t=1
+    CHECK(af(cv::hermite(0.0f, 0.0f, 5.0f, 0.0f, 0.0f), 0.0f));       // p0 at t=0
+    CHECK(af(cv::hermite(0.0f, 0.0f, 5.0f, 0.0f, 1.0f), 5.0f));       // p1 at t=1
+
+    // Vec3 spline endpoints (camera-path use).
+    using V = cardinal::core::Vec3;
+    const V a{0, 0, 0}, b{1, 2, 3}, c{4, 5, 6}, d{7, 8, 9};
+    const V cm0 = cv::catmull_rom(a, b, c, d, 0.0f);
+    const V cm1 = cv::catmull_rom(a, b, c, d, 1.0f);
+    CHECK(af(cm0.x, b.x) && af(cm0.y, b.y) && af(cm0.z, b.z));
+    CHECK(af(cm1.x, c.x) && af(cm1.y, c.y) && af(cm1.z, c.z));
+    const V bz0 = cv::bezier(a, b, c, d, 0.0f);
+    const V bz1 = cv::bezier(a, b, c, d, 1.0f);
+    CHECK(af(bz0.x, a.x) && af(bz1.z, d.z));
+}
+
 void test_noise() {
     namespace nz = cardinal::noise;
 
@@ -1196,6 +1246,7 @@ int main() {
     test_dense_map();
     test_sparse_set();
     test_rng();
+    test_curve();
     test_noise();
     test_string_builder();
     test_slot_map();
