@@ -685,9 +685,17 @@ public:
         pipelines_.push_back(cardinal::make_unique<ForwardClustered> (dev, sw));
         pipelines_.push_back(create_aegis_pipeline                   (dev, sw));
         for (auto& p : pipelines_) p->on_caps(dev.capabilities());
+        // Default to AEGIS Pipeline 2.0 on every start (its graph runs on the
+        // RhiBackend by default; on-screen draw delegates to the ForwardRenderer
+        // until RhiBackend rasterises). Hosts can still set_active() any other
+        // pipeline at runtime, and the studio_settings pipeline.active CVar
+        // overrides this when the user has saved a different choice.
+        for (size_t i = 0; i < pipelines_.size(); ++i) {
+            if (pipelines_[i]->id() == PipelineId::Aegis) { active_idx_ = i; break; }
+        }
         cardinal::log::infof("render",
             "Pipeline registry online — %zu pipelines, default '%s'",
-            pipelines_.size(), pipelines_[0]->name());
+            pipelines_.size(), pipelines_[active_idx_]->name());
     }
 
     cardinal::vector<Pipeline*> all() override {

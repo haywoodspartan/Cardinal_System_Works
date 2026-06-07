@@ -49,12 +49,15 @@ public:
         cfg.caps.fp4_supported  = false;
         cfg.max_tier            = gpu::GeometryTier::Fp16;
 
-        // Default to Null backend for the in-Studio preview: AEGIS topology
-        // builds + executes (so the editor sees per-stage stats + wave
-        // decomposition), but no buffers are allocated. ThreadedCpu /
-        // Cpu modes are user-selectable via the backend_mode Knob below;
-        // selecting Rhi mode swaps in a real graph::RhiBackend bound to
-        // the AegisGraphPipeline's device + swapchain.
+        // Construct with a placeholder Null backend (create() has no device,
+        // so it can't build the real RhiBackend). The backend_mode Knob below
+        // DEFAULTS to RhiBackend, and current_mode_ starts at Null — so the
+        // first render() detects the mismatch and swaps in a real
+        // graph::RhiBackend bound to this pipeline's device + swapchain
+        // (update_backend_from_knob). RhiBackend degrades to recording-only
+        // telemetry until the device implements compute pipelines, and the
+        // on-screen image is drawn by the ForwardRenderer either way, so this
+        // is safe as the default. Null / Cpu / ThreadedCpu stay selectable.
         runner_ = AegisPipelineRunner::create(cfg, AegisBackendMode::Null);
 
         build_knobs();
@@ -167,9 +170,20 @@ public:
         in.camera_dir   = runner_->graph().declare_buffer(graph::BufferDesc{"dir",  12, 0, true});
         if (runner_->build(in)) runner_->execute();
 
-        // Delegate the actual draw to the ForwardRenderer. When
-        // graph::RhiBackend ships, this fallthrough goes away.
-        renderer_->render(scn, scene::ViewMode::Solid, aspect);
+        // Delegate the actual draw to the ForwardRenderer, honouring the
+        // per-viewport view mode the Studio pushed into our "view_mode" knob
+        // (Solid / Wireframe / Polygons / Heightmap / Normals / RTX Preview).
+        // When graph::RhiBackend ships its own raster output this fallthrough
+        // goes away, but the view-mode contract stays the same.
+        scene::ViewMode vm = scene::ViewMode::Solid;
+        for (const auto& k : knobs_) {
+            if (k.id == "view_mode" && k.kind == KnobKind::Enum) {
+                const int e = (k.e < 0) ? 0 : (k.e > 5 ? 5 : k.e);
+                vm = static_cast<scene::ViewMode>(e);
+                break;
+            }
+        }
+        renderer_->render(scn, vm, aspect);
     }
 
     void set_light_set(const scene::LightSet* lights) override {
@@ -248,13 +262,26 @@ private:
     void build_knobs() {
         knobs_.clear();
 
+        // ---- Visualisation -------------------------------------------
+        // Per-viewport view mode. The Studio pushes the focused viewport's
+        // scene::ViewMode into this knob each frame (by id "view_mode", the
+        // same contract ForwardBaseline uses), and render() forwards it to the
+        // on-screen ForwardRenderer — so Solid / Wireframe / Polygons /
+        // Heightmap / Normals / RTX Preview all work under AEGIS. Indices
+        // match scene::ViewMode exactly.
+        add_enum_("view_mode", "View Mode", "Visualisation",
+            "How the on-screen forward draw shades each fragment. Driven by the "
+            "viewport toolbar (per-viewport); mirrored here for reference.",
+            0, {"Solid", "Wireframe", "Polygons", "Heightmap", "Normals", "RTX Preview"});
+
         // ---- AEGIS core ----------------------------------------------
         add_enum_("backend_mode", "Graph Backend", "AEGIS",
             "Which graph::Backend the AEGIS runner executes against. "
             "Null = topology only (per-frame stats, no buffers). "
             "Cpu / ThreadedCpu = full virtual-GPU simulation. "
-            "Rhi = real compute dispatch (when RhiBackend lands).",
-            0, {"Null (topology)", "CpuBackend", "ThreadedCpuBackend", "RhiBackend"});
+            "Rhi = real GPU compute dispatch (default; degrades to recording-"
+            "only telemetry until the device implements compute pipelines).",
+            3, {"Null (topology)", "CpuBackend", "ThreadedCpuBackend", "RhiBackend"});
         add_enum_("max_tier", "Max Geometry Tier", "AEGIS",
             "Maximum precision tier the math-division engine is allowed to "
             "escalate to. FP4 (Blackwell) = 8 micro-tris per source triangle; "
@@ -378,12 +405,11 @@ private:
             false);
 
         // ---- Debug (pipeline-global only) -----------------------------
-        // Per-viewport visualisation choices — wireframe, polygons,
-        // ray-traced lighting preview, normals, heightmap — live in the
-        // VIEWPORT TOOLBAR, not here. Each viewport carries its own
-        // scene::ViewMode pushed through draw_viewport_panel. The
-        // pipeline panel only owns settings that affect the whole
-        // engine simulation / cull state regardless of viewport.
+        // The per-viewport visualisation CHOICE is made in the VIEWPORT
+        // TOOLBAR — each viewport carries its own scene::ViewMode, pushed
+        // into the "view_mode" knob above each frame (see render()). These
+        // Debug knobs, by contrast, affect the whole engine simulation /
+        // cull state regardless of viewport.
         add_bool_("pause_simulation", "Pause Simulation", "Debug",
             "Freeze the scene update; rendering continues.", false);
         add_bool_("freeze_culling", "Freeze Culling Frustum", "Debug",

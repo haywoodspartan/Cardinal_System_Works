@@ -1563,6 +1563,14 @@ int main(int argc, char** argv) {
         }
     }
 
+    // AEGIS Pipeline 2.0 is the default on every start (RhiBackend-driven via
+    // its own knob default). render::Registry already defaults to it, but the
+    // persisted `pipeline.active` cvar above can have restored a different
+    // pipeline from a prior session — so re-assert AEGIS here unconditionally
+    // to honour the "Aegis 2.0 default on any start" contract. Runtime
+    // pipeline switches via the panel still work; they're session-only.
+    pipelines->set_active(rnd::PipelineId::Aegis);
+
     const auto t0 = std::chrono::steady_clock::now();
     auto       prev_t = t0;
     u32        frame  = 0;
