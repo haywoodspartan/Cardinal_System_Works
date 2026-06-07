@@ -169,11 +169,13 @@ void D3D12Device::populate_capabilities() {
     // expose what's actually queryable.
     D3D12_FEATURE_DATA_D3D12_OPTIONS  o{};
     D3D12_FEATURE_DATA_D3D12_OPTIONS5 o5{};
+    D3D12_FEATURE_DATA_D3D12_OPTIONS6 o6{};
     D3D12_FEATURE_DATA_D3D12_OPTIONS7 o7{};
     D3D12_FEATURE_DATA_SHADER_MODEL   sm{D3D_SHADER_MODEL_6_8};
 
     device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS,  &o,  sizeof(o));
     device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &o5, sizeof(o5));
+    device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS6, &o6, sizeof(o6));
     device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &o7, sizeof(o7));
     device_->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL,   &sm, sizeof(sm));
 
@@ -196,6 +198,20 @@ void D3D12Device::populate_capabilities() {
     caps_.acceleration_structure   = (o5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0);
     caps_.ray_tracing_pipeline     = (o5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0);
     caps_.ray_query                = (o5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1);
+
+    // ---- AEGIS 2.0 GPU-feature caps (Blocks 4 / 8 / 12) ----
+    caps_.indirect_dispatch        = true;   // ExecuteIndirect — FL12 baseline
+    caps_.indirect_draw_count      = true;   // ExecuteIndirect w/ a count buffer
+    caps_.bindless_resources       = (o.ResourceBindingTier >= D3D12_RESOURCE_BINDING_TIER_3);
+    caps_.variable_rate_shading    = (o6.VariableShadingRateTier >= D3D12_VARIABLE_SHADING_RATE_TIER_1);
+    caps_.variable_rate_image      = (o6.VariableShadingRateTier >= D3D12_VARIABLE_SHADING_RATE_TIER_2);
+    caps_.tensor_cores             = (cardinal::strstr(caps_.vendor_name, "NVIDIA") != nullptr)
+                                  && (o5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0);
+    // fp8_math / fp4_math: no queryable D3D12 cap before SM6.9 (the in-tree
+    // Agility SDK predates the float8 enums) — left false; honest gate lands
+    // with an SDK bump. direct_storage_capable: needs a DStorageGetFactory
+    // probe (separate SDK) — left false.
+
     caps_.nvidia_dlss_capable      = (cardinal::strstr(caps_.vendor_name, "NVIDIA") != nullptr)
                                   && caps_.ray_tracing_pipeline;
     caps_.nvidia_framegen_capable  = caps_.nvidia_dlss_capable;
@@ -543,6 +559,98 @@ cardinal::unique_ptr<Pipeline> D3D12Device::create_pipeline(const PipelineDesc& 
                                            desc.storage_buffer_slots,
                                            desc.sampled_texture_slots,
                                            push_as_cbv);
+}
+
+// -----------------------------------------------------------------------------
+// Compute pipeline (AEGIS graph::RhiBackend). Mirrors create_pipeline's root
+// signature (push block @ b0 + read-only SRVs @ t0.. + read-write UAVs @ u0..)
+// minus the input-assembler flag + sampler table, then a compute PSO. Empty
+// shader => nullptr (the graph layer's correct telemetry-only fallback until
+// real CSMain bytecode is threaded through).
+// -----------------------------------------------------------------------------
+cardinal::unique_ptr<Pipeline> D3D12Device::create_compute_pipeline(const ComputePipelineDesc& desc) {
+    if (!desc.compute_shader.ok()) {
+        return nullptr;   // empty blob — RhiBackend falls back to recording-only
+    }
+
+    const bool push_as_cbv = desc.push_constant_size > 64;
+    cardinal::vector<D3D12_ROOT_PARAMETER> root_params;
+    if (desc.push_constant_size > 0) {
+        D3D12_ROOT_PARAMETER rp{};
+        if (push_as_cbv) {
+            rp.ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+            rp.Descriptor.ShaderRegister = 0;             // b0
+        } else {
+            rp.ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+            rp.Constants.ShaderRegister = 0;              // b0
+            rp.Constants.Num32BitValues = (desc.push_constant_size + 3) / 4;
+        }
+        rp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        root_params.push_back(rp);
+    }
+    for (u32 s = 0; s < desc.storage_buffer_slots; ++s) {   // read-only SRV t0..
+        D3D12_ROOT_PARAMETER rp{};
+        rp.ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV;
+        rp.Descriptor.ShaderRegister = s;
+        rp.ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+        root_params.push_back(rp);
+    }
+    for (u32 s = 0; s < desc.uav_slots; ++s) {             // read-write UAV u0..
+        D3D12_ROOT_PARAMETER rp{};
+        rp.ParameterType             = D3D12_ROOT_PARAMETER_TYPE_UAV;
+        rp.Descriptor.ShaderRegister = s;
+        rp.ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+        root_params.push_back(rp);
+    }
+
+    // 64-DWORD budget guard (CBV/UAV/SRV root descriptors cost 2 DWORDs each;
+    // inline constants cost 1 per DWORD of payload).
+    {
+        const u32 push_dwords = (desc.push_constant_size == 0) ? 0u
+                              : (push_as_cbv ? 2u : (desc.push_constant_size + 3u) / 4u);
+        const u32 total_dwords = push_dwords
+                               + 2u * desc.storage_buffer_slots
+                               + 2u * desc.uav_slots;
+        if (total_dwords > 64u) {
+            cardinal::log::errorf("rhi/d3d12",
+                "compute root signature too large: %u DWORDs > 64 (push=%uB srv=%u uav=%u)",
+                total_dwords, desc.push_constant_size,
+                desc.storage_buffer_slots, desc.uav_slots);
+            return nullptr;
+        }
+    }
+
+    D3D12_ROOT_SIGNATURE_DESC rsd{};
+    rsd.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;   // no IA for compute
+    if (!root_params.empty()) {
+        rsd.NumParameters = static_cast<UINT>(root_params.size());
+        rsd.pParameters   = root_params.data();
+    }
+    ComPtr<ID3DBlob> blob, err;
+    if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err))) {
+        cardinal::log::errorf("rhi/d3d12", "compute SerializeRootSignature failed (%s)",
+            err ? static_cast<const char*>(err->GetBufferPointer()) : "");
+        return nullptr;
+    }
+    ComPtr<ID3D12RootSignature> root;
+    if (FAILED(device_->CreateRootSignature(0, blob->GetBufferPointer(),
+                                            blob->GetBufferSize(), IID_PPV_ARGS(&root)))) {
+        cardinal::log::errorf("rhi/d3d12", "compute CreateRootSignature failed");
+        return nullptr;
+    }
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC cd{};
+    cd.pRootSignature   = root.Get();
+    cd.CS.pShaderBytecode = desc.compute_shader.bytes.data();
+    cd.CS.BytecodeLength  = desc.compute_shader.bytes.size();
+    ComPtr<ID3D12PipelineState> pso;
+    if (FAILED(device_->CreateComputePipelineState(&cd, IID_PPV_ARGS(&pso)))) {
+        cardinal::log::errorf("rhi/d3d12", "CreateComputePipelineState failed");
+        return nullptr;
+    }
+    return cardinal::make_unique<D3D12Pipeline>(cardinal::move(root), cardinal::move(pso),
+                                           desc.push_constant_size, push_as_cbv,
+                                           desc.storage_buffer_slots, desc.uav_slots);
 }
 
 // -----------------------------------------------------------------------------

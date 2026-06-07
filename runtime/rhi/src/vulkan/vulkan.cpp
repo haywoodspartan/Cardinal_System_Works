@@ -355,6 +355,17 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
     caps_.ray_tracing_pipeline     = ext_rtp && qrtp.rayTracingPipeline;
     caps_.ray_query                = ext_rq  && qrq.rayQuery;
 
+    // ---- AEGIS 2.0 GPU-feature caps (Blocks 4 / 8 / 12) ----
+    caps_.indirect_dispatch        = true;                  // vkCmdDispatchIndirect is core
+    caps_.indirect_draw_count      = q12.drawIndirectCount;
+    caps_.bindless_resources       = q12.descriptorIndexing && q12.runtimeDescriptorArray;
+    caps_.variable_rate_shading    = has_ext(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+    caps_.variable_rate_image      = caps_.variable_rate_shading;   // tier-2 refined when VRS recording lands
+    // fp8_math / fp4_math / tensor_cores: gated on VK_KHR_shader_float8 /
+    // VK_KHR_cooperative_matrix (header-version dependent) — left false until a
+    // coop-matrix probe lands. direct_storage_capable: no Vulkan-native
+    // equivalent — left false. (Matches the D3D12 honesty stance.)
+
     // Vendor-specific paths.
     const bool is_nvidia = cardinal::strcmp(caps_.vendor_name, "NVIDIA Corporation") == 0;
     const bool is_amd    = cardinal::strcmp(caps_.vendor_name, "AMD") == 0;
@@ -817,6 +828,86 @@ bool VulkanPipeline::initialize(const PipelineDesc& desc) {
 cardinal::unique_ptr<Pipeline> VulkanDevice::create_pipeline(const PipelineDesc& desc) {
     auto p = cardinal::make_unique<VulkanPipeline>(*this);
     if (!p->initialize(desc)) return nullptr;
+    return p;
+}
+
+// Compute pipeline (AEGIS graph::RhiBackend). One descriptor set: STORAGE_BUFFER
+// bindings [0,storage) read-only + [storage, storage+uav) read-write (Vulkan has
+// no distinct UAV type), stage = COMPUTE; push range = COMPUTE. Empty blob =>
+// false => create_compute_pipeline returns null (graph telemetry fallback).
+bool VulkanPipeline::initialize_compute(const ComputePipelineDesc& desc) {
+    is_compute_ = true;
+    cs_module_  = make_shader_module(dev_.device_, desc.compute_shader);
+    if (cs_module_ == VK_NULL_HANDLE) {
+        cardinal::log::errorf("rhi/vk", "compute: empty/invalid shader module");
+        return false;
+    }
+    push_constant_size_   = desc.push_constant_size;
+    storage_buffer_slots_ = desc.storage_buffer_slots;
+    uav_slots_            = desc.uav_slots;
+
+    const u32 total_ssbo = storage_buffer_slots_ + uav_slots_;
+    if (total_ssbo > 0) {
+        cardinal::vector<VkDescriptorSetLayoutBinding> b;
+        for (u32 s = 0; s < total_ssbo; ++s) {
+            VkDescriptorSetLayoutBinding lb{};
+            lb.binding         = s;                         // [0,storage)=RO, [storage,+uav)=RW
+            lb.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            lb.descriptorCount = 1;
+            lb.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            b.push_back(lb);
+        }
+        VkDescriptorSetLayoutCreateInfo dlci{};
+        dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dlci.bindingCount = static_cast<u32>(b.size());
+        dlci.pBindings    = b.data();
+        if (!vk_check(vkCreateDescriptorSetLayout(dev_.device_, &dlci, nullptr, &dsl_),
+                      "vkCreateDescriptorSetLayout(compute)")) {
+            return false;
+        }
+    }
+
+    VkPushConstantRange pc{};
+    VkPipelineLayoutCreateInfo lci{};
+    lci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    if (dsl_ != VK_NULL_HANDLE) { lci.setLayoutCount = 1; lci.pSetLayouts = &dsl_; }
+    if (push_constant_size_ > 0) {
+        VkPhysicalDeviceProperties pdp{};
+        vkGetPhysicalDeviceProperties(dev_.vk_physical(), &pdp);
+        if (push_constant_size_ > pdp.limits.maxPushConstantsSize) {
+            cardinal::log::errorf("rhi/vk",
+                "compute push block %u B exceeds device maxPushConstantsSize %u",
+                push_constant_size_, pdp.limits.maxPushConstantsSize);
+            return false;
+        }
+        pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pc.size       = push_constant_size_;
+        lci.pushConstantRangeCount = 1;
+        lci.pPushConstantRanges    = &pc;
+    }
+    if (!vk_check(vkCreatePipelineLayout(dev_.device_, &lci, nullptr, &layout_),
+                  "vkCreatePipelineLayout(compute)")) {
+        return false;
+    }
+
+    VkPipelineShaderStageCreateInfo stage{};
+    stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = cs_module_;
+    stage.pName  = desc.compute_entry ? desc.compute_entry : "CSMain";
+    VkComputePipelineCreateInfo cpci{};
+    cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    cpci.stage  = stage;
+    cpci.layout = layout_;
+    return vk_check(vkCreateComputePipelines(dev_.device_, VK_NULL_HANDLE, 1, &cpci,
+                                             nullptr, &pipeline_),
+                    "vkCreateComputePipelines");
+}
+
+cardinal::unique_ptr<Pipeline> VulkanDevice::create_compute_pipeline(const ComputePipelineDesc& desc) {
+    if (!desc.compute_shader.ok()) return nullptr;   // empty blob -> graph fallback
+    auto p = cardinal::make_unique<VulkanPipeline>(*this);
+    if (!p->initialize_compute(desc)) return nullptr;
     return p;
 }
 

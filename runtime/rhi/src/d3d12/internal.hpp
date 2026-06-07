@@ -297,6 +297,26 @@ public:
         // appended AFTER the push block + all storage root SRVs.
         , sampled_table_root_(storage_root_base_ + storage_buffer_slots) {}
 
+    // Compute pipeline ctor (Device::create_compute_pipeline). Root layout:
+    //   [0]          push block (b0)        — iff push_constant_size>0
+    //   [base..)     root SRV (t0..)        — read-only storage_buffer_slots
+    //   [uav_base..) root UAV (u0..)        — read-write uav_slots
+    // No input layout / sampler table (compute has neither). is_compute_ flips
+    // the recorder onto SetComputeRoot*.
+    D3D12Pipeline(ComPtr<ID3D12RootSignature> rs, ComPtr<ID3D12PipelineState> pso,
+                  u32 push_constant_size, bool push_is_cbv,
+                  u32 storage_buffer_slots, u32 uav_slots)
+        : root_(cardinal::move(rs)), pso_(cardinal::move(pso))
+        , topology_(D3D_PRIMITIVE_TOPOLOGY_UNDEFINED)
+        , push_constant_size_(push_constant_size)
+        , push_is_cbv_(push_is_cbv)
+        , storage_buffer_slots_(storage_buffer_slots)
+        , storage_root_base_(push_constant_size > 0 ? 1u : 0u)
+        , uav_slots_(uav_slots)
+        , uav_root_base_(storage_root_base_ + storage_buffer_slots)
+        , is_compute_(true) {}
+
+    bool                   is_compute()          const noexcept override { return is_compute_; }
     ID3D12RootSignature*   root_signature()      const noexcept { return root_.Get(); }
     ID3D12PipelineState*   pso()                 const noexcept { return pso_.Get(); }
     D3D12_PRIMITIVE_TOPOLOGY topology()          const noexcept { return topology_; }
@@ -307,6 +327,8 @@ public:
     u32                    storage_root_base()    const noexcept { return storage_root_base_; }
     u32                    sampled_texture_slots() const noexcept { return sampled_texture_slots_; }
     u32                    sampled_table_root()   const noexcept { return sampled_table_root_; }
+    u32                    uav_slots()            const noexcept { return uav_slots_; }
+    u32                    uav_root_base()        const noexcept { return uav_root_base_; }
 
 private:
     ComPtr<ID3D12RootSignature> root_;
@@ -319,6 +341,9 @@ private:
     u32                         storage_root_base_{0};
     u32                         sampled_texture_slots_{0};
     u32                         sampled_table_root_{0};
+    u32                         uav_slots_{0};
+    u32                         uav_root_base_{0};
+    bool                        is_compute_{false};
 };
 
 // -----------------------------------------------------------------------------
@@ -388,6 +413,8 @@ public:
               u32 first_vertex = 0, u32 first_instance = 0) override;
     void set_push_constants(u32 offset, const void* data, u32 size) override;
     void bind_storage_buffer(u32 slot, Buffer* b) override;
+    void bind_storage_buffer_uav(u32 slot, Buffer* b) override;   // compute RW UAV
+    void dispatch(u32 gx, u32 gy = 1, u32 gz = 1) override;       // compute dispatch
     void begin_shadow_pass(Texture* depth) override;
     void end_shadow_pass() override;
     void bind_sampled_texture(u32 slot, Texture* tex) override;
@@ -564,6 +591,7 @@ public:
 
     cardinal::unique_ptr<Buffer>   create_buffer(const BufferDesc& desc) override;
     cardinal::unique_ptr<Pipeline> create_pipeline(const PipelineDesc& desc) override;
+    cardinal::unique_ptr<Pipeline> create_compute_pipeline(const ComputePipelineDesc& desc) override;
     cardinal::unique_ptr<Texture>  create_texture(const TextureDesc& desc) override;
 
     // RT not yet wired in the D3D12 backend — return nullptr so callers see

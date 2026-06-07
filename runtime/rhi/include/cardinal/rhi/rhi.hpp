@@ -322,6 +322,11 @@ public:
     Pipeline(const Pipeline&)            = delete;
     Pipeline& operator=(const Pipeline&) = delete;
 
+    // True for pipelines created via Device::create_compute_pipeline. The
+    // backend command recorders branch on this to bind on the compute root
+    // signature / VK_PIPELINE_BIND_POINT_COMPUTE instead of the graphics path.
+    virtual bool is_compute() const noexcept { return false; }
+
 protected:
     Pipeline() = default;
 };

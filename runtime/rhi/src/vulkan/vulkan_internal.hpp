@@ -249,6 +249,8 @@ public:
     void draw(u32 vertex_count, u32 instance_count, u32 first_vertex, u32 first_instance) override;
     void set_push_constants(u32 offset, const void* data, u32 size) override;
     void bind_storage_buffer(u32 slot, Buffer* b) override;
+    void bind_storage_buffer_uav(u32 slot, Buffer* b) override;   // compute RW UAV
+    void dispatch(u32 gx, u32 gy = 1, u32 gz = 1) override;       // compute dispatch
     void begin_shadow_pass(Texture* depth) override;
     void end_shadow_pass() override;
     void bind_sampled_texture(u32 slot, Texture* tex) override;
@@ -386,7 +388,8 @@ private:
     // bind_pipeline (a new pipeline starts with nothing bound).
     static constexpr u32 kMaxStorageSlots = 8;
     Buffer*  pending_sb_[kMaxStorageSlots]{};
-    Texture* pending_st_[kMaxStorageSlots]{};   // sampled textures
+    Texture* pending_st_[kMaxStorageSlots]{};   // sampled textures (graphics)
+    Buffer*  pending_uav_[kMaxStorageSlots]{};  // read-write UAV buffers (compute)
     void rebuild_and_bind_descriptor_set_();
 
     // Active shadow-pass depth target between begin/end_shadow_pass.
@@ -557,6 +560,7 @@ public:
 
     cardinal::unique_ptr<Buffer>   create_buffer(const BufferDesc& desc) override;
     cardinal::unique_ptr<Pipeline> create_pipeline(const PipelineDesc& desc) override;
+    cardinal::unique_ptr<Pipeline> create_compute_pipeline(const ComputePipelineDesc& desc) override;
     cardinal::unique_ptr<Texture>  create_texture(const TextureDesc& desc) override;
     cardinal::unique_ptr<AccelerationStructure> create_blas(const BlasDesc& desc) override;
     cardinal::unique_ptr<AccelerationStructure> create_tlas(const TlasDesc& desc) override;
@@ -889,16 +893,23 @@ public:
         if (dsl_      != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(dev_.device_, dsl_, nullptr);
         if (vs_module_ != VK_NULL_HANDLE) vkDestroyShaderModule(dev_.device_, vs_module_, nullptr);
         if (fs_module_ != VK_NULL_HANDLE) vkDestroyShaderModule(dev_.device_, fs_module_, nullptr);
+        if (cs_module_ != VK_NULL_HANDLE) vkDestroyShaderModule(dev_.device_, cs_module_, nullptr);
     }
 
     bool initialize(const PipelineDesc& desc);
+    // Compute variant (AEGIS graph::RhiBackend). One descriptor set: storage
+    // bindings [0,storage) read-only + [storage, storage+uav) read-write (Vulkan
+    // has no separate UAV type — both are STORAGE_BUFFER), stage = COMPUTE.
+    bool initialize_compute(const ComputePipelineDesc& desc);
 
+    bool                  is_compute()          const noexcept override { return is_compute_; }
     VkPipeline            handle()              const noexcept { return pipeline_; }
     VkPipelineLayout      layout()              const noexcept { return layout_; }
     u32                   push_constant_size()  const noexcept { return push_constant_size_; }
     // VK_NULL_HANDLE when storage_buffer_slots_ == 0 (push-only pipeline).
     VkDescriptorSetLayout descriptor_set_layout() const noexcept { return dsl_; }
     u32                   storage_buffer_slots() const noexcept { return storage_buffer_slots_; }
+    u32                   uav_slots()            const noexcept { return uav_slots_; }
 
 private:
     VulkanDevice&         dev_;
@@ -907,9 +918,12 @@ private:
     VkDescriptorSetLayout dsl_{VK_NULL_HANDLE};
     VkShaderModule        vs_module_{VK_NULL_HANDLE};
     VkShaderModule        fs_module_{VK_NULL_HANDLE};
+    VkShaderModule        cs_module_{VK_NULL_HANDLE};
     u32                   push_constant_size_{0};
     u32                   storage_buffer_slots_{0};
     u32                   sampled_texture_slots_{0};
+    u32                   uav_slots_{0};
+    bool                  is_compute_{false};
 public:
     u32 sampled_texture_slots() const noexcept { return sampled_texture_slots_; }
 };

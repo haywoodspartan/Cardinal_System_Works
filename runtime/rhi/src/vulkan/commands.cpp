@@ -9,13 +9,16 @@ namespace cardinal::rhi {
 void VulkanSwapchain::bind_pipeline(Pipeline* p) {
     auto* vp = static_cast<VulkanPipeline*>(p);
     bound_pipeline_ = p;
-    // New pipeline → its descriptor set is independent; drop any
-    // storage-buffer state accumulated for the previous pipeline so a
-    // stale slot can't leak into the next set.
-    for (auto& s : pending_sb_) s = nullptr;
-    for (auto& t : pending_st_) t = nullptr;
+    // New pipeline → its descriptor set is independent; drop any storage /
+    // texture / UAV state accumulated for the previous pipeline so a stale
+    // slot can't leak into the next set.
+    for (auto& s : pending_sb_)  s = nullptr;
+    for (auto& t : pending_st_)  t = nullptr;
+    for (auto& u : pending_uav_) u = nullptr;
     vkCmdBindPipeline(frames_[frame_index_].cmd,
-                      VK_PIPELINE_BIND_POINT_GRAPHICS, vp->handle());
+                      vp->is_compute() ? VK_PIPELINE_BIND_POINT_COMPUTE
+                                       : VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      vp->handle());
 }
 
 void VulkanSwapchain::bind_vertex_buffer(Buffer* b, usize offset) {
@@ -48,9 +51,10 @@ void VulkanSwapchain::set_push_constants(u32 offset, const void* data, u32 size)
         }
         return;
     }
-    vkCmdPushConstants(frames_[frame_index_].cmd,
-                       vp->layout(),
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+    const VkShaderStageFlags stages = vp->is_compute()
+        ? VK_SHADER_STAGE_COMPUTE_BIT
+        : (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+    vkCmdPushConstants(frames_[frame_index_].cmd, vp->layout(), stages,
                        offset, size, data);
 }
 
@@ -232,10 +236,13 @@ void VulkanSwapchain::rebuild_and_bind_descriptor_set_() {
         }
     }
 
+    const bool compute = vp->is_compute();
     const u32 nstore = vp->storage_buffer_slots();
-    const u32 ntex   = vp->sampled_texture_slots();
-    VkDescriptorBufferInfo dbi[kMaxStorageSlots]{};
-    VkDescriptorImageInfo  dii[kMaxStorageSlots]{};
+    const u32 ntex   = compute ? 0u : vp->sampled_texture_slots();
+    const u32 nuav   = compute ? vp->uav_slots() : 0u;
+    VkDescriptorBufferInfo dbi[kMaxStorageSlots]{};   // read-only storage
+    VkDescriptorBufferInfo dbu[kMaxStorageSlots]{};   // read-write UAV (compute)
+    VkDescriptorImageInfo  dii[kMaxStorageSlots]{};   // sampled textures (graphics)
     VkWriteDescriptorSet   wr [kMaxStorageSlots * 2]{};
     u32 nw = 0;
     for (u32 s = 0; s < nstore && s < kMaxStorageSlots; ++s) {
@@ -252,6 +259,24 @@ void VulkanSwapchain::rebuild_and_bind_descriptor_set_() {
         wr[nw].pBufferInfo     = &dbi[s];
         ++nw;
     }
+    // Compute: read-write UAVs occupy bindings [nstore, nstore+uav) (Vulkan
+    // models UAV as a STORAGE_BUFFER; the layout reserved them in
+    // initialize_compute).
+    for (u32 s = 0; s < nuav && s < kMaxStorageSlots; ++s) {
+        if (pending_uav_[s] == nullptr) continue;
+        auto* vbuf      = static_cast<VulkanBuffer*>(pending_uav_[s]);
+        dbu[s].buffer   = vbuf->handle();
+        dbu[s].offset   = 0;
+        dbu[s].range    = VK_WHOLE_SIZE;
+        wr[nw].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr[nw].dstSet          = set;
+        wr[nw].dstBinding      = nstore + s;
+        wr[nw].descriptorCount = 1;
+        wr[nw].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        wr[nw].pBufferInfo     = &dbu[s];
+        ++nw;
+    }
+    // Graphics: sampled textures follow the storage buffers.
     for (u32 s = 0; s < ntex && s < kMaxStorageSlots; ++s) {
         if (pending_st_[s] == nullptr) continue;
         auto* vtex      = static_cast<VulkanTexture*>(pending_st_[s]);
@@ -269,7 +294,9 @@ void VulkanSwapchain::rebuild_and_bind_descriptor_set_() {
     if (nw > 0) {
         vkUpdateDescriptorSets(dev_.device_, nw, wr, 0, nullptr);
     }
-    vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+    vkCmdBindDescriptorSets(f.cmd,
+                            compute ? VK_PIPELINE_BIND_POINT_COMPUTE
+                                    : VK_PIPELINE_BIND_POINT_GRAPHICS,
                             vp->layout(), 0, 1, &set, 0, nullptr);
 }
 
@@ -307,6 +334,29 @@ void VulkanSwapchain::bind_sampled_texture(u32 slot, Texture* tex) {
     }
     pending_st_[slot] = tex;
     rebuild_and_bind_descriptor_set_();
+}
+
+// ---- Compute: read-write UAV bind + dispatch -------------------------------
+void VulkanSwapchain::bind_storage_buffer_uav(u32 slot, Buffer* b) {
+    if (bound_pipeline_ == nullptr || b == nullptr) return;
+    auto* vp = static_cast<VulkanPipeline*>(bound_pipeline_);
+    if (!vp->is_compute() || vp->descriptor_set_layout() == VK_NULL_HANDLE) return;
+    if (slot >= vp->uav_slots() || slot >= kMaxStorageSlots) {
+        static bool warned = false;
+        if (!warned) {
+            cardinal::log::warnf("rhi/vk",
+                "bind_storage_buffer_uav slot=%u >= declared=%u (dropped)",
+                slot, vp->uav_slots());
+            warned = true;
+        }
+        return;
+    }
+    pending_uav_[slot] = b;
+    rebuild_and_bind_descriptor_set_();
+}
+
+void VulkanSwapchain::dispatch(u32 gx, u32 gy, u32 gz) {
+    vkCmdDispatch(frames_[frame_index_].cmd, gx, gy, gz);
 }
 
 

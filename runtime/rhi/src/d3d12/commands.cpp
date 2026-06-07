@@ -31,9 +31,15 @@ void D3D12Swapchain::bind_pipeline(Pipeline* p) {
     auto* dp = static_cast<D3D12Pipeline*>(p);
     if (dp == nullptr || dp == bound_pipeline_) return;
     Frame& f = frames_[frame_index_];
-    f.cmd->SetGraphicsRootSignature(dp->root_signature());
-    f.cmd->SetPipelineState(dp->pso());
-    f.cmd->IASetPrimitiveTopology(dp->topology());
+    if (dp->is_compute()) {
+        f.cmd->SetComputeRootSignature(dp->root_signature());
+        f.cmd->SetPipelineState(dp->pso());
+        // no IA topology for compute
+    } else {
+        f.cmd->SetGraphicsRootSignature(dp->root_signature());
+        f.cmd->SetPipelineState(dp->pso());
+        f.cmd->IASetPrimitiveTopology(dp->topology());
+    }
     bound_pipeline_ = p;
 }
 
@@ -95,7 +101,10 @@ void D3D12Swapchain::set_push_constants(u32 offset, const void* data, u32 size) 
             cb_ring_gpu_[frame_index_] + cb_ring_offset_;
         cardinal::memcpy(cpu, push_shadow_.data(), declared);
         cb_ring_offset_ += slot;
-        frames_[frame_index_].cmd->SetGraphicsRootConstantBufferView(0, gpu);
+        if (dp->is_compute())
+            frames_[frame_index_].cmd->SetComputeRootConstantBufferView(0, gpu);
+        else
+            frames_[frame_index_].cmd->SetGraphicsRootConstantBufferView(0, gpu);
         return;
     }
 
@@ -104,8 +113,12 @@ void D3D12Swapchain::set_push_constants(u32 offset, const void* data, u32 size) 
     // Caller is expected to align offset to a 4-byte boundary.
     const UINT num_values   = (size + 3u) / 4u;
     const UINT dest_dword   = offset / 4u;
-    frames_[frame_index_].cmd->SetGraphicsRoot32BitConstants(
-        0, num_values, data, dest_dword);
+    if (dp->is_compute())
+        frames_[frame_index_].cmd->SetComputeRoot32BitConstants(
+            0, num_values, data, dest_dword);
+    else
+        frames_[frame_index_].cmd->SetGraphicsRoot32BitConstants(
+            0, num_values, data, dest_dword);
 }
 
 void D3D12Swapchain::bind_storage_buffer(u32 slot, Buffer* b) {
@@ -127,8 +140,40 @@ void D3D12Swapchain::bind_storage_buffer(u32 slot, Buffer* b) {
     // owns index 0). HLSL side: StructuredBuffer<T> : register(t<slot>).
     auto* db = static_cast<D3D12Buffer*>(b);
     const UINT root_idx = dp->storage_root_base() + slot;
-    frames_[frame_index_].cmd->SetGraphicsRootShaderResourceView(
-        root_idx, db->resource()->GetGPUVirtualAddress());
+    if (dp->is_compute())
+        frames_[frame_index_].cmd->SetComputeRootShaderResourceView(
+            root_idx, db->resource()->GetGPUVirtualAddress());
+    else
+        frames_[frame_index_].cmd->SetGraphicsRootShaderResourceView(
+            root_idx, db->resource()->GetGPUVirtualAddress());
+}
+
+// ---- Compute: read-write UAV bind + dispatch -------------------------------
+void D3D12Swapchain::bind_storage_buffer_uav(u32 slot, Buffer* b) {
+    auto* dp = static_cast<D3D12Pipeline*>(bound_pipeline_);
+    if (dp == nullptr || b == nullptr || !dp->is_compute()) return;
+    if (slot >= dp->uav_slots()) {
+        static bool warned = false;
+        if (!warned) {
+            cardinal::log::warnf("rhi/d3d12",
+                "bind_storage_buffer_uav slot=%u >= declared=%u (dropped)",
+                slot, dp->uav_slots());
+            warned = true;
+        }
+        return;
+    }
+    // Root UAV — binds straight from the buffer's GPU virtual address. The
+    // buffer must be a DEFAULT-heap Storage resource (ALLOW_UNORDERED_ACCESS).
+    // HLSL: RWStructuredBuffer<T> : register(u<slot>).
+    auto* db = static_cast<D3D12Buffer*>(b);
+    frames_[frame_index_].cmd->SetComputeRootUnorderedAccessView(
+        dp->uav_root_base() + slot, db->resource()->GetGPUVirtualAddress());
+}
+
+void D3D12Swapchain::dispatch(u32 gx, u32 gy, u32 gz) {
+    // The main list is TYPE_DIRECT, which legally runs compute dispatches —
+    // no async queue needed for graph::RhiBackend's in-frame compute passes.
+    frames_[frame_index_].cmd->Dispatch(gx, gy, gz);
 }
 
 void D3D12Swapchain::bind_sampled_texture(u32 slot, Texture* tex) {
