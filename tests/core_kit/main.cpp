@@ -20,6 +20,7 @@
 #include <cardinal/core/string/string_id.hpp>
 #include <cardinal/core/string/string_builder.hpp>
 #include <cardinal/core/rng.hpp>
+#include <cardinal/core/noise.hpp>
 #include <cardinal/core/small_vector.hpp>
 #include <cardinal/core/dense_map.hpp>
 #include <cardinal/core/sparse_set.hpp>
@@ -915,6 +916,54 @@ void test_rng() {
     CHECK(r.chance(1.0));                 // and always < 1
 }
 
+void test_noise() {
+    namespace nz = cardinal::noise;
+
+    // hash white noise: deterministic + position/seed sensitive.
+    CHECK(nz::hash2_u32(3, 7, 0) == nz::hash2_u32(3, 7, 0));     // same coord+seed
+    CHECK(nz::hash2_u32(3, 7, 0) != nz::hash2_u32(7, 3, 0));     // x/y not symmetric
+    CHECK(nz::hash2_u32(3, 7, 0) != nz::hash2_u32(3, 7, 1));     // seed matters
+    CHECK(nz::hash3_u32(1, 2, 3, 0) != nz::hash3_u32(1, 2, 4, 0));
+
+    // hash2_unit in [0,1) over a grid.
+    bool unit_ok = true;
+    for (int y = -8; y < 8; ++y)
+        for (int x = -8; x < 8; ++x) {
+            const float v = nz::hash2_unit(x, y, 5);
+            if (v < 0.0f || v >= 1.0f) unit_ok = false;
+        }
+    CHECK(unit_ok);
+
+    // value_noise_2d: in [0,1), equals the corner hash at integer coords,
+    // and is continuous (a tiny step gives a tiny change).
+    bool vn_ok = true;
+    for (int y = 0; y < 16; ++y)
+        for (int x = 0; x < 16; ++x) {
+            const float v = nz::value_noise_2d(static_cast<float>(x) * 0.37f,
+                                               static_cast<float>(y) * 0.37f, 9);
+            if (v < 0.0f || v >= 1.0f) vn_ok = false;
+        }
+    CHECK(vn_ok);
+    CHECK(cardinal::abs(nz::value_noise_2d(5.0f, 5.0f, 9) - nz::hash2_unit(5, 5, 9)) < 1e-5f);
+    const float n0 = nz::value_noise_2d(5.0f,   5.0f, 9);
+    const float n1 = nz::value_noise_2d(5.001f, 5.0f, 9);
+    CHECK(cardinal::abs(n0 - n1) < 0.01f);        // continuity (no white-noise jumps)
+
+    // value noise is NOT flat (different cells differ).
+    CHECK(cardinal::abs(nz::value_noise_2d(2.5f, 2.5f, 9) -
+                        nz::value_noise_2d(40.5f, 17.5f, 9)) > 1e-4f);
+
+    // fBm: deterministic (same inputs → identical output), in [0,1).
+    CHECK(nz::fbm_2d(1.5f, 2.5f, 3, 5) == nz::fbm_2d(1.5f, 2.5f, 3, 5));
+    bool fbm_ok = true;
+    for (int i = 0; i < 500; ++i) {
+        const float fx = static_cast<float>(i) * 0.13f;
+        const float v = nz::fbm_2d(fx, fx * 0.5f, 11, 4);
+        if (v < 0.0f || v >= 1.0f) fbm_ok = false;
+    }
+    CHECK(fbm_ok);
+}
+
 void test_string_builder() {
     cardinal::StringBuilder sb;
     CHECK(sb.empty() && sb.size() == 0);
@@ -1147,6 +1196,7 @@ int main() {
     test_dense_map();
     test_sparse_set();
     test_rng();
+    test_noise();
     test_string_builder();
     test_slot_map();
     test_spsc_ring();
