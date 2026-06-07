@@ -107,9 +107,17 @@ void VulkanSwapchain::begin_shadow_pass(Texture* depth) {
     ri.pDepthAttachment     = &dat;
     vkCmdBeginRendering(cmd, &ri);
 
-    VkViewport vpr{ 0.0f, 0.0f,
+    // Negative-height (flipped-Y) viewport — MUST match the main scene pass
+    // (swapchain.cpp: y=height, height=-height, "HLSL +Y up convention").
+    // The depth pass has to rasterise with the SAME Y orientation the main
+    // pass uses, because the shadow map is sampled with the light-space
+    // projection in that same convention. A plain positive-height viewport
+    // here renders the depth map vertically flipped relative to the scene, so
+    // the shadow lookup is mirrored and shadows detach from their casters.
+    VkViewport vpr{ 0.0f,
+                    static_cast<float>(ext.height),
                     static_cast<float>(ext.width),
-                    static_cast<float>(ext.height), 0.0f, 1.0f };
+                    -static_cast<float>(ext.height), 0.0f, 1.0f };
     VkRect2D   sci{ {0, 0}, ext };
     vkCmdSetViewport(cmd, 0, 1, &vpr);
     vkCmdSetScissor (cmd, 0, 1, &sci);
