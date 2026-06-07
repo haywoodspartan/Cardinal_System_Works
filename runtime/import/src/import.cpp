@@ -345,13 +345,7 @@ ImportScene import_file(const cardinal::string& path, cardinal::string* error) {
         case Format::Obj:  return import_obj(path, error);
         case Format::Gltf:
         case Format::Glb:  return import_gltf(path, error);
-        case Format::Fbx: {
-            ImportScene s;
-            s.source_format = "fbx";
-            s.diagnostics   = "FBX backend not implemented yet";
-            if (error) *error = s.diagnostics;
-            return s;
-        }
+        case Format::Fbx:  return import_fbx(path, error);
         default: {
             ImportScene s;
             s.diagnostics = "unrecognised extension: " + path;

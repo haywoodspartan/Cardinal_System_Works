@@ -124,6 +124,11 @@ struct ImportScene {
 ImportScene import_file(const cardinal::string& path, cardinal::string* error = nullptr);
 ImportScene import_obj (const cardinal::string& path, cardinal::string* error = nullptr);
 ImportScene import_gltf(const cardinal::string& path, cardinal::string* error = nullptr);
+// Binary FBX 7.4 / 7.5 (Maya / 3ds Max / Cinema 4D / Blender). Geometry-first:
+// Vertices + negative-terminated n-gon PolygonVertexIndex (fan-triangulated) +
+// per-vertex normals; zlib-compressed property arrays via core::compress. ASCII
+// FBX is detected and rejected cleanly. Materials/skinning/anim deferred.
+ImportScene import_fbx (const cardinal::string& path, cardinal::string* error = nullptr);
 
 // ---------------------------------------------------------------------------
 // Megascans / Quixel Bridge — a scanned-PBR asset is a metadata JSON plus a

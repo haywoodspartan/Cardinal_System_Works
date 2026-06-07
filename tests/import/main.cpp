@@ -758,6 +758,150 @@ void test_heightmap_tga(const std::filesystem::path& dir) {
     CHECK(approx(hf.max, 80.0f, 1e-3f));
 }
 
+// ---- FBX: synthetic binary-FBX fixtures (builder + tests) -----------
+// A minimal binary-FBX writer that computes the absolute EndOffset each node
+// record needs (FBX 7.4, u32 offsets), so the parser walks it for real.
+struct FbxSpec {
+    std::string name;
+    std::vector<unsigned char> props;   // pre-encoded property bytes
+    unsigned numProps = 0;
+    std::vector<FbxSpec> children;
+};
+void fbx_u32(std::vector<unsigned char>& o, unsigned v) {
+    o.push_back(static_cast<unsigned char>(v & 0xFFu));
+    o.push_back(static_cast<unsigned char>((v >> 8) & 0xFFu));
+    o.push_back(static_cast<unsigned char>((v >> 16) & 0xFFu));
+    o.push_back(static_cast<unsigned char>((v >> 24) & 0xFFu));
+}
+std::vector<unsigned char> fbx_darr(const std::vector<double>& vals) {
+    std::vector<unsigned char> p; p.push_back('d');
+    fbx_u32(p, static_cast<unsigned>(vals.size())); fbx_u32(p, 0);
+    fbx_u32(p, static_cast<unsigned>(vals.size() * 8));
+    for (double d : vals) { unsigned char b[8]; std::memcpy(b, &d, 8); p.insert(p.end(), b, b + 8); }
+    return p;
+}
+std::vector<unsigned char> fbx_darr_z(unsigned arrLen, const unsigned char* zl, unsigned zn) {
+    std::vector<unsigned char> p; p.push_back('d');
+    fbx_u32(p, arrLen); fbx_u32(p, 1); fbx_u32(p, zn);   // encoding 1 = zlib
+    p.insert(p.end(), zl, zl + zn);
+    return p;
+}
+std::vector<unsigned char> fbx_iarr(const std::vector<int>& vals) {
+    std::vector<unsigned char> p; p.push_back('i');
+    fbx_u32(p, static_cast<unsigned>(vals.size())); fbx_u32(p, 0);
+    fbx_u32(p, static_cast<unsigned>(vals.size() * 4));
+    for (int v : vals) { unsigned char b[4]; std::memcpy(b, &v, 4); p.insert(p.end(), b, b + 4); }
+    return p;
+}
+std::vector<unsigned char> fbx_str(const std::string& s) {
+    std::vector<unsigned char> p; p.push_back('S');
+    fbx_u32(p, static_cast<unsigned>(s.size()));
+    for (char c : s) p.push_back(static_cast<unsigned char>(c));
+    return p;
+}
+std::vector<unsigned char> fbx_build(const FbxSpec& s, unsigned start) {
+    const unsigned hdr = 13;     // 3*u32 + u8 (FBX 7.4)
+    const unsigned childStart =
+        start + hdr + static_cast<unsigned>(s.name.size()) + static_cast<unsigned>(s.props.size());
+    std::vector<unsigned char> kids;
+    if (!s.children.empty()) {
+        unsigned off = childStart;
+        for (const auto& c : s.children) {
+            auto cb = fbx_build(c, off);
+            off += static_cast<unsigned>(cb.size());
+            kids.insert(kids.end(), cb.begin(), cb.end());
+        }
+        for (int k = 0; k < 13; ++k) kids.push_back(0);   // null terminator
+    }
+    const unsigned endOff = childStart + static_cast<unsigned>(kids.size());
+    std::vector<unsigned char> out;
+    fbx_u32(out, endOff); fbx_u32(out, s.numProps);
+    fbx_u32(out, static_cast<unsigned>(s.props.size()));
+    out.push_back(static_cast<unsigned char>(s.name.size()));
+    for (char c : s.name) out.push_back(static_cast<unsigned char>(c));
+    out.insert(out.end(), s.props.begin(), s.props.end());
+    out.insert(out.end(), kids.begin(), kids.end());
+    return out;
+}
+std::vector<unsigned char> fbx_file(const FbxSpec& topNode) {
+    std::vector<unsigned char> f;
+    const char* M = "Kaydara FBX Binary  ";
+    for (int i = 0; i < 20; ++i) f.push_back(static_cast<unsigned char>(M[i]));
+    f.push_back(0x00); f.push_back(0x1A); f.push_back(0x00);
+    fbx_u32(f, 7400);                                     // version -> 7.4
+    auto node = fbx_build(topNode, 27);                  // header is 27 bytes
+    f.insert(f.end(), node.begin(), node.end());
+    for (int k = 0; k < 13; ++k) f.push_back(0);          // top-level null record
+    return f;
+}
+
+void test_fbx_triangle(const std::filesystem::path& dir) {
+    FbxSpec verts; verts.name = "Vertices"; verts.numProps = 1;
+    verts.props = fbx_darr({0,0,0, 1,0,0, 0,1,0});
+    FbxSpec poly; poly.name = "PolygonVertexIndex"; poly.numProps = 1;
+    poly.props = fbx_iarr({0, 1, ~2});                   // last index ~2 = -3
+    FbxSpec nrm; nrm.name = "Normals"; nrm.numProps = 1;
+    nrm.props = fbx_darr({0,0,1, 0,0,1, 0,0,1});
+    FbxSpec mit; mit.name = "MappingInformationType"; mit.numProps = 1;
+    mit.props = fbx_str("ByVertice");
+    FbxSpec rit; rit.name = "ReferenceInformationType"; rit.numProps = 1;
+    rit.props = fbx_str("Direct");
+    FbxSpec nl; nl.name = "LayerElementNormal"; nl.children = { nrm, mit, rit };
+    FbxSpec geo; geo.name = "Geometry"; geo.children = { verts, poly, nl };
+
+    const auto p = dir / "tri.fbx";
+    write_bytes(p, fbx_file(geo));
+    cardinal::string err;
+    imp::ImportScene s = imp::import_file(str_of(p), &err);
+    CHECK(s.ok);
+    CHECK(s.source_format == "fbx");
+    CHECK(s.meshes.size() == sz(1));
+    CHECK(s.total_vertices() == 3u);
+    CHECK(s.total_triangles() == 1u);
+    if (!s.meshes.empty() && s.meshes[0].positions.size() == sz(3)) {
+        CHECK(approx(s.meshes[0].positions[1].x, 1.0f, 1e-5f));
+        CHECK(approx(s.meshes[0].positions[2].y, 1.0f, 1e-5f));
+        CHECK(s.meshes[0].normals.size() == sz(3));      // ByVertice/Direct
+        if (s.meshes[0].normals.size() == sz(3))
+            CHECK(approx(s.meshes[0].normals[0].z, 1.0f, 1e-5f));
+    }
+}
+
+void test_fbx_compressed(const std::filesystem::path& dir) {
+    // Vertices via a zlib-compressed 'd' array (9 doubles {0,0,0,2,0,0,0,3,0})
+    // — exercises the FBX -> core::compress::inflate_zlib path end-to-end.
+    static const unsigned char ZV[] = {
+        0x78,0x9c,0x63,0x60,0xc0,0x0b,0x1c,0xf0,0x4b,0x73,0xc0,0xe5,0x01,0x0d,0x18,0x00,0x89 };
+    FbxSpec verts; verts.name = "Vertices"; verts.numProps = 1;
+    verts.props = fbx_darr_z(9, ZV, static_cast<unsigned>(sizeof(ZV)));
+    FbxSpec poly; poly.name = "PolygonVertexIndex"; poly.numProps = 1;
+    poly.props = fbx_iarr({0, 1, ~2});
+    FbxSpec geo; geo.name = "Geometry"; geo.children = { verts, poly };
+
+    const auto p = dir / "compressed.fbx";
+    write_bytes(p, fbx_file(geo));
+    cardinal::string err;
+    imp::ImportScene s = imp::import_file(str_of(p), &err);
+    CHECK(s.ok);
+    CHECK(s.total_vertices() == 3u);
+    CHECK(s.total_triangles() == 1u);
+    if (!s.meshes.empty() && s.meshes[0].positions.size() == sz(3)) {
+        CHECK(approx(s.meshes[0].positions[1].x, 2.0f, 1e-5f));   // decompressed
+        CHECK(approx(s.meshes[0].positions[2].y, 3.0f, 1e-5f));
+    }
+}
+
+void test_fbx_failures(const std::filesystem::path& dir) {
+    // ASCII FBX (no binary magic) must fail cleanly, not crash.
+    const auto p = dir / "ascii.fbx";
+    write_file(p, "; FBX 7.4.0 project file\nObjects:  {\n}\n");
+    cardinal::string err;
+    imp::ImportScene s = imp::import_file(str_of(p), &err);
+    CHECK(!s.ok);
+    CHECK(s.source_format == "fbx");
+    CHECK(!err.empty());
+}
+
 // ---- Heightmap: graceful failure on a not-yet-supported format ------
 void test_heightmap_unsupported(const std::filesystem::path& dir) {
     // A .png is recognised but needs DEFLATE (not yet) — must fail cleanly.
@@ -801,6 +945,9 @@ int main() {
     test_heightmap_bmp(dir);
     test_heightmap_tga(dir);
     test_heightmap_unsupported(dir);
+    test_fbx_triangle(dir);
+    test_fbx_compressed(dir);
+    test_fbx_failures(dir);
     test_format_detect();
     test_failures(dir);
 

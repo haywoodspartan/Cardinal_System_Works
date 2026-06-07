@@ -3,6 +3,7 @@ add_library(cardinal_import STATIC
     src/import_gltf.cpp
     src/import_megascans.cpp
     src/import_heightmap.cpp
+    src/import_fbx.cpp
     src/json.hpp
     include/cardinal/import/import.hpp
     include/cardinal/import/to_asset.hpp)
