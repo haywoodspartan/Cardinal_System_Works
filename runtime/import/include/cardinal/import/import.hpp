@@ -142,6 +142,37 @@ ImportScene import_megascans(const cardinal::string& path, cardinal::string* err
 // whose root object carries any of maps / components / meshes / (id + type).
 bool        is_megascans(const cardinal::string& dir_or_json);
 
+// ---------------------------------------------------------------------------
+// Heightmap import — for terrain placement. A heightmap is an image whose
+// pixel intensity is elevation; this decodes it to a neutral CPU height grid
+// that scene/terrain turns into a mesh (kept out of cardinal::import so the
+// import lib links no rhi). Heights are normalised to [0,1]; `min`/`max` carry
+// the raw observed range for UI. Row-major: heights[y*width + x] (matches the
+// edit/brush stamp_height_grid layout, so an imported field interops with the
+// sculpt brushes for free).
+// ---------------------------------------------------------------------------
+struct HeightField {
+    cardinal::vector<float> heights;          // size = width*height, row-major, [0,1]
+    u32                     width {0};
+    u32                     height{0};
+    float                   min {0.0f};       // raw min before normalisation
+    float                   max {0.0f};       // raw max before normalisation
+    bool                    ok  {false};
+    cardinal::string        source_format;    // "raw16" / "bmp" / "tga" / …
+    cardinal::string        diagnostics;
+};
+
+// Decode a heightmap image to a HeightField. Format is detected by extension
+// then content. NO-inflate formats land first: headerless RAW16 (.r16/.raw,
+// 16-bit LE, square dimension inferred from file size), uncompressed BMP
+// (8/24/32-bit), and uncompressed TGA (type 2 RGB / type 3 grayscale). 8-bit
+// sources use the red/luminance channel. PNG (needs DEFLATE) and EXR (float)
+// land once cardinal::core::compress::inflate exists. For a non-square RAW16,
+// pass the side length via `raw_dim` (0 ⇒ infer a square from the byte count).
+HeightField decode_heightmap(const cardinal::string& path,
+                             cardinal::string* error = nullptr,
+                             u32 raw_dim = 0);
+
 // ImportScene → engine runtime asset structs: see the header-only
 // bridge <cardinal/import/to_asset.hpp> (kept out of this TU so the
 // import library stays asset-free / cycle-free, see note up top).

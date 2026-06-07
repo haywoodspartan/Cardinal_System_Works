@@ -97,6 +97,14 @@ std::filesystem::path subdir(const std::filesystem::path& base, const char* name
     return d;
 }
 
+// Write raw bytes (for synthetic binary heightmap fixtures).
+void write_bytes(const std::filesystem::path& p,
+                 const std::vector<unsigned char>& bytes) {
+    std::ofstream f(p, std::ios::binary);
+    f.write(reinterpret_cast<const char*>(bytes.data()),
+            static_cast<std::streamsize>(bytes.size()));
+}
+
 // ---- OBJ: triangle via import_file (also covers extension routing) --
 void test_obj_triangle(const std::filesystem::path& dir) {
     const auto p = dir / "triangle.obj";
@@ -644,6 +652,123 @@ void test_megascans_failures(const std::filesystem::path& base) {
     CHECK(!imp::is_megascans(str_of(empty_dir)));
 }
 
+// ---- Heightmap: RAW16 headerless u16 ramp ---------------------------
+void test_heightmap_raw16(const std::filesystem::path& dir) {
+    // 4x4 ramp: value[i] = i*4369, so value[15] = 65535 and height[i] = i/15.
+    std::vector<unsigned char> raw;
+    for (int i = 0; i < 16; ++i) {
+        const unsigned v = static_cast<unsigned>(i * 4369);
+        raw.push_back(static_cast<unsigned char>(v & 0xFF));
+        raw.push_back(static_cast<unsigned char>((v >> 8) & 0xFF));
+    }
+    const auto p = dir / "ramp.r16";
+    write_bytes(p, raw);
+
+    cardinal::string err;
+    imp::HeightField hf = imp::decode_heightmap(str_of(p), &err);
+    CHECK(hf.ok);
+    CHECK(hf.source_format == "raw16");
+    CHECK(hf.width == 4u && hf.height == 4u);
+    CHECK(hf.heights.size() == sz(16));
+    CHECK(approx(hf.min, 0.0f, 1e-3f));
+    CHECK(approx(hf.max, 65535.0f, 1.0f));
+    if (hf.heights.size() == sz(16)) {
+        CHECK(approx(hf.heights[0], 0.0f, 1e-4f));
+        CHECK(approx(hf.heights[15], 1.0f, 1e-4f));
+        CHECK(approx(hf.heights[1], 1.0f / 15.0f, 1e-4f));
+    }
+    // Non-square byte count without raw_dim must fail cleanly.
+    std::vector<unsigned char> odd(12, 0);          // 6 u16 -> not a square
+    const auto q = dir / "odd.raw";
+    write_bytes(q, odd);
+    cardinal::string e2;
+    imp::HeightField bad = imp::decode_heightmap(str_of(q), &e2);
+    CHECK(!bad.ok);
+    CHECK(!e2.empty());
+    // …but with an explicit width it decodes as 3 wide x 2 tall.
+    imp::HeightField okdim = imp::decode_heightmap(str_of(q), nullptr, 3);
+    CHECK(okdim.ok && okdim.width == 3u && okdim.height == 2u);
+}
+
+// ---- Heightmap: uncompressed 24-bit BMP (bottom-up) -----------------
+void test_heightmap_bmp(const std::filesystem::path& dir) {
+    std::vector<unsigned char> b;
+    auto pb    = [&](unsigned v){ b.push_back(static_cast<unsigned char>(v & 0xFF)); };
+    auto u16le = [&](unsigned v){ pb(v); pb(v >> 8); };
+    auto u32le = [&](unsigned v){ pb(v); pb(v >> 8); pb(v >> 16); pb(v >> 24); };
+    b.push_back('B'); b.push_back('M');
+    u32le(70);            // fileSize
+    u32le(0);             // reserved
+    u32le(54);            // pixel-data offset
+    u32le(40);            // BITMAPINFOHEADER size
+    u32le(2);             // width
+    u32le(2);             // height (positive => bottom-up)
+    u16le(1);             // planes
+    u16le(24);            // bpp
+    u32le(0);             // BI_RGB
+    u32le(0); u32le(0); u32le(0); u32le(0); u32le(0);   // imgsize/ppm/clrs
+    auto bgr = [&](unsigned r){ b.push_back(0); b.push_back(0);
+                                b.push_back(static_cast<unsigned char>(r)); };
+    // stored row 0 = bottom (=> output y=1): R 10, 20 ; + 2 pad
+    bgr(10); bgr(20); b.push_back(0); b.push_back(0);
+    // stored row 1 = top    (=> output y=0): R 30, 40 ; + 2 pad
+    bgr(30); bgr(40); b.push_back(0); b.push_back(0);
+    const auto p = dir / "hm.bmp";
+    write_bytes(p, b);
+
+    cardinal::string err;
+    imp::HeightField hf = imp::decode_heightmap(str_of(p), &err);
+    CHECK(hf.ok);
+    CHECK(hf.source_format == "bmp");
+    CHECK(hf.width == 2u && hf.height == 2u);
+    if (hf.heights.size() == sz(4)) {
+        CHECK(approx(hf.heights[0], 30.0f/255.0f, 1e-4f));   // top-left
+        CHECK(approx(hf.heights[1], 40.0f/255.0f, 1e-4f));
+        CHECK(approx(hf.heights[3], 20.0f/255.0f, 1e-4f));   // bottom-right
+    }
+    CHECK(approx(hf.min, 10.0f, 1e-3f));
+    CHECK(approx(hf.max, 40.0f, 1e-3f));
+}
+
+// ---- Heightmap: uncompressed 8-bit grayscale TGA (bottom-up) --------
+void test_heightmap_tga(const std::filesystem::path& dir) {
+    std::vector<unsigned char> t(18, 0);
+    t[2]  = 3;            // image type: uncompressed grayscale
+    t[12] = 2; t[13] = 0; // width  = 2
+    t[14] = 2; t[15] = 0; // height = 2
+    t[16] = 8;            // 8 bpp
+    t[17] = 0;            // descriptor: bottom-up origin
+    // stored row 0 = bottom (=> output y=1): 50, 60
+    t.push_back(50); t.push_back(60);
+    // stored row 1 = top    (=> output y=0): 70, 80
+    t.push_back(70); t.push_back(80);
+    const auto p = dir / "hm.tga";
+    write_bytes(p, t);
+
+    cardinal::string err;
+    imp::HeightField hf = imp::decode_heightmap(str_of(p), &err);
+    CHECK(hf.ok);
+    CHECK(hf.source_format == "tga");
+    CHECK(hf.width == 2u && hf.height == 2u);
+    if (hf.heights.size() == sz(4)) {
+        CHECK(approx(hf.heights[0], 70.0f/255.0f, 1e-4f));   // top-left
+        CHECK(approx(hf.heights[2], 50.0f/255.0f, 1e-4f));   // bottom-left
+    }
+    CHECK(approx(hf.min, 50.0f, 1e-3f));
+    CHECK(approx(hf.max, 80.0f, 1e-3f));
+}
+
+// ---- Heightmap: graceful failure on a not-yet-supported format ------
+void test_heightmap_unsupported(const std::filesystem::path& dir) {
+    // A .png is recognised but needs DEFLATE (not yet) — must fail cleanly.
+    const auto p = dir / "fake.png";
+    write_bytes(p, std::vector<unsigned char>{0x89,'P','N','G',0,0,0,0});
+    cardinal::string err;
+    imp::HeightField hf = imp::decode_heightmap(str_of(p), &err);
+    CHECK(!hf.ok);
+    CHECK(!err.empty());
+}
+
 }  // namespace
 
 int main() {
@@ -672,6 +797,10 @@ int main() {
     test_megascans_components(dir);
     test_megascans_fallback(dir);
     test_megascans_failures(dir);
+    test_heightmap_raw16(dir);
+    test_heightmap_bmp(dir);
+    test_heightmap_tga(dir);
+    test_heightmap_unsupported(dir);
     test_format_detect();
     test_failures(dir);
 

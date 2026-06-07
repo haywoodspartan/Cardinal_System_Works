@@ -774,6 +774,103 @@ cardinal::shared_ptr<Mesh> generate_terrain_chunk_profile(
     return m;
 }
 
+// ---------------------------------------------------------------------------
+// Heightmap-driven chunk mesh — same tessellation as the noise paths, but the
+// per-cell height is a bilinear, edge-clamped sample of an external normalised
+// [0,1] height grid (a decoded heightmap image). See terrain.hpp.
+// ---------------------------------------------------------------------------
+cardinal::shared_ptr<Mesh> generate_terrain_mesh_heightfield(
+    rhi::Device& dev, const float* heights, u32 hw, u32 hh,
+    u32 resolution, float chunk_size, float vertical_scale, float base_height)
+{
+    const u32   N    = cardinal::max<u32>(2, resolution);
+    const float step = chunk_size / static_cast<float>(N - 1);
+    const float ox   = -chunk_size * 0.5f;     // centre the tile on the origin
+    const float oz   = -chunk_size * 0.5f;
+
+    // Bilinear, edge-clamped sample of the height grid at normalised (u,v).
+    auto sample_hf = [&](float u, float v) -> float {
+        if (!heights || hw == 0 || hh == 0) return 0.0f;
+        float fx = cardinal::clamp(u, 0.0f, 1.0f) * static_cast<float>(hw - 1);
+        float fz = cardinal::clamp(v, 0.0f, 1.0f) * static_cast<float>(hh - 1);
+        const u32 x0 = static_cast<u32>(fx), z0 = static_cast<u32>(fz);
+        const u32 x1 = (x0 + 1 < hw) ? x0 + 1 : x0;
+        const u32 z1 = (z0 + 1 < hh) ? z0 + 1 : z0;
+        const float tx = fx - static_cast<float>(x0);
+        const float tz = fz - static_cast<float>(z0);
+        const cardinal::size_t W = hw;
+        const float h00 = heights[static_cast<cardinal::size_t>(z0) * W + x0];
+        const float h10 = heights[static_cast<cardinal::size_t>(z0) * W + x1];
+        const float h01 = heights[static_cast<cardinal::size_t>(z1) * W + x0];
+        const float h11 = heights[static_cast<cardinal::size_t>(z1) * W + x1];
+        const float a = h00 + (h10 - h00) * tx;
+        const float b = h01 + (h11 - h01) * tx;
+        return a + (b - a) * tz;
+    };
+
+    // Pre-sample an (N+2)² halo grid so central-difference normals are exact
+    // at the tile edges (the halo cells edge-clamp the image sample).
+    const u32 stride = N + 2;
+    cardinal::vector<float> H(static_cast<cardinal::size_t>(stride) * stride);
+    for (u32 j = 0; j < stride; ++j) {
+        for (u32 i = 0; i < stride; ++i) {
+            const float u = (static_cast<float>(i) - 1.0f) / static_cast<float>(N - 1);
+            const float v = (static_cast<float>(j) - 1.0f) / static_cast<float>(N - 1);
+            H[static_cast<cardinal::size_t>(j) * stride + i] =
+                base_height + vertical_scale * sample_hf(u, v);
+        }
+    }
+    auto h_at = [&](u32 i, u32 j) -> float {
+        return H[static_cast<cardinal::size_t>(j + 1) * stride + (i + 1)];
+    };
+
+    struct V { Vec3 pos; Vec3 nrm; Vec3 col; };
+    cardinal::vector<V> grid(static_cast<cardinal::size_t>(N) * N);
+    for (u32 j = 0; j < N; ++j) {
+        for (u32 i = 0; i < N; ++i) {
+            const float x = ox + static_cast<float>(i) * step;
+            const float z = oz + static_cast<float>(j) * step;
+            const float y = h_at(i, j);
+            const float hl = (i > 0)     ? h_at(i - 1, j)
+                                         : H[static_cast<cardinal::size_t>(j + 1) * stride + 0];
+            const float hr = (i + 1 < N) ? h_at(i + 1, j)
+                                         : H[static_cast<cardinal::size_t>(j + 1) * stride + (N + 1)];
+            const float hd = (j > 0)     ? h_at(i, j - 1)
+                                         : H[static_cast<cardinal::size_t>(0) * stride + (i + 1)];
+            const float hu = (j + 1 < N) ? h_at(i, j + 1)
+                                         : H[static_cast<cardinal::size_t>(N + 1) * stride + (i + 1)];
+            Vec3 n = normalize(Vec3{ (hl - hr), 2.0f * step, (hd - hu) });
+            const float slope = 1.0f - cardinal::clamp(n.y, 0.0f, 1.0f);
+            Vec3 grass{ 0.30f, 0.55f, 0.25f };
+            Vec3 cliff{ 0.55f, 0.50f, 0.45f };
+            Vec3 col{ grass.x * (1.0f - slope) + cliff.x * slope,
+                      grass.y * (1.0f - slope) + cliff.y * slope,
+                      grass.z * (1.0f - slope) + cliff.z * slope };
+            grid[static_cast<cardinal::size_t>(j) * N + i] = V{ Vec3{ x, y, z }, n, col };
+        }
+    }
+
+    cardinal::vector<Vertex> verts;
+    verts.reserve(static_cast<cardinal::size_t>(N - 1) * (N - 1) * 6);
+    for (u32 j = 0; j < N - 1; ++j) {
+        for (u32 i = 0; i < N - 1; ++i) {
+            const V& a = grid[static_cast<cardinal::size_t>(j)     * N + (i)];
+            const V& b = grid[static_cast<cardinal::size_t>(j)     * N + (i + 1)];
+            const V& c = grid[static_cast<cardinal::size_t>(j + 1) * N + (i + 1)];
+            const V& d = grid[static_cast<cardinal::size_t>(j + 1) * N + (i)];
+            verts.push_back({ a.pos, a.nrm, a.col });
+            verts.push_back({ b.pos, b.nrm, b.col });
+            verts.push_back({ c.pos, c.nrm, c.col });
+            verts.push_back({ a.pos, a.nrm, a.col });
+            verts.push_back({ c.pos, c.nrm, c.col });
+            verts.push_back({ d.pos, d.nrm, d.col });
+        }
+    }
+    auto m = Mesh::from_vertices(dev, verts.data(), static_cast<u32>(verts.size()));
+    if (m) m->set_name("TerrainHeightfield");
+    return m;
+}
+
 cardinal::vector<u32> spawn_terrain_grid(Scene& scene, rhi::Device& dev,
                                     const TerrainGridDesc& desc)
 {

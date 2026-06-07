@@ -711,6 +711,17 @@ int main(int argc, char** argv) {
     std::string import_status;
     int         import_counter         = 0;
 
+    // ---- File>Import Heightmap state (terrain from an image). Decodes a
+    // heightmap (RAW16/BMP/TGA) into a HeightField, builds a terrain mesh, and
+    // spawns it through the same AssetCatalog+place path as a primitive.
+    bool        show_heightmap_window  = false;
+    char        heightmap_path_buf[1024] = {0};
+    float       heightmap_vscale       = 40.0f;   // world height of [0,1]
+    float       heightmap_size         = 200.0f;  // world units across the tile
+    std::string pending_heightmap_path;
+    float       pending_hm_vscale      = 40.0f;
+    float       pending_hm_size        = 200.0f;
+
     // Gizmo-drag coalescing: capture the entity's position the moment the
     // drag starts so when the drag releases we can record one "Move
     // entity" undo with old → new positions, not one per frame.
@@ -1727,6 +1738,9 @@ int main(int argc, char** argv) {
                 if (ImGui::MenuItem("Import Megascans…")) {
                     show_import_window = true; import_is_megascans = true;
                 }
+                if (ImGui::MenuItem("Import Heightmap (Terrain)…")) {
+                    show_heightmap_window = true;
+                }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Quit")) want_quit = true;
                 ImGui::EndMenu();
@@ -2337,6 +2351,77 @@ int main(int argc, char** argv) {
                                              pending_import_megascans);
             cardinal::log::infof("studio", "import: %s", import_status.c_str());
             pending_import_path.clear();
+        }
+
+        // Import Heightmap window (modeless): path + vertical/horizontal scale.
+        if (show_heightmap_window) {
+            ImGui::SetNextWindowSize(ImVec2(540, 0), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("Import Heightmap (Terrain)", &show_heightmap_window)) {
+                ImGui::TextWrapped("Path to a heightmap image. RAW16 (.r16/.raw, "
+                    "16-bit), BMP and TGA decode now; PNG/EXR land with the "
+                    "compression backend. Spawns a terrain tile centred at the "
+                    "origin.");
+                ImGui::InputText("Path", heightmap_path_buf, sizeof(heightmap_path_buf));
+                ImGui::SliderFloat("Vertical scale", &heightmap_vscale, 1.0f, 400.0f, "%.0f");
+                ImGui::SliderFloat("World size",     &heightmap_size,  10.0f, 2000.0f, "%.0f");
+                if (ImGui::Button("Import") && heightmap_path_buf[0] != '\0') {
+                    pending_heightmap_path = heightmap_path_buf;
+                    pending_hm_vscale      = heightmap_vscale;
+                    pending_hm_size        = heightmap_size;
+                    show_heightmap_window  = false;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel")) show_heightmap_window = false;
+                if (!import_status.empty()) {
+                    ImGui::Separator();
+                    ImGui::TextWrapped("%s", import_status.c_str());
+                }
+            }
+            ImGui::End();
+        }
+        if (!pending_heightmap_path.empty()) {
+            cardinal::string herr;
+            cardinal::import::HeightField hf = cardinal::import::decode_heightmap(
+                cardinal::string(pending_heightmap_path), &herr);
+            if (!hf.ok) {
+                import_status = "Heightmap import failed: " +
+                    std::string((herr.empty() ? hf.diagnostics : herr).c_str());
+            } else {
+                const u32 res = std::min<u32>(257u,
+                    std::max<u32>(2u, std::max(hf.width, hf.height)));
+                auto mesh = scn::generate_terrain_mesh_heightfield(
+                    *device, hf.heights.data(), hf.width, hf.height,
+                    res, pending_hm_size, pending_hm_vscale, 0.0f);
+                if (!mesh) {
+                    import_status = "Heightmap decoded but terrain mesh build failed";
+                } else {
+                    const std::string id =
+                        "imported.heightmap." + std::to_string(import_counter++);
+                    scn::AssetDesc d{};
+                    d.id       = id;
+                    d.label    = "Heightmap Terrain";
+                    d.category = "Imported";
+                    d.tooltip  = "Terrain from " + pending_heightmap_path;
+                    d.kind     = scn::AssetKind::Terrain;
+                    auto mesh_cap = mesh;
+                    d.factory = [mesh_cap](const scn::AssetSpawnContext& ctx)
+                                    -> scn::AssetSpawnResult {
+                        if (ctx.scene == nullptr) return {};
+                        auto& e = ctx.scene->add_entity("Heightmap Terrain");
+                        e.mesh  = mesh_cap;
+                        e.transform.translation = ctx.position;
+                        e.tint  = { 1.0f, 1.0f, 1.0f };   // mesh carries slope tint
+                        return scn::AssetSpawnResult{ { e.id }, e.id };
+                    };
+                    scn::AssetCatalog::instance().register_asset(std::move(d));
+                    spawn_asset_at(id.c_str(), scn::Vec3{ 0.0f, 0.0f, 0.0f });
+                    import_status = "Imported heightmap terrain (" +
+                        std::to_string(hf.width) + "x" + std::to_string(hf.height) +
+                        ", res " + std::to_string(res) + ")";
+                }
+            }
+            cardinal::log::infof("studio", "heightmap: %s", import_status.c_str());
+            pending_heightmap_path.clear();
         }
 
         // Execute a Create-menu spawn requested earlier this frame (deferred

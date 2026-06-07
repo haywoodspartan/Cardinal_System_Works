@@ -218,4 +218,22 @@ cardinal::vector<u32> spawn_terrain_grid_profile(Scene& scene,
                                             rhi::Device& dev,
                                             const TerrainGridProfileDesc& desc);
 
+// ---------------------------------------------------------------------------
+// Heightmap-driven terrain — build a chunk mesh from an EXTERNAL normalised
+// [0,1] height grid (e.g. a decoded heightmap image: RAW16/BMP/TGA/…). Same
+// tessellation + central-difference normals + slope tint as the noise paths,
+// but the per-cell height is a bilinear, edge-clamped sample of `heights`
+// (row-major, `hh` rows of `hw` columns) scaled by `vertical_scale` and offset
+// by `base_height`. The mesh is a `resolution`x`resolution` grid centred on the
+// origin spanning `chunk_size` world units.
+//
+// Deliberately data-only (const float*, NOT cardinal::import::HeightField): the
+// import lib depends on scene, so scene must not depend back on import. The
+// Studio host (which links both) bridges decode_heightmap() -> this.
+cardinal::shared_ptr<Mesh> generate_terrain_mesh_heightfield(
+    rhi::Device& dev,
+    const float* heights, u32 hw, u32 hh,
+    u32 resolution, float chunk_size,
+    float vertical_scale, float base_height = 0.0f);
+
 }  // namespace cardinal::scene
