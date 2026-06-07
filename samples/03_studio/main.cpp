@@ -55,6 +55,8 @@
 #include <cardinal/pack/pack.hpp>
 #include <cardinal/shader/shader.hpp>
 #include <cardinal/asset/asset.hpp>
+#include <cardinal/import/import.hpp>      // DCC / Megascans import (File>Import)
+#include <cardinal/import/to_asset.hpp>    // ImportScene -> engine asset structs
 #include <cardinal/core/hal.hpp>
 #include <cardinal/core/io.hpp>
 #include <cardinal/core/geom.hpp>
@@ -696,6 +698,18 @@ int main(int argc, char** argv) {
     // scope) — set here, executed through the bus once the helper exists.
     std::string pending_spawn_id;
     scn::Vec3   pending_spawn_pos{};
+
+    // ---- File>Import state (DCC models + Megascans). The import window is
+    // modeless so it survives across frames; pending_import_path is set by its
+    // Import button and consumed once spawn_asset_at is in scope (same deferred
+    // pattern as pending_spawn_id). import_counter keeps catalog ids unique.
+    bool        show_import_window     = false;
+    bool        import_is_megascans    = false;
+    char        import_path_buf[1024]  = {0};
+    std::string pending_import_path;
+    bool        pending_import_megascans = false;
+    std::string import_status;
+    int         import_counter         = 0;
 
     // Gizmo-drag coalescing: capture the entity's position the moment the
     // drag starts so when the drag releases we can record one "Move
@@ -1699,6 +1713,13 @@ int main(int argc, char** argv) {
 
         if (ImGui::BeginMenuBar()) {
             if (ImGui::BeginMenu("File")) {
+                if (ImGui::MenuItem("Import 3D Asset…")) {
+                    show_import_window = true; import_is_megascans = false;
+                }
+                if (ImGui::MenuItem("Import Megascans…")) {
+                    show_import_window = true; import_is_megascans = true;
+                }
+                ImGui::Separator();
                 if (ImGui::MenuItem("Quit")) want_quit = true;
                 ImGui::EndMenu();
             }
@@ -2195,6 +2216,120 @@ int main(int argc, char** argv) {
             };
             undo.push_executed(std::move(cmd));
         };
+
+        // ---- File>Import: bring a DCC model / Megascans asset into the live
+        // scene. Reuses the whole proven pipeline — import_file/import_megascans
+        // (OBJ/glTF/Megascans) -> to_asset -> de-index -> Mesh::from_vertices ->
+        // a runtime AssetCatalog factory -> spawn_asset_at (so each imported
+        // mesh becomes a first-class actor with undo, exactly like a primitive).
+        // Materials are registered so a later GPU phase can resolve their maps.
+        auto import_and_spawn = [&](const std::string& path, bool megascans) -> std::string {
+            cardinal::string err;
+            cardinal::import::ImportScene isc = megascans
+                ? cardinal::import::import_megascans(cardinal::string(path), &err)
+                : cardinal::import::import_file     (cardinal::string(path), &err);
+            if (!isc.ok)
+                return "Import failed: " +
+                       std::string((err.empty() ? isc.diagnostics : err).c_str());
+
+            for (const auto& im : isc.materials) {
+                if (im.name.empty()) continue;
+                asset_registry->register_material(
+                    cardinal::string("imported/") + im.name,
+                    cardinal::import::to_asset_material(im));
+            }
+
+            const auto fwd = scn::normalize(scene.camera().target -
+                                            scene.camera().position);
+            scn::Vec3 pos = scene.camera().position + fwd * 3.0f;
+            pos.y = std::max(0.0f, pos.y);
+
+            int spawned = 0;
+            for (const auto& im : isc.meshes) {
+                cardinal::asset::MeshAsset ma = cardinal::import::to_asset_mesh(im);
+                if (ma.vertices.empty() || ma.indices.empty()) continue;
+                // Mesh::from_vertices wants a de-indexed triangle list.
+                std::vector<scn::Vertex> verts;
+                verts.reserve(ma.indices.size());
+                for (cardinal::u32 idx : ma.indices) {
+                    if (idx >= ma.vertices.size()) continue;
+                    const auto& mv = ma.vertices[idx];
+                    scn::Vertex v;
+                    v.position = mv.position;
+                    v.normal   = mv.normal;
+                    v.color    = mv.color;
+                    verts.push_back(v);
+                }
+                if (verts.empty()) continue;
+                auto mesh = scn::Mesh::from_vertices(
+                    *device, verts.data(), static_cast<cardinal::u32>(verts.size()));
+                if (!mesh) continue;
+
+                const std::string base =
+                    im.name.empty() ? std::string("mesh") : std::string(im.name.c_str());
+                const std::string id =
+                    "imported." + base + "." + std::to_string(import_counter++);
+                scn::AssetDesc d{};
+                d.id       = id;
+                d.label    = base;
+                d.category = "Imported";
+                d.tooltip  = "Imported from " + path;
+                d.kind     = scn::AssetKind::Primitive;
+                auto        mesh_cap  = mesh;
+                std::string label_cap = base;
+                d.factory = [mesh_cap, label_cap](const scn::AssetSpawnContext& ctx)
+                                -> scn::AssetSpawnResult {
+                    if (ctx.scene == nullptr) return {};
+                    auto& e = ctx.scene->add_entity(label_cap);
+                    e.mesh  = mesh_cap;
+                    e.transform.translation = ctx.position;
+                    e.tint  = { 0.80f, 0.80f, 0.82f };
+                    return scn::AssetSpawnResult{ { e.id }, e.id };
+                };
+                scn::AssetCatalog::instance().register_asset(std::move(d));
+                spawn_asset_at(id.c_str(), pos);
+                ++spawned;
+            }
+            if (spawned == 0)
+                return "Imported (material-only / no spawnable geometry): " +
+                       std::string(isc.diagnostics.c_str());
+            return "Imported " + std::to_string(spawned) + " mesh(es). " +
+                   std::string(isc.diagnostics.c_str());
+        };
+
+        // Import window (modeless) — a path field + Import button. The Import
+        // button stages pending_import_path, consumed just below.
+        if (show_import_window) {
+            ImGui::SetNextWindowSize(ImVec2(540, 0), ImGuiCond_FirstUseEver);
+            const char* title = import_is_megascans ? "Import Megascans Asset"
+                                                    : "Import 3D Asset";
+            if (ImGui::Begin(title, &show_import_window)) {
+                ImGui::TextWrapped(import_is_megascans
+                    ? "Path to a Megascans asset folder or its Quixel Bridge manifest "
+                      "(.json). Maps + the lowest non-FBX mesh LOD are imported."
+                    : "Path to a model file exported from Blender / Maya / etc. "
+                      "(.obj, .gltf, .glb).");
+                ImGui::InputText("Path", import_path_buf, sizeof(import_path_buf));
+                if (ImGui::Button("Import") && import_path_buf[0] != '\0') {
+                    pending_import_path      = import_path_buf;
+                    pending_import_megascans = import_is_megascans;
+                    show_import_window       = false;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel")) show_import_window = false;
+                if (!import_status.empty()) {
+                    ImGui::Separator();
+                    ImGui::TextWrapped("%s", import_status.c_str());
+                }
+            }
+            ImGui::End();
+        }
+        if (!pending_import_path.empty()) {
+            import_status = import_and_spawn(pending_import_path,
+                                             pending_import_megascans);
+            cardinal::log::infof("studio", "import: %s", import_status.c_str());
+            pending_import_path.clear();
+        }
 
         // Execute a Create-menu spawn requested earlier this frame (deferred
         // because the menu bar draws before spawn_asset_at is in scope). Now

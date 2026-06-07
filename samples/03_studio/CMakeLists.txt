@@ -8,7 +8,7 @@ target_link_libraries(Cardinal_System_Studio PRIVATE
     cardinal::edit cardinal::console cardinal::cppscript cardinal::sandbox
     cardinal::world cardinal::input cardinal::serial cardinal::particles
     cardinal::nav cardinal::hud cardinal::project cardinal::cook
-    cardinal::pack cardinal::shader cardinal::asset
+    cardinal::pack cardinal::shader cardinal::asset cardinal::import
     # HAL + IO Dispatcher + Geometry math live inside cardinal::core now.
     cardinal::partition cardinal::level cardinal::mass cardinal::cmd
     cardinal::navmesh cardinal::ai cardinal::net

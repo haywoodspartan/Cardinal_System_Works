@@ -1,0 +1,8 @@
+# Companion MTL for sample_pyramid.obj — metallic-roughness PBR.
+# Kd -> base_color, Pr -> roughness, Pm -> metallic (the importer also reads
+# map_Kd/map_Pr/map_Pm/map_Bump/map_Ke/disp when textures are present).
+newmtl PyramidStone
+Kd 0.62 0.60 0.55
+Ks 0.20 0.20 0.20
+Pr 0.65
+Pm 0.05
