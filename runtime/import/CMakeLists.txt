@@ -1,6 +1,8 @@
 add_library(cardinal_import STATIC
     src/import.cpp
     src/import_gltf.cpp
+    src/import_megascans.cpp
+    src/json.hpp
     include/cardinal/import/import.hpp
     include/cardinal/import/to_asset.hpp)
 add_library(cardinal::import ALIAS cardinal_import)

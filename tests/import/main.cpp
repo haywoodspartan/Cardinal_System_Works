@@ -80,6 +80,23 @@ cardinal::string str_of(const std::filesystem::path& p) {
     return p.string();
 }
 
+// import_megascans resolves map uris to asset-dir-prefixed (absolute) paths,
+// so fixtures assert on the trailing filename rather than the bare uri.
+bool endswith(const cardinal::string& s, const char* suffix) {
+    const cardinal::string t = suffix;
+    return s.size() >= t.size() &&
+           s.compare(s.size() - t.size(), t.size(), t) == 0;
+}
+
+// A fresh per-asset subdirectory so the Megascans filename-scan fallback only
+// ever sees its OWN fixture files (tests stay isolated + deterministic).
+std::filesystem::path subdir(const std::filesystem::path& base, const char* name) {
+    std::error_code ec;
+    const auto d = base / name;
+    std::filesystem::create_directories(d, ec);
+    return d;
+}
+
 // ---- OBJ: triangle via import_file (also covers extension routing) --
 void test_obj_triangle(const std::filesystem::path& dir) {
     const auto p = dir / "triangle.obj";
@@ -413,6 +430,157 @@ void test_failures(const std::filesystem::path& dir) {
     }
 }
 
+// ---- Megascans: surface asset (material-only, full PBR map set) -----
+void test_megascans_surface(const std::filesystem::path& base) {
+    const auto d = subdir(base, "ms_surface");
+    write_file(d / "rock_2K_Albedo.jpg",        "x");
+    write_file(d / "rock_2K_Normal.jpg",        "x");
+    write_file(d / "rock_2K_Roughness.jpg",     "x");
+    write_file(d / "rock_2K_AO.jpg",            "x");
+    write_file(d / "rock_2K_Displacement.exr",  "x");
+    write_file(d / "rock_2K_Metalness.jpg",     "x");
+    const auto man = d / "rock_surface_ab12.json";
+    write_file(man,
+        "{\"id\":\"ab12\",\"name\":\"rock_surface\",\"type\":\"surface\",\"maps\":["
+        "{\"type\":\"albedo\",\"uri\":\"rock_2K_Albedo.jpg\"},"
+        "{\"type\":\"normal\",\"uri\":\"rock_2K_Normal.jpg\"},"
+        "{\"type\":\"roughness\",\"uri\":\"rock_2K_Roughness.jpg\"},"
+        "{\"type\":\"ao\",\"uri\":\"rock_2K_AO.jpg\"},"
+        "{\"type\":\"displacement\",\"uri\":\"rock_2K_Displacement.exr\"},"
+        "{\"type\":\"metalness\",\"uri\":\"rock_2K_Metalness.jpg\"}]}");
+
+    cardinal::string err;
+    imp::ImportScene s = imp::import_megascans(str_of(man), &err);
+    CHECK(s.ok);
+    CHECK(s.source_format == "megascans");
+    CHECK(s.meshes.empty());                  // surface ⇒ material only
+    CHECK(s.materials.size() == sz(1));
+    if (!s.materials.empty()) {
+        const imp::ImportMaterial& m = s.materials[0];
+        CHECK(endswith(m.base_color_texture, "rock_2K_Albedo.jpg"));
+        CHECK(endswith(m.normal_texture,     "rock_2K_Normal.jpg"));
+        CHECK(endswith(m.roughness_texture,  "rock_2K_Roughness.jpg"));
+        CHECK(endswith(m.occlusion_texture,  "rock_2K_AO.jpg"));
+        CHECK(endswith(m.height_texture,     "rock_2K_Displacement.exr"));
+        CHECK(endswith(m.metallic_texture,   "rock_2K_Metalness.jpg"));
+        CHECK(!m.invert_roughness);
+        CHECK(!m.mr_packed);
+    }
+    // sniff: both the manifest path and its containing dir register.
+    CHECK(imp::is_megascans(str_of(man)));
+    CHECK(imp::is_megascans(str_of(d)));
+}
+
+// ---- Megascans: 3D asset (mesh LOD recursion through import_file) ----
+void test_megascans_3d(const std::filesystem::path& base) {
+    const auto d = subdir(base, "ms_3d");
+    write_file(d / "mesh_LOD0.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    write_file(d / "mesh_LOD1.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    write_file(d / "rock_2K_Albedo.jpg", "x");
+    write_file(d / "rock_2K_Normal.jpg", "x");
+    const auto man = d / "rock_3d_cd34.json";
+    write_file(man,
+        "{\"id\":\"cd34\",\"name\":\"rock_3d\",\"type\":\"3d\",\"maps\":["
+        "{\"type\":\"albedo\",\"uri\":\"rock_2K_Albedo.jpg\"},"
+        "{\"type\":\"normal\",\"uri\":\"rock_2K_Normal.jpg\"}],"
+        "\"meshes\":[{\"name\":\"Var1\",\"uris\":["
+        "{\"uri\":\"mesh_LOD0.obj\",\"lod\":0},"
+        "{\"uri\":\"mesh_LOD1.obj\",\"lod\":1}]}]}");
+
+    cardinal::string err;
+    imp::ImportScene s = imp::import_megascans(str_of(man), &err);
+    CHECK(s.ok);
+    CHECK(s.meshes.size() >= sz(1));
+    CHECK(s.total_vertices()  == 3u);         // LOD0 geometry survived recursion
+    CHECK(s.total_triangles() == 1u);         // only the primary LOD imported
+    CHECK(s.nodes.size() >= sz(1));
+    if (!s.meshes.empty()) CHECK(s.meshes[0].material == 0);
+    if (!s.materials.empty()) {
+        CHECK(endswith(s.materials[0].base_color_texture, "rock_2K_Albedo.jpg"));
+        CHECK(endswith(s.materials[0].normal_texture,     "rock_2K_Normal.jpg"));
+    }
+}
+
+// ---- Megascans: gloss map → roughness slot with invert flag ---------
+void test_megascans_gloss(const std::filesystem::path& base) {
+    const auto d = subdir(base, "ms_gloss");
+    write_file(d / "x_2K_Albedo.jpg", "x");
+    write_file(d / "x_2K_Gloss.jpg",  "x");
+    const auto man = d / "x.json";
+    write_file(man,
+        "{\"type\":\"surface\",\"maps\":["
+        "{\"type\":\"albedo\",\"uri\":\"x_2K_Albedo.jpg\"},"
+        "{\"type\":\"gloss\",\"uri\":\"x_2K_Gloss.jpg\"}]}");
+
+    imp::ImportScene s = imp::import_megascans(str_of(man));
+    CHECK(s.ok);
+    if (!s.materials.empty()) {
+        CHECK(endswith(s.materials[0].roughness_texture, "x_2K_Gloss.jpg"));
+        CHECK(s.materials[0].invert_roughness);     // gloss ⇒ 1 − roughness
+    }
+}
+
+// ---- Megascans: tolerance — "components" synonym + "path" alias -----
+void test_megascans_components(const std::filesystem::path& base) {
+    const auto d = subdir(base, "ms_components");
+    write_file(d / "c_2K_Albedo.jpg",    "x");
+    write_file(d / "c_2K_Normal.jpg",    "x");
+    write_file(d / "c_2K_Roughness.jpg", "x");
+    const auto man = d / "c.json";
+    write_file(man,
+        "{\"type\":\"surface\",\"components\":["
+        "{\"type\":\"albedo\",\"uri\":\"c_2K_Albedo.jpg\"},"
+        "{\"type\":\"normal\",\"path\":\"c_2K_Normal.jpg\"},"   // "path" alias
+        "{\"type\":\"roughness\",\"file\":\"c_2K_Roughness.jpg\"}]}");  // "file" alias
+
+    imp::ImportScene s = imp::import_megascans(str_of(man));
+    CHECK(s.ok);
+    if (!s.materials.empty()) {
+        CHECK(endswith(s.materials[0].base_color_texture, "c_2K_Albedo.jpg"));
+        CHECK(endswith(s.materials[0].normal_texture,     "c_2K_Normal.jpg"));
+        CHECK(endswith(s.materials[0].roughness_texture,  "c_2K_Roughness.jpg"));
+    }
+}
+
+// ---- Megascans: filename-scan fallback (no maps array in JSON) -------
+void test_megascans_fallback(const std::filesystem::path& base) {
+    const auto d = subdir(base, "ms_fallback");
+    write_file(d / "name_2K_Albedo.jpg",    "x");
+    write_file(d / "name_2K_Normal.jpg",    "x");
+    write_file(d / "name_2K_Roughness.jpg", "x");
+    write_file(d / "name_Preview.png",      "x");   // unknown token ⇒ ignored
+    const auto man = d / "name.json";
+    write_file(man, "{\"id\":\"zz\",\"type\":\"surface\"}");   // NO maps array
+
+    cardinal::string err;
+    imp::ImportScene s = imp::import_megascans(str_of(man), &err);
+    CHECK(s.ok);
+    if (!s.materials.empty()) {
+        const imp::ImportMaterial& m = s.materials[0];
+        CHECK(endswith(m.base_color_texture, "name_2K_Albedo.jpg"));
+        CHECK(endswith(m.normal_texture,     "name_2K_Normal.jpg"));
+        CHECK(endswith(m.roughness_texture,  "name_2K_Roughness.jpg"));
+        CHECK(m.opacity_texture.empty());     // preview not hoovered up
+        CHECK(m.metallic_texture.empty());    // no metalness file present
+    }
+}
+
+// ---- Megascans: failure paths stay graceful -------------------------
+void test_megascans_failures(const std::filesystem::path& base) {
+    cardinal::string err;
+    // Missing manifest dir.
+    imp::ImportScene a =
+        imp::import_megascans(str_of(base / "ms_does_not_exist"), &err);
+    CHECK(!a.ok);
+    CHECK(!err.empty());
+    // A dir with no manifest at all.
+    const auto empty_dir = subdir(base, "ms_empty");
+    err.clear();
+    imp::ImportScene b = imp::import_megascans(str_of(empty_dir), &err);
+    CHECK(!b.ok);
+    CHECK(!imp::is_megascans(str_of(empty_dir)));
+}
+
 }  // namespace
 
 int main() {
@@ -434,6 +602,12 @@ int main() {
     test_obj_mtl(dir);
     test_obj_vertex_color(dir);
     test_gltf_triangle(dir);
+    test_megascans_surface(dir);
+    test_megascans_3d(dir);
+    test_megascans_gloss(dir);
+    test_megascans_components(dir);
+    test_megascans_fallback(dir);
+    test_megascans_failures(dir);
     test_format_detect();
     test_failures(dir);
 

@@ -68,7 +68,31 @@ struct ImportMaterial {
     float                 roughness{0.5f};
     cardinal::scene::Vec3 emission {0.0f, 0.0f, 0.0f};
     float                 emission_strength{0.0f};
-    cardinal::string           base_color_texture;   // file path/uri, relative
+    cardinal::string           base_color_texture;   // albedo (file path/uri, relative)
+
+    // ---- Full PBR texture-map set ------------------------------------------
+    // Every field is a relative file path/uri (empty ⇒ that map is absent).
+    // glTF packs metallic+roughness into ONE texture (G=roughness, B=metallic),
+    // while DCC tools (OBJ map_Pm/map_Pr) and Megascans ship SEPARATE maps —
+    // both are representable: metallic_roughness_texture (+ mr_packed) for the
+    // packed case, metallic_texture/roughness_texture for the separate case.
+    cardinal::string metallic_roughness_texture;     // packed ORM/RMA (see mr_packed)
+    cardinal::string roughness_texture;              // separate (map_Pr / Megascans)
+    cardinal::string metallic_texture;               // separate (map_Pm / Megascans)
+    cardinal::string normal_texture;
+    float            normal_scale{1.0f};             // glTF normalTexture.scale
+    cardinal::string occlusion_texture;              // AO / cavity
+    float            occlusion_strength{1.0f};       // glTF occlusionTexture.strength
+    cardinal::string emissive_texture;
+    cardinal::string height_texture;                 // displacement / height / bump
+    float            height_scale{1.0f};
+    cardinal::string specular_texture;
+    cardinal::string opacity_texture;                // alpha mask
+    bool             mr_packed{false};        // true ⇒ sample metallic_roughness_texture
+    bool             invert_roughness{false}; // true ⇒ source is a gloss map (1 − roughness)
+    // Recognised map types with no dedicated slot (translucency, fuzz,
+    // curvature, …): preserved as resolved paths, never silently dropped.
+    cardinal::vector<cardinal::string> unmapped_textures;
 };
 
 struct ImportNode {
@@ -100,6 +124,23 @@ struct ImportScene {
 ImportScene import_file(const cardinal::string& path, cardinal::string* error = nullptr);
 ImportScene import_obj (const cardinal::string& path, cardinal::string* error = nullptr);
 ImportScene import_gltf(const cardinal::string& path, cardinal::string* error = nullptr);
+
+// ---------------------------------------------------------------------------
+// Megascans / Quixel Bridge — a scanned-PBR asset is a metadata JSON plus a
+// set of texture maps (and, for 3D assets, mesh LODs). Deliberately NOT in
+// the extension-dispatch enum: a manifest is a .json that could be anything,
+// so it is imported explicitly. `path` may be the manifest .json itself OR
+// the asset directory (the manifest is then located by sniffing). Surface
+// assets yield a material-only scene; 3d assets recurse through import_file
+// for the mesh LOD (OBJ/glTF; FBX-only LODs import material-complete with
+// geometry pending the FBX backend). Tolerant to Bridge version drift:
+// maps/components synonyms, uri/path/file aliases, and a filename-scan
+// fallback when the JSON omits or stales a map.
+// ---------------------------------------------------------------------------
+ImportScene import_megascans(const cardinal::string& path, cardinal::string* error = nullptr);
+// Cheap sniff: true when `dir_or_json` is (or contains) a parseable manifest
+// whose root object carries any of maps / components / meshes / (id + type).
+bool        is_megascans(const cardinal::string& dir_or_json);
 
 // ImportScene → engine runtime asset structs: see the header-only
 // bridge <cardinal/import/to_asset.hpp> (kept out of this TU so the
