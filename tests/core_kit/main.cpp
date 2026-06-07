@@ -18,6 +18,7 @@
 #include <cardinal/core/os/seh.hpp>
 #include <cardinal/core/string/fixed_string.hpp>
 #include <cardinal/core/string/string_id.hpp>
+#include <cardinal/core/string/string_builder.hpp>
 #include <cardinal/core/small_vector.hpp>
 #include <cardinal/core/dense_map.hpp>
 #include <cardinal/core/sparse_set.hpp>
@@ -855,6 +856,50 @@ void test_sparse_set() {
     CHECK(Tracked::s_alive == 0);
 }
 
+void test_string_builder() {
+    cardinal::StringBuilder sb;
+    CHECK(sb.empty() && sb.size() == 0);
+
+    sb.append("hello").append(' ').append("world");
+    CHECK(sb.str() == "hello world" && sb.size() == 11);
+
+    sb.clear();
+    sb.append_int(-42).append(' ').append_uint(7u).append(' ').append(true);
+    CHECK(sb.str() == "-42 7 true");
+
+    sb.clear(); sb.append_hex(0xdeadu, true);
+    CHECK(sb.str() == "0xdead");
+    sb.clear(); sb.append_hex(255u, false);
+    CHECK(sb.str() == "ff");
+
+    sb.clear(); sb.append_float(3.14159, 3);
+    CHECK(sb.str() == "3.14");                       // %.3g → 3 sig figs
+
+    // Fluent operator<< across types.
+    cardinal::StringBuilder s2;
+    s2 << "x=" << 10 << ", y=" << 2.5 << ", ok=" << true << '\n';
+    CHECK(s2.str() == "x=10, y=2.5, ok=true\n");
+
+    // append_line.
+    cardinal::StringBuilder s3;
+    s3.append_line("a").append_line("b");
+    CHECK(s3.str() == "a\nb\n");
+
+    // append_repeat.
+    cardinal::StringBuilder s4;
+    s4.append_repeat('-', 5);
+    CHECK(s4.str() == "-----");
+
+    // take() moves out + resets.
+    cardinal::StringBuilder s5; s5.append("moved");
+    const cardinal::string out = s5.take();
+    CHECK(out == "moved" && s5.empty());
+
+    // c_str round-trip.
+    cardinal::StringBuilder s6; s6 << "cstr" << 1;
+    CHECK(cardinal::string(s6.c_str()) == "cstr1");
+}
+
 void test_slot_map() {
     using SM = cardinal::slot_map<int>;
     using H  = SM::handle_type;
@@ -1042,6 +1087,7 @@ int main() {
     test_flags();
     test_dense_map();
     test_sparse_set();
+    test_string_builder();
     test_slot_map();
     test_spsc_ring();
     test_inplace_function();
