@@ -26,8 +26,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/containers.hpp>      // cardinal::vector
-#include <cardinal/core/utility.hpp>         // cardinal::move
+#include <cardinal/core/std/containers.hpp>      // cardinal::vector
+#include <cardinal/core/std/utility.hpp>         // cardinal::move
 #include <cardinal/core/handle/handle.hpp>   // Handle<Tag>
 #include <cardinal/core/handle/id_gen.hpp>   // SlotPool<Tag>
 

@@ -9,12 +9,12 @@
 
 #include <cardinal/postfx/postfx.hpp>
 
-#include <cardinal/core/algorithm.hpp>      // cardinal::clamp/min/max
-#include <cardinal/core/chrono.hpp>
-#include <cardinal/core/cmath.hpp>          // cardinal::isfinite/sin/cos/sqrt
-#include <cardinal/core/cstring.hpp>        // cardinal::memcpy
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/algorithm.hpp>      // cardinal::clamp/min/max
+#include <cardinal/core/std/chrono.hpp>
+#include <cardinal/core/std/cmath.hpp>          // cardinal::isfinite/sin/cos/sqrt
+#include <cardinal/core/std/cstring.hpp>        // cardinal::memcpy
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::postfx {
 

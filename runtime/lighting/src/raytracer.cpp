@@ -1,7 +1,7 @@
 #include <cardinal/lighting/raytracer.hpp>
 
-#include <cardinal/core/cmath.hpp>
-#include <cardinal/core/algorithm.hpp>
+#include <cardinal/core/std/cmath.hpp>
+#include <cardinal/core/std/algorithm.hpp>
 
 #include <chrono>
 

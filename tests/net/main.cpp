@@ -22,7 +22,7 @@
 
 #include <cardinal/net/net.hpp>
 #include <cardinal/net/replication.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <vector>
 

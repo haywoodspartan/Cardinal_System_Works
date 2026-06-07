@@ -12,7 +12,7 @@
 // including this header.
 // =============================================================================
 
-#include <cardinal/core/simd_math.hpp>
+#include <cardinal/core/math/simd_math.hpp>
 #include <cardinal/core/types.hpp>
 
 #ifndef CARDINAL_SIMD_TIER

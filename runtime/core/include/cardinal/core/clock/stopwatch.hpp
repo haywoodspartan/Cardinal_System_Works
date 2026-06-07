@@ -19,7 +19,7 @@
 
 #include <cardinal/core/types.hpp>
 #include <cardinal/core/platform.hpp>
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 
 #include <algorithm>   // std::push_heap / pop_heap
 

@@ -20,8 +20,8 @@
 
 #include <cardinal/vt/types.hpp>
 
-#include <cardinal/core/atomic.hpp>
-#include <cardinal/core/containers.hpp>
+#include <cardinal/core/std/atomic.hpp>
+#include <cardinal/core/std/containers.hpp>
 
 namespace cardinal::vt {
 

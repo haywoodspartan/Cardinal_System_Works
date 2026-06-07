@@ -15,7 +15,7 @@
 
 #include <cardinal/cmd/command.hpp>
 #include <cardinal/console/console.hpp>
-#include <cardinal/core/frame_pacer.hpp>
+#include <cardinal/core/sync/frame_pacer.hpp>
 #include <cardinal/cppscript/cppscript.hpp>
 #include <cardinal/plugin/plugin.hpp>
 #include <cardinal/render/pipeline.hpp>

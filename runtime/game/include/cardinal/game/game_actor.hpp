@@ -18,7 +18,7 @@
 
 #include <cardinal/actor/component.hpp>
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::game {
 

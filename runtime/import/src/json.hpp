@@ -20,10 +20,10 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // cardinal::string / u-ints
-#include <cardinal/core/containers.hpp>   // cardinal::vector / unordered_map
-#include <cardinal/core/cstdlib.hpp>      // cardinal::strtod / strtol
-#include <cardinal/core/cstring.hpp>      // cardinal::strncmp
-#include <cardinal/core/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector / unordered_map
+#include <cardinal/core/std/cstdlib.hpp>      // cardinal::strtod / strtol
+#include <cardinal/core/std/cstring.hpp>      // cardinal::strncmp
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
 
 namespace cardinal::import::detail {
 

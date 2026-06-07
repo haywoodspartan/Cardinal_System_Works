@@ -1,9 +1,9 @@
 #include <cardinal/navmesh/navmesh.hpp>
 
-#include <cardinal/core/algorithm.hpp>    // cardinal::max/reverse/*_heap
-#include <cardinal/core/cmath.hpp>        // cardinal::sqrt
-#include <cardinal/core/containers.hpp>   // cardinal::unordered_map
-#include <cardinal/core/limits.hpp>       // cardinal::numeric_limits
+#include <cardinal/core/std/algorithm.hpp>    // cardinal::max/reverse/*_heap
+#include <cardinal/core/std/cmath.hpp>        // cardinal::sqrt
+#include <cardinal/core/std/containers.hpp>   // cardinal::unordered_map
+#include <cardinal/core/std/limits.hpp>       // cardinal::numeric_limits
 // cardinal::pair/make_pair/hash arrive via navmesh.hpp + core/types.hpp
 
 namespace cardinal::navmesh {

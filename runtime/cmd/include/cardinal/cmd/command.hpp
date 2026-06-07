@@ -19,10 +19,10 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // cardinal::string / function / usize
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 #include <cardinal/core/dense_map.hpp>    // cardinal::dense_map (registry storage)
 #include <cardinal/core/string/string_id.hpp> // cardinal::StringId (registry key)
-#include <cardinal/core/math.hpp>         // cardinal::core::Mat4 / Vec3
+#include <cardinal/core/math/math.hpp>         // cardinal::core::Mat4 / Vec3
 
 namespace cardinal::actor { class World; }
 namespace cardinal::scene { class Scene; }

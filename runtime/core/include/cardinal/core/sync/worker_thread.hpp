@@ -22,9 +22,9 @@
 
 #include <cardinal/core/types.hpp>
 #include <cardinal/core/platform.hpp>
-#include <cardinal/core/thread.hpp>      // cardinal::jthread, stop_token
-#include <cardinal/core/atomic.hpp>      // cardinal::atomic
-#include <cardinal/core/containers.hpp>  // cardinal::vector
+#include <cardinal/core/std/thread.hpp>      // cardinal::jthread, stop_token
+#include <cardinal/core/std/atomic.hpp>      // cardinal::atomic
+#include <cardinal/core/std/containers.hpp>  // cardinal::vector
 #include <cardinal/core/sync/lock.hpp>     // ThreadLock
 
 #include <string>      // std::wstring for the thread name

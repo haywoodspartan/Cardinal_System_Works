@@ -3,18 +3,18 @@
 // =============================================================================
 #include <cardinal/scene/terrain.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/scene/scene.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/cctype.hpp>
-#include <cardinal/core/cmath.hpp>
-#include <cardinal/core/cstdio.hpp>
-#include <cardinal/core/cstdlib.hpp>
-#include <cardinal/core/cstring.hpp>
-#include <cardinal/core/fstream.hpp>
-#include <cardinal/core/sstream.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/cctype.hpp>
+#include <cardinal/core/std/cmath.hpp>
+#include <cardinal/core/std/cstdio.hpp>
+#include <cardinal/core/std/cstdlib.hpp>
+#include <cardinal/core/std/cstring.hpp>
+#include <cardinal/core/std/fstream.hpp>
+#include <cardinal/core/std/sstream.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::scene {
 

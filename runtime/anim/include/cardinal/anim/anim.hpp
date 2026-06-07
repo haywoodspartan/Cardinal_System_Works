@@ -23,10 +23,10 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // function/string/unique_ptr/shared_ptr
-#include <cardinal/core/algorithm.hpp>    // cardinal::lower_bound
-#include <cardinal/core/cmath.hpp>        // cardinal::isfinite
-#include <cardinal/core/containers.hpp>   // cardinal::vector
-#include <cardinal/core/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/algorithm.hpp>    // cardinal::lower_bound
+#include <cardinal/core/std/cmath.hpp>        // cardinal::isfinite
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
 #include <cardinal/scene/math.hpp>
 
 namespace cardinal::anim {

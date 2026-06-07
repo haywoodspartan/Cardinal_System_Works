@@ -4,8 +4,8 @@
 #include <cardinal/actor/builtin_prefabs.hpp>
 
 #include <cardinal/actor/world.hpp>
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/utility.hpp>   // cardinal::move
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/std/utility.hpp>   // cardinal::move
 
 namespace cardinal::actor {
 

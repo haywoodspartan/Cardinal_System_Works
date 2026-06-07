@@ -19,8 +19,8 @@
 #include <cardinal/physics/physics.hpp>
 #include <cardinal/physics/gpu_physics.hpp>
 #include <cardinal/render/graph.hpp>
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 #include <limits>
 

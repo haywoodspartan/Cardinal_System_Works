@@ -3,12 +3,12 @@
 #include <cardinal/actor/component.hpp>
 #include <cardinal/scene/scene.hpp>
 #include <cardinal/scene/assets.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
-#include <cardinal/core/algorithm.hpp>    // cardinal::sort/max
-#include <cardinal/core/cmath.hpp>        // cardinal::sqrt
-#include <cardinal/core/containers.hpp>   // cardinal::queue
-#include <cardinal/core/utility.hpp>      // cardinal::move/pair
+#include <cardinal/core/std/algorithm.hpp>    // cardinal::sort/max
+#include <cardinal/core/std/cmath.hpp>        // cardinal::sqrt
+#include <cardinal/core/std/containers.hpp>   // cardinal::queue
+#include <cardinal/core/std/utility.hpp>      // cardinal::move/pair
 
 namespace cardinal::level {
 

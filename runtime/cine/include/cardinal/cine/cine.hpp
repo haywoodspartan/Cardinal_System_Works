@@ -25,8 +25,8 @@
 #include <cardinal/anim/anim.hpp>
 #include <cardinal/audio/audio.hpp>
 #include <cardinal/core/types.hpp>        // function/string/shared_ptr
-#include <cardinal/core/utility.hpp>      // cardinal::variant, cardinal::move
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/utility.hpp>      // cardinal::variant, cardinal::move
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 
 namespace cardinal::cine {
 

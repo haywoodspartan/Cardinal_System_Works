@@ -1,4 +1,4 @@
-#include <cardinal/core/topology.hpp>
+#include <cardinal/core/sync/topology.hpp>
 
 #include <cstdio>
 

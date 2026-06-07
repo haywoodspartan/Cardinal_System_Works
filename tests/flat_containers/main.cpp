@@ -14,9 +14,9 @@
 // Exit 0 = all pass.
 // =============================================================================
 
-#include <cardinal/core/flat_set.hpp>
-#include <cardinal/core/flat_map.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/container/flat_set.hpp>
+#include <cardinal/core/container/flat_map.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <algorithm>
 #include <string>

@@ -1,19 +1,19 @@
 #include <cardinal/serial/serial.hpp>
 
 #include <cardinal/actor/world.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/game/game.hpp>
 #include <cardinal/game/reflection.hpp>
 #include <cardinal/scene/scene.hpp>
 #include <cardinal/sky/sky.hpp>
 
-#include <cardinal/core/cstdio.hpp>      // cardinal::snprintf/sscanf
-#include <cardinal/core/cstdlib.hpp>     // cardinal::atof/atoi
-#include <cardinal/core/cstring.hpp>     // cardinal raw byte ops
-#include <cardinal/core/fstream.hpp>     // cardinal::ifstream/ofstream/ios/getline
-#include <cardinal/core/sstream.hpp>     // cardinal::stringstream
-#include <cardinal/core/utility.hpp>     // cardinal::move
-#include <cardinal/core/containers.hpp>  // cardinal::vector
+#include <cardinal/core/std/cstdio.hpp>      // cardinal::snprintf/sscanf
+#include <cardinal/core/std/cstdlib.hpp>     // cardinal::atof/atoi
+#include <cardinal/core/std/cstring.hpp>     // cardinal raw byte ops
+#include <cardinal/core/std/fstream.hpp>     // cardinal::ifstream/ofstream/ios/getline
+#include <cardinal/core/std/sstream.hpp>     // cardinal::stringstream
+#include <cardinal/core/std/utility.hpp>     // cardinal::move
+#include <cardinal/core/std/containers.hpp>  // cardinal::vector
 
 namespace cardinal::serial {
 

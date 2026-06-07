@@ -25,7 +25,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 
 namespace cardinal::edit::tex_ops {
 

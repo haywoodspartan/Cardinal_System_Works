@@ -1,8 +1,8 @@
-#include <cardinal/core/io.hpp>
+#include <cardinal/core/os/io.hpp>
 
-#include <cardinal/core/async.hpp>
-#include <cardinal/core/hal.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/sync/async.hpp>
+#include <cardinal/core/os/hal.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <algorithm>
 #include <atomic>

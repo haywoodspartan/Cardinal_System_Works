@@ -20,8 +20,8 @@
 
 #include <cardinal/vgeom/vgeom.hpp>
 #include <cardinal/vgeom/cluster.hpp>
-#include <cardinal/core/math.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/math/math.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 namespace {
 

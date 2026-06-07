@@ -3,10 +3,10 @@
 // =============================================================================
 #include <cardinal/world/world.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::max
-#include <cardinal/core/cmath.hpp>       // cardinal::floor
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::max
+#include <cardinal/core/std/cmath.hpp>       // cardinal::floor
 // cardinal::move/vector arrive via world.hpp
 
 namespace cardinal::world {

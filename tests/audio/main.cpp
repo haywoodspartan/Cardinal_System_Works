@@ -26,8 +26,8 @@
 // =============================================================================
 
 #include <cardinal/audio/audio.hpp>
-#include <cardinal/core/atomic.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/std/atomic.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <limits>
 

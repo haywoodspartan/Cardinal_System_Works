@@ -2,7 +2,7 @@
 
 #if CARDINAL_PLATFORM_LINUX
 
-#include <cardinal/core/affinity.hpp>
+#include <cardinal/core/sync/affinity.hpp>
 
 #include <pthread.h>
 #include <sched.h>

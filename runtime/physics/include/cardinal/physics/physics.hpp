@@ -28,11 +28,11 @@
 // budget, deterministic given the same input, no third-party deps.
 // =============================================================================
 
-#include <cardinal/core/handle.hpp>
-#include <cardinal/core/math.hpp>
-#include <cardinal/core/spatial.hpp>
+#include <cardinal/core/handle/handle.hpp>
+#include <cardinal/core/math/math.hpp>
+#include <cardinal/core/math/spatial.hpp>
 #include <cardinal/core/types.hpp>        // function/memory/string
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 
 namespace cardinal::physics {
 

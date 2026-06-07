@@ -25,8 +25,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // function/string/unique_ptr
-#include <cardinal/core/utility.hpp>      // cardinal::variant, cardinal::move
-#include <cardinal/core/containers.hpp>   // unordered_map, vector
+#include <cardinal/core/std/utility.hpp>      // cardinal::variant, cardinal::move
+#include <cardinal/core/std/containers.hpp>   // unordered_map, vector
 #include <cardinal/scene/math.hpp>
 
 namespace cardinal::ai {

@@ -24,7 +24,7 @@
 // =============================================================================
 
 #include <cardinal/scene/terrain.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <filesystem>
 #include <fstream>

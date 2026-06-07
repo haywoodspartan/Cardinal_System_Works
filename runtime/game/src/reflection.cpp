@@ -1,9 +1,9 @@
 #include <cardinal/game/reflection.hpp>
 #include <cardinal/game/game_actor.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/utility.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/utility.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 namespace cardinal::game {
 

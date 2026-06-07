@@ -1,6 +1,6 @@
 #include <cardinal/vt/page_table.hpp>
 
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::vt {
 

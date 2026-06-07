@@ -9,9 +9,9 @@
 // On Linux this is a stub today (signal handlers + breakpad/sentry would
 // be the right path; not in scope for the first cut).
 // =============================================================================
-#include <cardinal/core/crash.hpp>
+#include <cardinal/core/diag/crash.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/platform.hpp>
 
 #include <atomic>

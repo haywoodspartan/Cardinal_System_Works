@@ -1,7 +1,7 @@
 // =============================================================================
 // Cardinal — time + frame timing implementation.
 // =============================================================================
-#include <cardinal/core/time.hpp>
+#include <cardinal/core/clock/time.hpp>
 
 namespace cardinal::core {
 

@@ -20,18 +20,18 @@
 // =============================================================================
 
 #include <cardinal/import/import.hpp>
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/math.hpp>
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/math/math.hpp>
 
-#include <cardinal/core/algorithm.hpp>    // cardinal::min/max
-#include <cardinal/core/cctype.hpp>       // cardinal::isspace/isdigit
-#include <cardinal/core/cmath.hpp>        // cardinal scalar math
-#include <cardinal/core/cstdlib.hpp>      // cardinal::strtod/strtol
-#include <cardinal/core/cstring.hpp>      // cardinal::memcpy
-#include <cardinal/core/fstream.hpp>      // cardinal::ifstream/ios
-#include <cardinal/core/sstream.hpp>      // cardinal::stringstream
-#include <cardinal/core/utility.hpp>      // cardinal::move
-#include <cardinal/core/containers.hpp>   // cardinal::unordered_map/vector
+#include <cardinal/core/std/algorithm.hpp>    // cardinal::min/max
+#include <cardinal/core/std/cctype.hpp>       // cardinal::isspace/isdigit
+#include <cardinal/core/std/cmath.hpp>        // cardinal scalar math
+#include <cardinal/core/std/cstdlib.hpp>      // cardinal::strtod/strtol
+#include <cardinal/core/std/cstring.hpp>      // cardinal::memcpy
+#include <cardinal/core/std/fstream.hpp>      // cardinal::ifstream/ios
+#include <cardinal/core/std/sstream.hpp>      // cardinal::stringstream
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/containers.hpp>   // cardinal::unordered_map/vector
 
 #include "json.hpp"                        // cardinal::import::detail::JVal/JParser
 

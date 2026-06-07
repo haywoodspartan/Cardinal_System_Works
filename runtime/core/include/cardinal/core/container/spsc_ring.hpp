@@ -27,8 +27,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>     // usize
-#include <cardinal/core/atomic.hpp>    // cardinal::atomic + memory_order_*
-#include <cardinal/core/utility.hpp>   // cardinal::move
+#include <cardinal/core/std/atomic.hpp>    // cardinal::atomic + memory_order_*
+#include <cardinal/core/std/utility.hpp>   // cardinal::move
 
 namespace cardinal::core {
 

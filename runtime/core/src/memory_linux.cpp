@@ -1,4 +1,4 @@
-#include <cardinal/core/memory.hpp>
+#include <cardinal/core/budget/memory.hpp>
 #include <cardinal/core/platform.hpp>
 
 #if CARDINAL_PLATFORM_LINUX

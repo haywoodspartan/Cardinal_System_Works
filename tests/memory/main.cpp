@@ -12,8 +12,8 @@
 // checks instead. Exit 0 = all pass.
 // =============================================================================
 
-#include <cardinal/core/memory.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/budget/memory.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 namespace {
 

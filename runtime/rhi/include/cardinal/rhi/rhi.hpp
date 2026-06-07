@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/containers.hpp>
+#include <cardinal/core/std/containers.hpp>
 
 // =============================================================================
 // Cardinal RHI — Render Hardware Interface.

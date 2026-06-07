@@ -3,9 +3,9 @@
 // =============================================================================
 #include <cardinal/physics/exotic.hpp>
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::min/max/clamp
-#include <cardinal/core/cmath.hpp>       // cardinal scalar math
-#include <cardinal/core/limits.hpp>      // cardinal::numeric_limits
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::min/max/clamp
+#include <cardinal/core/std/cmath.hpp>       // cardinal scalar math
+#include <cardinal/core/std/limits.hpp>      // cardinal::numeric_limits
 
 namespace cardinal::physics {
 

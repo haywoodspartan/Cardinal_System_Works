@@ -16,7 +16,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/containers.hpp>
+#include <cardinal/core/std/containers.hpp>
 #include <cardinal/scene/math.hpp>
 
 namespace cardinal::scene {

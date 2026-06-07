@@ -28,7 +28,7 @@
 
 #include <cardinal/actor/world.hpp>
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/utility.hpp>
 #include <cardinal/game/game_actor.hpp>
 #include <cardinal/sim/sim.hpp>
 

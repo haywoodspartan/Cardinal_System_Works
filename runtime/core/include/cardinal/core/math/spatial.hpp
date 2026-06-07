@@ -14,8 +14,8 @@
 // without any source change.
 // =============================================================================
 
-#include <cardinal/core/geom.hpp>
-#include <cardinal/core/math.hpp>
+#include <cardinal/core/math/geom.hpp>
+#include <cardinal/core/math/math.hpp>
 #include <cardinal/core/types.hpp>
 
 #include <cstdint>

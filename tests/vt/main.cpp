@@ -16,7 +16,7 @@
 // =============================================================================
 
 #include <cardinal/vt/page_table.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <functional>
 #include <string>

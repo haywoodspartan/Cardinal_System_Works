@@ -30,7 +30,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/linear_allocator.hpp>
+#include <cardinal/core/alloc/linear_allocator.hpp>
 
 #include <new>            // std::bad_alloc
 #include <type_traits>

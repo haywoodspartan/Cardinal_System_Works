@@ -1,9 +1,9 @@
 #include <cardinal/input/input.hpp>
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::sort
-#include <cardinal/core/cmath.hpp>       // cardinal::isfinite
-#include <cardinal/core/cstring.hpp>     // cardinal::strcmp
-#include <cardinal/core/thread.hpp>      // cardinal::mutex/lock_guard
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::sort
+#include <cardinal/core/std/cmath.hpp>       // cardinal::isfinite
+#include <cardinal/core/std/cstring.hpp>     // cardinal::strcmp
+#include <cardinal/core/std/thread.hpp>      // cardinal::mutex/lock_guard
 
 namespace cardinal::input {
 

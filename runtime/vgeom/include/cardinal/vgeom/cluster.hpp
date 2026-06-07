@@ -12,7 +12,7 @@
 
 #include <cardinal/vgeom/vgeom.hpp>     // Vertex, Vec3, Mat4 type aliases
 
-#include <cardinal/core/containers.hpp>
+#include <cardinal/core/std/containers.hpp>
 
 namespace cardinal::vgeom {
 

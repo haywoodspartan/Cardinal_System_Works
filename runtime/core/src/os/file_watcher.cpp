@@ -8,9 +8,9 @@
 //
 // Linux: stub returning nullptr until WSI / inotify integration lands.
 // =============================================================================
-#include <cardinal/core/file_watcher.hpp>
+#include <cardinal/core/os/file_watcher.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/platform.hpp>
 
 #include <atomic>

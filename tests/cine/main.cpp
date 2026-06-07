@@ -24,7 +24,7 @@
 // =============================================================================
 
 #include <cardinal/cine/cine.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <limits>
 #include <string>

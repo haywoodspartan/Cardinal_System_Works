@@ -22,7 +22,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // cardinal::string/shared_ptr
-#include <cardinal/core/containers.hpp>   // array/unordered_map/vector
+#include <cardinal/core/std/containers.hpp>   // array/unordered_map/vector
 
 namespace cardinal::input {
 

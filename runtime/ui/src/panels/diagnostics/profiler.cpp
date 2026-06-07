@@ -3,12 +3,12 @@
 // =============================================================================
 #include "profiler.hpp"
 
-#include <cardinal/core/async.hpp>
+#include <cardinal/core/sync/async.hpp>
 
 #include <cardinal/ui/imgui.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/cstdio.hpp>
 
 namespace cardinal::ui::panels::profiler_panel {
 

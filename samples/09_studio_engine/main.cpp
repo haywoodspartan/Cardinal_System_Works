@@ -24,11 +24,11 @@
 #include <cardinal/ui/simd_panel.hpp>
 #include <cardinal/ui/vgeom_panel.hpp>
 
-#include <cardinal/core/async.hpp>
-#include <cardinal/core/crash.hpp>
-#include <cardinal/core/jobs.hpp>
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/trace_export.hpp>
+#include <cardinal/core/sync/async.hpp>
+#include <cardinal/core/diag/crash.hpp>
+#include <cardinal/core/sync/jobs.hpp>
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/diag/trace_export.hpp>
 #include <cardinal/engine/engine.hpp>
 #include <cardinal/render/pipeline.hpp>
 #include <cardinal/rhi/rhi.hpp>

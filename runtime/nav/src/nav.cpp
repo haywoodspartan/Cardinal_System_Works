@@ -1,8 +1,8 @@
 #include <cardinal/nav/nav.hpp>
 
-#include <cardinal/core/algorithm.hpp>    // cardinal::fill/min/max/reverse/*_heap
-#include <cardinal/core/cmath.hpp>        // cardinal::isfinite/abs
-#include <cardinal/core/containers.hpp>   // cardinal::priority_queue
+#include <cardinal/core/std/algorithm.hpp>    // cardinal::fill/min/max/reverse/*_heap
+#include <cardinal/core/std/cmath.hpp>        // cardinal::isfinite/abs
+#include <cardinal/core/std/containers.hpp>   // cardinal::priority_queue
 // cardinal::pair / cardinal::greater arrive via nav.hpp / core/types.hpp
 
 namespace cardinal::nav {

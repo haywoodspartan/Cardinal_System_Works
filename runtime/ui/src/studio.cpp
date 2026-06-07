@@ -38,7 +38,7 @@
 #include <cardinal/sandbox/sandbox.hpp>   // for Status (used by panel callback adapter)
 
 #include <cardinal/console/console.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/platform.hpp>
 #include <cardinal/render/pipeline.hpp>
 #include <cardinal/rhi/rhi.hpp>
@@ -51,7 +51,7 @@
 #include <cardinal/trace/timeline.hpp>
 #include <cardinal/window/window.hpp>
 
-#include <cardinal/core/filesystem.hpp>
+#include <cardinal/core/std/filesystem.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
     #include <Windows.h>
@@ -81,17 +81,17 @@
 // gizmo so the user can A/B them via the runtime use_imguizmo_ flag.
 #include <ImGuizmo.h>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/cctype.hpp>
-#include <cardinal/core/chrono.hpp>
-#include <cardinal/core/climits.hpp>
-#include <cardinal/core/cmath.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/cstdio.hpp>
-#include <cardinal/core/cstring.hpp>
-#include <cardinal/core/ctime.hpp>
-#include <cardinal/core/thread.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/cctype.hpp>
+#include <cardinal/core/std/chrono.hpp>
+#include <cardinal/core/std/climits.hpp>
+#include <cardinal/core/std/cmath.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/cstdio.hpp>
+#include <cardinal/core/std/cstring.hpp>
+#include <cardinal/core/std/ctime.hpp>
+#include <cardinal/core/std/thread.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(

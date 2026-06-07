@@ -1,6 +1,6 @@
 #include <cardinal/lighting/gpu_radiance_cache.hpp>
 
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 #include <chrono>
 

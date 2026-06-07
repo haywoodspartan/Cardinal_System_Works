@@ -16,8 +16,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/containers.hpp>   // cardinal::array, cardinal::vector
-#include <cardinal/core/utility.hpp>      // cardinal::pair
+#include <cardinal/core/std/containers.hpp>   // cardinal::array, cardinal::vector
+#include <cardinal/core/std/utility.hpp>      // cardinal::pair
 #include <cardinal/scene/math.hpp>
 
 namespace cardinal::navmesh {

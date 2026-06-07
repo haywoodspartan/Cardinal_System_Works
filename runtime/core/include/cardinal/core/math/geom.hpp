@@ -25,7 +25,7 @@
 //   raycast against AABB / sphere / capsule / triangle
 // =============================================================================
 
-#include <cardinal/core/math.hpp>
+#include <cardinal/core/math/math.hpp>
 #include <cardinal/core/types.hpp>
 
 #include <functional>

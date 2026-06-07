@@ -1,4 +1,4 @@
-#include <cardinal/core/global_object_manager.hpp>
+#include <cardinal/core/service/global_object_manager.hpp>
 
 namespace cardinal::core {
 

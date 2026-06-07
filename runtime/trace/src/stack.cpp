@@ -2,12 +2,12 @@
 // Cardinal — stack capture / symbolisation.
 // =============================================================================
 #include <cardinal/trace/stack.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/platform.hpp>
 
-#include <cardinal/core/cstdio.hpp>    // cardinal::snprintf
-#include <cardinal/core/cstring.hpp>   // cardinal::strncpy/strncat/strlen
-#include <cardinal/core/thread.hpp>    // cardinal::mutex/lock_guard
+#include <cardinal/core/std/cstdio.hpp>    // cardinal::snprintf
+#include <cardinal/core/std/cstring.hpp>   // cardinal::strncpy/strncat/strlen
+#include <cardinal/core/std/thread.hpp>    // cardinal::mutex/lock_guard
 
 #if CARDINAL_PLATFORM_WINDOWS
 

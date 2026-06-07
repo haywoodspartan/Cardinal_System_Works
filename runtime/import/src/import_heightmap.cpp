@@ -18,13 +18,13 @@
 // =============================================================================
 
 #include <cardinal/import/import.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::min / max
-#include <cardinal/core/cctype.hpp>      // cardinal::tolower
-#include <cardinal/core/cmath.hpp>       // cardinal::sqrt
-#include <cardinal/core/fstream.hpp>     // cardinal::ifstream / ios
-#include <cardinal/core/sstream.hpp>     // cardinal::ostringstream
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::min / max
+#include <cardinal/core/std/cctype.hpp>      // cardinal::tolower
+#include <cardinal/core/std/cmath.hpp>       // cardinal::sqrt
+#include <cardinal/core/std/fstream.hpp>     // cardinal::ifstream / ios
+#include <cardinal/core/std/sstream.hpp>     // cardinal::ostringstream
 
 namespace cardinal::import {
 

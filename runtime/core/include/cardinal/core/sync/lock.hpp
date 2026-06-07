@@ -35,9 +35,9 @@
 
 #include <cardinal/core/types.hpp>
 #include <cardinal/core/platform.hpp>
-#include <cardinal/core/atomic.hpp>
-#include <cardinal/core/thread.hpp>     // cardinal::shared_mutex
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/atomic.hpp>
+#include <cardinal/core/std/thread.hpp>     // cardinal::shared_mutex
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::core {
 

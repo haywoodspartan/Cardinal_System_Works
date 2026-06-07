@@ -1,7 +1,7 @@
 #include <cardinal/sky/sky.hpp>
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::sort/clamp/max
-#include <cardinal/core/cmath.hpp>       // cardinal::fmod/cos/sin/sqrt
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::sort/clamp/max
+#include <cardinal/core/std/cmath.hpp>       // cardinal::fmod/cos/sin/sqrt
 
 namespace cardinal::sky {
 

@@ -3,14 +3,14 @@
 // =============================================================================
 #include <cardinal/console/console.hpp>
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::min/sort/unique/clamp
-#include <cardinal/core/cctype.hpp>      // cardinal::tolower/isspace
-#include <cardinal/core/cmath.hpp>       // cardinal::isfinite
-#include <cardinal/core/cstdarg.hpp>     // cardinal::va_list (+ va_* macros)
-#include <cardinal/core/cstdio.hpp>      // cardinal::vsnprintf
-#include <cardinal/core/cstdlib.hpp>     // cardinal::strtoll/strtod
-#include <cardinal/core/cstring.hpp>
-#include <cardinal/core/fstream.hpp>     // cardinal::ofstream/ifstream (save/load)
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::min/sort/unique/clamp
+#include <cardinal/core/std/cctype.hpp>      // cardinal::tolower/isspace
+#include <cardinal/core/std/cmath.hpp>       // cardinal::isfinite
+#include <cardinal/core/std/cstdarg.hpp>     // cardinal::va_list (+ va_* macros)
+#include <cardinal/core/std/cstdio.hpp>      // cardinal::vsnprintf
+#include <cardinal/core/std/cstdlib.hpp>     // cardinal::strtoll/strtod
+#include <cardinal/core/std/cstring.hpp>
+#include <cardinal/core/std/fstream.hpp>     // cardinal::ofstream/ifstream (save/load)
 
 namespace cardinal::console {
 

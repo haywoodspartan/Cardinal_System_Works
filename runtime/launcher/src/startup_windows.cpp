@@ -35,9 +35,9 @@
 #include <gdiplus.h>
 #pragma comment(lib, "gdiplus.lib")
 
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/cstdio.hpp>
-#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/cstdio.hpp>
+#include <cardinal/core/std/cstring.hpp>
 
 namespace cardinal::launcher {
 

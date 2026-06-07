@@ -1,18 +1,18 @@
 #include <cardinal/pack/pack.hpp>
 
-#include <cardinal/core/async.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/sync/async.hpp>
+#include <cardinal/core/diag/log.hpp>
 
-#include <cardinal/core/algorithm.hpp>    // cardinal::sort/find/...
-#include <cardinal/core/atomic.hpp>       // cardinal::atomic
-#include <cardinal/core/cstdio.hpp>       // cardinal::fopen/fread/...
-#include <cardinal/core/cstring.hpp>      // cardinal::memcmp
-#include <cardinal/core/ctime.hpp>        // cardinal::time
-#include <cardinal/core/filesystem.hpp>   // cardinal::fs, error_code
-#include <cardinal/core/fstream.hpp>      // cardinal::ifstream/ios/streamsize
-#include <cardinal/core/thread.hpp>       // cardinal::mutex/lock_guard
-#include <cardinal/core/utility.hpp>      // cardinal::move
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/algorithm.hpp>    // cardinal::sort/find/...
+#include <cardinal/core/std/atomic.hpp>       // cardinal::atomic
+#include <cardinal/core/std/cstdio.hpp>       // cardinal::fopen/fread/...
+#include <cardinal/core/std/cstring.hpp>      // cardinal::memcmp
+#include <cardinal/core/std/ctime.hpp>        // cardinal::time
+#include <cardinal/core/std/filesystem.hpp>   // cardinal::fs, error_code
+#include <cardinal/core/std/fstream.hpp>      // cardinal::ifstream/ios/streamsize
+#include <cardinal/core/std/thread.hpp>       // cardinal::mutex/lock_guard
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 
 namespace fs = cardinal::fs;
 

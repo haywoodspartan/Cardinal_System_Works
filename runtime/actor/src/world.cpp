@@ -1,10 +1,10 @@
 #include <cardinal/actor/world.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::sort/remove_if
-#include <cardinal/core/cstdio.hpp>      // cardinal::snprintf (duplicate naming)
-#include <cardinal/core/cmath.hpp>       // cardinal::round (grid snap)
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::sort/remove_if
+#include <cardinal/core/std/cstdio.hpp>      // cardinal::snprintf (duplicate naming)
+#include <cardinal/core/std/cmath.hpp>       // cardinal::round (grid snap)
 // cardinal::make_unique/move/any/vector arrive via actor/world.hpp
 
 namespace cardinal::actor {

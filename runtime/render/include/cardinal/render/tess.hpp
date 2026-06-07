@@ -25,8 +25,8 @@
 
 #include <cardinal/core/types.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/cmath.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/cmath.hpp>
 
 namespace cardinal::render::tess {
 

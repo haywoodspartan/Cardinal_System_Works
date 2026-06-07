@@ -14,8 +14,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // cardinal::string
-#include <cardinal/core/containers.hpp>   // cardinal::vector
-#include <cardinal/core/math.hpp>         // cardinal::core::Vec3
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
+#include <cardinal/core/math/math.hpp>         // cardinal::core::Vec3
 
 namespace cardinal::actor {
 

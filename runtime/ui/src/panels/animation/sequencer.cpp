@@ -7,10 +7,10 @@
 
 #include <cardinal/ui/imgui.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/cstdio.hpp>
-#include <cardinal/core/traits.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/cstdio.hpp>
+#include <cardinal/core/std/traits.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::ui::panels::sequencer_panel {
 

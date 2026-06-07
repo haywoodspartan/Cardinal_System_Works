@@ -25,9 +25,9 @@
 #include <cardinal/core/types.hpp>
 #include <cardinal/scene/math.hpp>
 
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/cstring.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/cstring.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::mass {
 

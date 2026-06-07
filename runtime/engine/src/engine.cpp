@@ -8,7 +8,7 @@
 // =============================================================================
 #include <cardinal/engine/engine.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/physics/physics.hpp>
 #include <cardinal/plugin/plugin.hpp>
 #include <cardinal/render/pipeline.hpp>
@@ -20,11 +20,11 @@
 #include <cardinal/script/engine.hpp>
 #include <cardinal/window/window.hpp>
 
-#include <cardinal/core/chrono.hpp>
-#include <cardinal/core/cstring.hpp>
-#include <cardinal/core/filesystem.hpp>
-#include <cardinal/core/thread.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/chrono.hpp>
+#include <cardinal/core/std/cstring.hpp>
+#include <cardinal/core/std/filesystem.hpp>
+#include <cardinal/core/std/thread.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::engine {
 

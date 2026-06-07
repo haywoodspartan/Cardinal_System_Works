@@ -17,8 +17,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/utility.hpp>
 #include <cardinal/scene/math.hpp>
 
 namespace cardinal::rhi { class Device; class Buffer; }

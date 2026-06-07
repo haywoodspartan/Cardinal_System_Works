@@ -13,7 +13,7 @@
 // =============================================================================
 
 #include <cardinal/scene/fly_camera.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 namespace {
 

@@ -17,17 +17,17 @@
 // =============================================================================
 #include <cardinal/render/pipeline.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/render/algos.hpp>
 #include <cardinal/render/geo.hpp>
 #include <cardinal/render/tess.hpp>
 #include <cardinal/render/tex.hpp>
 #include <cardinal/scene/renderer.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/atomic.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/atomic.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::render {
 

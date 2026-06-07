@@ -9,15 +9,15 @@
 // =============================================================================
 
 #include <cardinal/compile/compiler.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/platform.hpp>
 
-#include <cardinal/core/chrono.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/cstdio.hpp>
-#include <cardinal/core/future.hpp>
-#include <cardinal/core/thread.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/chrono.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/cstdio.hpp>
+#include <cardinal/core/std/future.hpp>
+#include <cardinal/core/std/thread.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
 #include <Windows.h>

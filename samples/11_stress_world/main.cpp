@@ -21,8 +21,8 @@
 // pipelines come for free; this file is just the stress harness + a live
 // dashboard panel. AssetCatalog teardown is handled by ~EngineImpl.
 // =============================================================================
-#include <cardinal/core/crash.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/crash.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/engine/engine.hpp>
 #include <cardinal/ui/studio_engine.hpp>
 

@@ -31,9 +31,9 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/containers.hpp>     // cardinal::vector
-#include <cardinal/core/algorithm.hpp>      // cardinal::lower_bound / upper_bound
-#include <cardinal/core/utility.hpp>        // cardinal::pair
+#include <cardinal/core/std/containers.hpp>     // cardinal::vector
+#include <cardinal/core/std/algorithm.hpp>      // cardinal::lower_bound / upper_bound
+#include <cardinal/core/std/utility.hpp>        // cardinal::pair
 
 #include <functional>      // std::less
 #include <initializer_list>

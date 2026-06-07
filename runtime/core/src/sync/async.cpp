@@ -1,5 +1,5 @@
-#include <cardinal/core/async.hpp>
-#include <cardinal/core/trace_export.hpp>
+#include <cardinal/core/sync/async.hpp>
+#include <cardinal/core/diag/trace_export.hpp>
 
 #include <algorithm>
 #include <atomic>

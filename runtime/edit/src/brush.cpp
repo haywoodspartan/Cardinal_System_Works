@@ -1,7 +1,7 @@
 #include <cardinal/edit/brush.hpp>
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::min/max
-#include <cardinal/core/cmath.hpp>       // cardinal::exp/floor/ceil
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::min/max
+#include <cardinal/core/std/cmath.hpp>       // cardinal::exp/floor/ceil
 
 namespace cardinal::edit::brush {
 

@@ -26,8 +26,8 @@
 // =============================================================================
 
 #include <cardinal/console/console.hpp>
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/fstream.hpp>
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/std/fstream.hpp>
 
 #include <cstdio>     // std::remove (temp-file cleanup)
 #include <string>

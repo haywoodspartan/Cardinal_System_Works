@@ -19,8 +19,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // u8, usize, cardinal::hash
-#include <cardinal/core/containers.hpp>   // cardinal::vector
-#include <cardinal/core/utility.hpp>      // cardinal::move, cardinal::pair
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/utility.hpp>      // cardinal::move, cardinal::pair
 
 #include <functional>     // std::equal_to
 

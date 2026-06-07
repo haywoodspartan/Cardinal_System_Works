@@ -1,7 +1,7 @@
 #include <cardinal/anim/anim.hpp>
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::lower_bound/max
-#include <cardinal/core/cmath.hpp>       // cardinal::fmod
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::lower_bound/max
+#include <cardinal/core/std/cmath.hpp>       // cardinal::fmod
 
 namespace cardinal::anim {
 

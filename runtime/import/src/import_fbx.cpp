@@ -23,14 +23,14 @@
 // =============================================================================
 
 #include <cardinal/import/import.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/compress/inflate.hpp>
 
-#include <cardinal/core/cstring.hpp>      // cardinal::memcpy / memcmp
-#include <cardinal/core/fstream.hpp>      // cardinal::ifstream / ios
-#include <cardinal/core/sstream.hpp>      // cardinal::ostringstream
-#include <cardinal/core/utility.hpp>      // cardinal::move
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/cstring.hpp>      // cardinal::memcpy / memcmp
+#include <cardinal/core/std/fstream.hpp>      // cardinal::ifstream / ios
+#include <cardinal/core/std/sstream.hpp>      // cardinal::ostringstream
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 
 namespace cardinal::import {
 

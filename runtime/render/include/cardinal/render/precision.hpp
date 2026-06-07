@@ -38,8 +38,8 @@
 
 #include <cardinal/core/types.hpp>   // foundation: u8..u64 / usize / f32
 
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/cstring.hpp>
 
 namespace cardinal::render::precision {
 

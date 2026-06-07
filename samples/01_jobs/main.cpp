@@ -1,5 +1,5 @@
-#include <cardinal/core/jobs.hpp>
-#include <cardinal/core/topology.hpp>
+#include <cardinal/core/sync/jobs.hpp>
+#include <cardinal/core/sync/topology.hpp>
 
 #include <atomic>
 #include <chrono>

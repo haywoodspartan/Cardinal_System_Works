@@ -25,7 +25,7 @@
 #include <cardinal/actor/world.hpp>
 #include <cardinal/actor/actor.hpp>
 #include <cardinal/actor/component.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <filesystem>
 #include <vector>

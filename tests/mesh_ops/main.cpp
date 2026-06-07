@@ -33,7 +33,7 @@
 
 #include <cardinal/edit/mesh_ops.hpp>
 #include <cardinal/scene/scene.hpp>   // full cardinal::scene::Vertex definition
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <vector>
 

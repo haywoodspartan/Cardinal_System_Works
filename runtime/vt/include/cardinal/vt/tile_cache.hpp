@@ -23,9 +23,9 @@
 
 #include <cardinal/vt/types.hpp>
 
-#include <cardinal/core/atomic.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/thread.hpp>
+#include <cardinal/core/std/atomic.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/thread.hpp>
 
 namespace cardinal::vt {
 

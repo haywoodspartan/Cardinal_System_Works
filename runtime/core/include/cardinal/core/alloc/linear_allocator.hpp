@@ -39,7 +39,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/atomic.hpp>
+#include <cardinal/core/std/atomic.hpp>
 
 #include <cstddef>     // std::byte, std::max_align_t
 #include <cstdint>     // std::uintptr_t

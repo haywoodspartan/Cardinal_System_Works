@@ -21,7 +21,7 @@
 #include <cardinal/core/types.hpp>
 #include <cardinal/rhi/rhi.hpp>
 
-#include <cardinal/core/future.hpp>   // also pulls core/types.hpp
+#include <cardinal/core/std/future.hpp>   // also pulls core/types.hpp
                                       // (unique_ptr / string vocabulary)
 
 namespace cardinal::compile {

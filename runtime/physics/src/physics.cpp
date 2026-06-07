@@ -18,20 +18,20 @@
 // =============================================================================
 #include <cardinal/physics/physics.hpp>
 
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/id_gen.hpp>
-#include <cardinal/core/simd_math.hpp>
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/handle/id_gen.hpp>
+#include <cardinal/core/math/simd_math.hpp>
 #include <cardinal/core/typedefs.hpp>
 
-#include <cardinal/core/algorithm.hpp>    // cardinal::min/max/swap
-#include <cardinal/core/cmath.hpp>        // cardinal::sqrt/fabs/floor/pow
-#include <cardinal/core/containers.hpp>   // unordered_map/unordered_set
-#include <cardinal/core/utility.hpp>      // cardinal::move/pair
+#include <cardinal/core/std/algorithm.hpp>    // cardinal::min/max/swap
+#include <cardinal/core/std/cmath.hpp>        // cardinal::sqrt/fabs/floor/pow
+#include <cardinal/core/std/containers.hpp>   // unordered_map/unordered_set
+#include <cardinal/core/std/utility.hpp>      // cardinal::move/pair
 
 namespace cardinal::physics {
 
 // Note: Vec3/Quat/Mat3 math (length, normalize, rotate, axis_angle,
-// integrate, quat_to_mat3) lives in <cardinal/core/math.hpp> as inline
+// integrate, quat_to_mat3) lives in <cardinal/core/math/math.hpp> as inline
 // constexpr/noexcept functions — physics::physics.hpp re-exports them
 // via `using` so this file calls them unqualified just like before.
 

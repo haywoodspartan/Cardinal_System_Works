@@ -33,7 +33,7 @@
 #include <cardinal/cppscript/cppscript.hpp>
 #include <cardinal/plugin/plugin.hpp>
 #include <cardinal/sandbox/sandbox.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <chrono>
 #include <cstdio>

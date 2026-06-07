@@ -1,14 +1,14 @@
 #include <cardinal/asset/asset.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/pack/pack.hpp>
 
-#include <cardinal/core/algorithm.hpp>    // cardinal::sort/unique
-#include <cardinal/core/bit.hpp>         // cardinal::bit_cast
-#include <cardinal/core/filesystem.hpp>   // cardinal::fs, error_code
-#include <cardinal/core/fstream.hpp>      // cardinal::ifstream/ios
-#include <cardinal/core/utility.hpp>      // cardinal::move
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/algorithm.hpp>    // cardinal::sort/unique
+#include <cardinal/core/std/bit.hpp>         // cardinal::bit_cast
+#include <cardinal/core/std/filesystem.hpp>   // cardinal::fs, error_code
+#include <cardinal/core/std/fstream.hpp>      // cardinal::ifstream/ios
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 
 namespace fs = cardinal::fs;
 

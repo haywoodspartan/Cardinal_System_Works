@@ -13,9 +13,9 @@
 // =============================================================================
 #include <cardinal/render/precision.hpp>
 
-#include <cardinal/core/bit.hpp>
-#include <cardinal/core/cmath.hpp>
-#include <cardinal/core/limits.hpp>
+#include <cardinal/core/std/bit.hpp>
+#include <cardinal/core/std/cmath.hpp>
+#include <cardinal/core/std/limits.hpp>
 
 namespace cardinal::render::precision {
 

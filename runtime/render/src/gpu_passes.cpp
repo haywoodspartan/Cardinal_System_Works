@@ -1,8 +1,8 @@
 #include <cardinal/render/gpu_passes.hpp>
 
-#include <cardinal/core/simd_math.hpp>      // simd::frustum_cull_aabbs
-#include <cardinal/core/cmath.hpp>          // sqrt + isfinite
-#include <cardinal/core/utility.hpp>        // cardinal::move
+#include <cardinal/core/math/simd_math.hpp>      // simd::frustum_cull_aabbs
+#include <cardinal/core/std/cmath.hpp>          // sqrt + isfinite
+#include <cardinal/core/std/utility.hpp>        // cardinal::move
 
 namespace cardinal::render::gpu {
 

@@ -35,16 +35,16 @@
 #include <cardinal/vgeom/vgeom.hpp>
 #include <cardinal/vgeom/cluster.hpp>
 
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/simd_math.hpp>
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/math/simd_math.hpp>
 #include <cardinal/core/typedefs.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/cmath.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/cstring.hpp>
-#include <cardinal/core/limits.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/cmath.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/cstring.hpp>
+#include <cardinal/core/std/limits.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::vgeom {
 

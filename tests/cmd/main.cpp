@@ -6,8 +6,8 @@
 #include <cardinal/scene/scene.hpp>
 #include <cardinal/actor/world.hpp>
 #include <cardinal/edit/undo.hpp>
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/utility.hpp>   // cardinal::move
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/std/utility.hpp>   // cardinal::move
 
 namespace cc = cardinal::cmd;
 namespace sc = cardinal::scene;

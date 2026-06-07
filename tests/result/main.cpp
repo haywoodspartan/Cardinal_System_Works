@@ -12,8 +12,8 @@
 // only behaviour. Exit 0 = all pass.
 // =============================================================================
 
-#include <cardinal/core/result.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/error/result.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <utility>          // std::move
 

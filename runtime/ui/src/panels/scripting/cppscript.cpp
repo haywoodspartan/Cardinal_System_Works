@@ -8,9 +8,9 @@
 
 #include <cardinal/ui/imgui.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/cstdio.hpp>
-#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/cstdio.hpp>
+#include <cardinal/core/std/cstring.hpp>
 
 namespace cardinal::ui::panels::cppscript_panel {
 

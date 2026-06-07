@@ -9,9 +9,9 @@
 
 #include <cardinal/net/replication.hpp>
 
-#include <cardinal/core/cstring.hpp>      // cardinal::memcpy
-#include <cardinal/core/utility.hpp>      // cardinal::move
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/cstring.hpp>      // cardinal::memcpy
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 
 namespace cardinal::net {
 

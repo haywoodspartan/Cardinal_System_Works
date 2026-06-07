@@ -23,8 +23,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // u32, usize
-#include <cardinal/core/containers.hpp>   // cardinal::vector / span
-#include <cardinal/core/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector / span
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
 
 #include <type_traits>    // std::is_unsigned_v
 #include <utility>        // std::forward

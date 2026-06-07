@@ -20,8 +20,8 @@
 // work — log, evict, pool resize).
 // =============================================================================
 
-#include <cardinal/core/budget.hpp>
-#include <cardinal/core/memory.hpp>
+#include <cardinal/core/budget/budget.hpp>
+#include <cardinal/core/budget/memory.hpp>
 #include <cardinal/core/types.hpp>
 
 #include <functional>

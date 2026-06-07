@@ -17,7 +17,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // function/memory/string
-#include <cardinal/core/containers.hpp>   // unordered_map/vector
+#include <cardinal/core/std/containers.hpp>   // unordered_map/vector
 
 namespace cardinal::project { class Project; }
 namespace cardinal::shader  { class Compiler; }

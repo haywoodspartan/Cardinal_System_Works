@@ -2,7 +2,7 @@
 // Cardinal — Undo stack implementation.
 // =============================================================================
 #include <cardinal/edit/undo.hpp>
-#include <cardinal/core/utility.hpp>   // cardinal::move
+#include <cardinal/core/std/utility.hpp>   // cardinal::move
 
 namespace cardinal::edit {
 

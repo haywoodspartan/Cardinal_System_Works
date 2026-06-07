@@ -26,7 +26,7 @@
 #include <cardinal/actor/builtin_prefabs.hpp>
 #include <cardinal/actor/validation.hpp>
 #include <cardinal/actor/scene_stats.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <any>
 #include <limits>

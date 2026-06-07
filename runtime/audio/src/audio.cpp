@@ -1,11 +1,11 @@
 #include <cardinal/audio/audio.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/cmath.hpp>
-#include <cardinal/core/thread.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/cmath.hpp>
+#include <cardinal/core/std/thread.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::audio {
 

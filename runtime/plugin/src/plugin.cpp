@@ -3,14 +3,14 @@
 // =============================================================================
 #include <cardinal/plugin/plugin.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/platform.hpp>
 #include <cardinal/render/algos.hpp>
 #include <cardinal/trace/stack.hpp>
 
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/filesystem.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/filesystem.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
     #include <Windows.h>

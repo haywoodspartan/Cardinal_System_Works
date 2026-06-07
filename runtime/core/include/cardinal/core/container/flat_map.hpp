@@ -6,7 +6,7 @@
 // find) but stored as a single cardinal::vector<pair<K,V>> for cache-tight
 // iteration and packed memory.
 //
-// See cardinal/core/flat_set.hpp for the cost model and design notes;
+// See cardinal/core/container/flat_set.hpp for the cost model and design notes;
 // flat_map adds the std::map key-value API: operator[], at, try_emplace,
 // insert_or_assign, find/erase by key.
 //
@@ -21,9 +21,9 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/containers.hpp>     // cardinal::vector
-#include <cardinal/core/algorithm.hpp>      // cardinal::lower_bound / upper_bound
-#include <cardinal/core/utility.hpp>        // cardinal::pair, move
+#include <cardinal/core/std/containers.hpp>     // cardinal::vector
+#include <cardinal/core/std/algorithm.hpp>      // cardinal::lower_bound / upper_bound
+#include <cardinal/core/std/utility.hpp>        // cardinal::pair, move
 
 #include <functional>      // std::less
 #include <initializer_list>

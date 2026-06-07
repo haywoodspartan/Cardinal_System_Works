@@ -1,13 +1,13 @@
 #include <cardinal/vt/vt.hpp>
 
-#include <cardinal/core/async.hpp>
-#include <cardinal/core/budget.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/sync/async.hpp>
+#include <cardinal/core/budget/budget.hpp>
+#include <cardinal/core/diag/log.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/atomic.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/thread.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/atomic.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/thread.hpp>
 
 namespace cardinal::vt {
 

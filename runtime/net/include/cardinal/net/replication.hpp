@@ -30,7 +30,7 @@
 #include <cardinal/net/net.hpp>          // Transport / NetEvent / Channel
 #include <cardinal/scene/math.hpp>       // scene::Vec3
 #include <cardinal/core/types.hpp>       // foundation vocab
-#include <cardinal/core/containers.hpp>  // cardinal::vector
+#include <cardinal/core/std/containers.hpp>  // cardinal::vector
 
 namespace cardinal::net {
 

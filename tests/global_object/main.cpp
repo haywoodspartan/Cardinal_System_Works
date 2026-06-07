@@ -2,9 +2,9 @@
 // Cardinal — GlobalObjectManager + shared_object regression suite.
 // =============================================================================
 
-#include <cardinal/core/global_object_manager.hpp>
-#include <cardinal/core/shared_object.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/service/global_object_manager.hpp>
+#include <cardinal/core/service/shared_object.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <atomic>
 #include <memory>

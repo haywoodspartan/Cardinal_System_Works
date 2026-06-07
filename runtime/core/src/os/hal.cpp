@@ -1,5 +1,5 @@
-#include <cardinal/core/hal.hpp>
-#include <cardinal/core/cstdio.hpp>      // cardinal::fseek64 / ftell64
+#include <cardinal/core/os/hal.hpp>
+#include <cardinal/core/std/cstdio.hpp>      // cardinal::fseek64 / ftell64
 #include <cardinal/core/platform.hpp>
 
 #include <chrono>

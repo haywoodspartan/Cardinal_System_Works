@@ -1,5 +1,5 @@
 #include <cardinal/core/sync/worker_thread.hpp>
-#include <cardinal/core/affinity.hpp>
+#include <cardinal/core/sync/affinity.hpp>
 
 #include <chrono>
 

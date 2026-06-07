@@ -21,11 +21,11 @@
 // =============================================================================
 
 #include <cardinal/net/net.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
-#include <cardinal/core/cstring.hpp>      // cardinal::memcpy
-#include <cardinal/core/containers.hpp>   // cardinal::deque/vector
-#include <cardinal/core/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/cstring.hpp>      // cardinal::memcpy
+#include <cardinal/core/std/containers.hpp>   // cardinal::deque/vector
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
 
 namespace cardinal::net {
 

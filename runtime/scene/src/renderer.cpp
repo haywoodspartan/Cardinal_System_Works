@@ -20,19 +20,19 @@
 #include <cardinal/scene/renderer.hpp>
 #include <cardinal/scene/math.hpp>     // directional_light_vp (shadow light VP)
 
-#include <cardinal/core/async.hpp>
-#include <cardinal/core/geom.hpp>
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/simd_math.hpp>
+#include <cardinal/core/sync/async.hpp>
+#include <cardinal/core/math/geom.hpp>
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/math/simd_math.hpp>
 #include <cardinal/rhi/rhi.hpp>
 #include <cardinal/vgeom/vgeom.hpp>
 #include <cardinal/vgeom/cluster.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/chrono.hpp>
-#include <cardinal/core/cmath.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/chrono.hpp>
+#include <cardinal/core/std/cmath.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::scene {
 

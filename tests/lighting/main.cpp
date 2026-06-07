@@ -22,8 +22,8 @@
 #include <cardinal/lighting/gpu_lighting.hpp>
 #include <cardinal/lighting/gpu_radiance_cache.hpp>
 #include <cardinal/render/graph.hpp>
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 #include <limits>
 

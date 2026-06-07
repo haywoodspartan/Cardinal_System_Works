@@ -2,7 +2,7 @@
 
 #if CARDINAL_PLATFORM_WINDOWS
 
-#include <cardinal/core/affinity.hpp>
+#include <cardinal/core/sync/affinity.hpp>
 
 #include <Windows.h>
 

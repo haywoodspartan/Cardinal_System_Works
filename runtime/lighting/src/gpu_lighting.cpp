@@ -1,8 +1,8 @@
 #include <cardinal/lighting/gpu_lighting.hpp>
 
-#include <cardinal/core/cmath.hpp>
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/cmath.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 #include <chrono>
 

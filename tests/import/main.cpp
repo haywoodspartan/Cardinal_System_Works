@@ -14,7 +14,7 @@
 // =============================================================================
 
 #include <cardinal/import/import.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <cstring>
 #include <filesystem>

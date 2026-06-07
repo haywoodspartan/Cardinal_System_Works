@@ -20,13 +20,13 @@
 #include <cardinal/vgeom/vgeom.hpp>
 #include <cardinal/vgeom/cluster.hpp>
 
-#include <cardinal/core/simd_math.hpp>
+#include <cardinal/core/math/simd_math.hpp>
 #include <cardinal/core/types.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/cmath.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/cmath.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::vgeom {
 

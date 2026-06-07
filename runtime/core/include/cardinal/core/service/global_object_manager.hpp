@@ -28,7 +28,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/containers.hpp>    // cardinal::vector
+#include <cardinal/core/std/containers.hpp>    // cardinal::vector
 
 #include <mutex>
 #include <string>

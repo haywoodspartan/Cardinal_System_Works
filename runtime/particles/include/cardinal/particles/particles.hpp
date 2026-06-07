@@ -21,7 +21,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // cardinal::string/shared_ptr/unique_ptr
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 #include <cardinal/scene/math.hpp>
 
 namespace cardinal::particles {

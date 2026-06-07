@@ -17,8 +17,8 @@
 // is Clock-independent, is checked). Exit 0 = all pass.
 // =============================================================================
 
-#include <cardinal/core/frame_pacer.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/sync/frame_pacer.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <limits>
 

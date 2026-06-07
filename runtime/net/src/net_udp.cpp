@@ -31,7 +31,7 @@
 // =============================================================================
 
 #include <cardinal/net/net.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
 
@@ -41,10 +41,10 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
-#include <cardinal/core/chrono.hpp>       // cardinal::chrono
-#include <cardinal/core/cstring.hpp>      // cardinal::memcpy
-#include <cardinal/core/containers.hpp>   // cardinal::deque/vector
-#include <cardinal/core/utility.hpp>      // cardinal::move/pair
+#include <cardinal/core/std/chrono.hpp>       // cardinal::chrono
+#include <cardinal/core/std/cstring.hpp>      // cardinal::memcpy
+#include <cardinal/core/std/containers.hpp>   // cardinal::deque/vector
+#include <cardinal/core/std/utility.hpp>      // cardinal::move/pair
 
 namespace cardinal::net {
 

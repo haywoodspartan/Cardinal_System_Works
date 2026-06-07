@@ -1,9 +1,9 @@
 #include <cardinal/rhi/rhi.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/platform.hpp>
-#include <cardinal/core/linear_allocator.hpp>
-#include <cardinal/core/arena_allocator.hpp>
+#include <cardinal/core/alloc/linear_allocator.hpp>
+#include <cardinal/core/alloc/arena_allocator.hpp>
 
 #include "modern.h"
 
@@ -40,10 +40,10 @@
 // it must come AFTER Windows.h + unknwn.h above.
 #include <dxcapi.h>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/cstring.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/cstring.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::rhi {
 

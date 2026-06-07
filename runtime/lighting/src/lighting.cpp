@@ -1,7 +1,7 @@
 #include <cardinal/lighting/lighting.hpp>
 
-#include <cardinal/core/cmath.hpp>
-#include <cardinal/core/algorithm.hpp>     // cardinal::clamp
+#include <cardinal/core/std/cmath.hpp>
+#include <cardinal/core/std/algorithm.hpp>     // cardinal::clamp
 
 namespace cardinal::lighting {
 

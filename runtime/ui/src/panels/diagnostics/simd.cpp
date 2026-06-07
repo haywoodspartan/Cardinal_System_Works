@@ -8,16 +8,16 @@
 // =============================================================================
 #include <cardinal/ui/simd_panel.hpp>
 
-#include <cardinal/core/hal.hpp>
-#include <cardinal/core/simd_math.hpp>
+#include <cardinal/core/os/hal.hpp>
+#include <cardinal/core/math/simd_math.hpp>
 
 #include <cardinal/ui/imgui.hpp>
 
-#include <cardinal/core/chrono.hpp>
-#include <cardinal/core/cmath.hpp>
-#include <cardinal/core/cstdio.hpp>
-#include <cardinal/core/limits.hpp>
-#include <cardinal/core/containers.hpp>
+#include <cardinal/core/std/chrono.hpp>
+#include <cardinal/core/std/cmath.hpp>
+#include <cardinal/core/std/cstdio.hpp>
+#include <cardinal/core/std/limits.hpp>
+#include <cardinal/core/std/containers.hpp>
 
 namespace cardinal::ui {
 

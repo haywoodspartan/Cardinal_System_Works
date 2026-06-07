@@ -17,8 +17,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>     // cardinal::string, i64/u64, usize
-#include <cardinal/core/cstdio.hpp>    // cardinal::snprintf
-#include <cardinal/core/utility.hpp>   // cardinal::move
+#include <cardinal/core/std/cstdio.hpp>    // cardinal::snprintf
+#include <cardinal/core/std/utility.hpp>   // cardinal::move
 
 namespace cardinal::core {
 

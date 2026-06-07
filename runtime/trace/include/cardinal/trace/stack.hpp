@@ -15,7 +15,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // cardinal::string
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 
 namespace cardinal::trace {
 

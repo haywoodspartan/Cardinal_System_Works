@@ -22,8 +22,8 @@
 #include <cardinal/asset/asset.hpp>
 #include <cardinal/cook/cook.hpp>
 #include <cardinal/pack/pack.hpp>
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/utility.hpp>   // cardinal::move
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/std/utility.hpp>   // cardinal::move
 
 #include <filesystem>
 

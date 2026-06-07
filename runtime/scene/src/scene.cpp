@@ -3,17 +3,17 @@
 // =============================================================================
 #include <cardinal/scene/scene.hpp>
 
-#include <cardinal/core/async.hpp>
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/simd_math.hpp>
+#include <cardinal/core/sync/async.hpp>
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/math/simd_math.hpp>
 #include <cardinal/rhi/rhi.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/atomic.hpp>
-#include <cardinal/core/cmath.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/limits.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/atomic.hpp>
+#include <cardinal/core/std/cmath.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/limits.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::scene {
 

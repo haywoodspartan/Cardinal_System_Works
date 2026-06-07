@@ -11,8 +11,8 @@
 // independent set properties. Exit 0 = all pass.
 // =============================================================================
 
-#include <cardinal/core/id_gen.hpp>     // brings handle.hpp
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/handle/id_gen.hpp>     // brings handle.hpp
+#include <cardinal/core/diag/log.hpp>
 
 #include <thread>
 #include <type_traits>

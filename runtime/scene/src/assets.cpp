@@ -3,15 +3,15 @@
 // =============================================================================
 #include <cardinal/scene/assets.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/scene/scene.hpp>
 #include <cardinal/scene/terrain.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/containers.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/containers.hpp>
 #include <cardinal/core/dense_map.hpp>          // O(1) id index
 #include <cardinal/core/string/string_id.hpp>   // hashed asset-id key
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::scene {
 

@@ -1,4 +1,4 @@
-#include <cardinal/core/memory.hpp>
+#include <cardinal/core/budget/memory.hpp>
 
 namespace cardinal::memory {
 

@@ -1,17 +1,17 @@
 #include <cardinal/shader/shader.hpp>
 
-#include <cardinal/core/file_watcher.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/os/file_watcher.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/rhi/rhi.hpp>
 
-#include <cardinal/core/atomic.hpp>
-#include <cardinal/core/chrono.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/cstdio.hpp>
-#include <cardinal/core/filesystem.hpp>
-#include <cardinal/core/fstream.hpp>
-#include <cardinal/core/thread.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/atomic.hpp>
+#include <cardinal/core/std/chrono.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/cstdio.hpp>
+#include <cardinal/core/std/filesystem.hpp>
+#include <cardinal/core/std/fstream.hpp>
+#include <cardinal/core/std/thread.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace fs = cardinal::fs;
 

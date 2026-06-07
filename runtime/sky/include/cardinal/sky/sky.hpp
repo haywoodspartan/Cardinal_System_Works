@@ -24,8 +24,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/algorithm.hpp>   // cardinal::max
-#include <cardinal/core/containers.hpp>  // cardinal::vector
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::max
+#include <cardinal/core/std/containers.hpp>  // cardinal::vector
 #include <cardinal/scene/math.hpp>
 
 namespace cardinal::sky {

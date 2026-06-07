@@ -9,7 +9,7 @@
 // =============================================================================
 #include "studio_gizmo_math.hpp"
 
-#include <cardinal/core/cmath.hpp>   // cardinal::fabs / isfinite
+#include <cardinal/core/std/cmath.hpp>   // cardinal::fabs / isfinite
 
 namespace cardinal::ui::detail {
 

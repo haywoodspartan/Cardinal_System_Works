@@ -1,8 +1,8 @@
 #include <cardinal/edit/tex_ops.hpp>
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::min/max/clamp
-#include <cardinal/core/cmath.hpp>       // cardinal::floor/pow
-#include <cardinal/core/cstring.hpp>     // cardinal::strlen
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::min/max/clamp
+#include <cardinal/core/std/cmath.hpp>       // cardinal::floor/pow
+#include <cardinal/core/std/cstring.hpp>     // cardinal::strlen
 
 namespace cardinal::edit::tex_ops {
 

@@ -8,7 +8,7 @@
 // =============================================================================
 
 #include <cardinal/vm/vm.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <memory>
 #include <string>

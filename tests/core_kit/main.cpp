@@ -29,9 +29,9 @@
 #include <cardinal/core/spsc_ring.hpp>
 #include <cardinal/core/inplace_function.hpp>
 #include <cardinal/core/flags.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 #include <chrono>
 #include <thread>

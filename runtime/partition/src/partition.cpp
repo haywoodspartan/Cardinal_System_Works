@@ -1,12 +1,12 @@
 #include <cardinal/partition/partition.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
-#include <cardinal/core/algorithm.hpp>    // cardinal::max/sort/find
-#include <cardinal/core/cmath.hpp>        // cardinal::sqrt
-#include <cardinal/core/containers.hpp>   // cardinal::unordered_map
-#include <cardinal/core/limits.hpp>       // cardinal::numeric_limits
-#include <cardinal/core/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/algorithm.hpp>    // cardinal::max/sort/find
+#include <cardinal/core/std/cmath.hpp>        // cardinal::sqrt
+#include <cardinal/core/std/containers.hpp>   // cardinal::unordered_map
+#include <cardinal/core/std/limits.hpp>       // cardinal::numeric_limits
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
 
 namespace cardinal::partition {
 

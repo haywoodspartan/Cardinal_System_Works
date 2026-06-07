@@ -1,5 +1,5 @@
-#include <cardinal/core/kernel_object_attribute.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/os/kernel_object_attribute.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
 

@@ -3,13 +3,13 @@
 // =============================================================================
 #include "memory.hpp"
 
-#include <cardinal/core/budget.hpp>
-#include <cardinal/core/memory.hpp>
+#include <cardinal/core/budget/budget.hpp>
+#include <cardinal/core/budget/memory.hpp>
 
 #include <cardinal/ui/imgui.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/cstdio.hpp>
 
 namespace cardinal::ui::panels::memory_panel {
 

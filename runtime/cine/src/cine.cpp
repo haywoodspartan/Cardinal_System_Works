@@ -1,10 +1,10 @@
 #include <cardinal/cine/cine.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::clamp
-#include <cardinal/core/cmath.hpp>       // cardinal::isfinite
-#include <cardinal/core/traits.hpp>      // cardinal::decay_t/is_same_v
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::clamp
+#include <cardinal/core/std/cmath.hpp>       // cardinal::isfinite
+#include <cardinal/core/std/traits.hpp>      // cardinal::decay_t/is_same_v
 // cardinal::visit arrives via cine.hpp (core/utility.hpp)
 
 namespace cardinal::cine {

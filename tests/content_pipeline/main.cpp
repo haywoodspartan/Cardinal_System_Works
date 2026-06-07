@@ -22,7 +22,7 @@
 #include <cardinal/asset/asset.hpp>
 #include <cardinal/cook/cook.hpp>
 #include <cardinal/pack/pack.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <filesystem>
 #include <fstream>

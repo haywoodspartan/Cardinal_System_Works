@@ -27,12 +27,12 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/memory.hpp>
+#include <cardinal/core/budget/memory.hpp>
 #include <cardinal/rhi/rhi.hpp>
 #include <cardinal/scene/light.hpp>
 #include <cardinal/scene/scene.hpp>
 
-#include <cardinal/core/containers.hpp>
+#include <cardinal/core/std/containers.hpp>
 
 namespace cardinal::render {
 

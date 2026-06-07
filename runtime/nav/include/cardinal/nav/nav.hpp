@@ -18,9 +18,9 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // cardinal::unique_ptr
-#include <cardinal/core/limits.hpp>       // cardinal::numeric_limits
-#include <cardinal/core/utility.hpp>      // cardinal::pair
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/limits.hpp>       // cardinal::numeric_limits
+#include <cardinal/core/std/utility.hpp>      // cardinal::pair
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 
 namespace cardinal::nav {
 

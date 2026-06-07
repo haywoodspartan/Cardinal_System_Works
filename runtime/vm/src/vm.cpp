@@ -9,8 +9,8 @@
 // =============================================================================
 #include <cardinal/vm/vm.hpp>
 
-#include <cardinal/core/bit.hpp>       // cardinal::bit_cast (type-puns)
-#include <cardinal/core/utility.hpp>   // cardinal::move
+#include <cardinal/core/std/bit.hpp>       // cardinal::bit_cast (type-puns)
+#include <cardinal/core/std/utility.hpp>   // cardinal::move
 // cardinal::vector / cardinal::string / cardinal::unique_ptr arrive via
 // vm.hpp (core/containers.hpp + core/types.hpp).
 

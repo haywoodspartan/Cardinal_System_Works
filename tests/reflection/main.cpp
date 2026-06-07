@@ -17,7 +17,7 @@
 
 #include <cardinal/game/reflection.hpp>
 #include <cardinal/game/game_actor.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <memory>
 #include <string>

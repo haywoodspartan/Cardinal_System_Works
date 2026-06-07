@@ -3,8 +3,8 @@
 // =============================================================================
 #include <cardinal/trace/timeline.hpp>
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::min
-#include <cardinal/core/cstring.hpp>     // cardinal::strncpy
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::min
+#include <cardinal/core/std/cstring.hpp>     // cardinal::strncpy
 // cardinal::chrono / cardinal::atomic arrive via timeline.hpp
 
 #if defined(_WIN32)

@@ -1,8 +1,8 @@
 #include <cardinal/render/gpu_primitives.hpp>
 
-#include <cardinal/core/cmath.hpp>
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/cmath.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::render::gpu {
 

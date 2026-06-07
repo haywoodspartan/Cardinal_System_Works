@@ -1,7 +1,7 @@
 #include <cardinal/game/game.hpp>
 
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/std/utility.hpp>
 #include <cardinal/game/reflection.hpp>
 
 namespace cardinal::game {

@@ -1,4 +1,4 @@
-#include <cardinal/core/geom.hpp>
+#include <cardinal/core/math/geom.hpp>
 
 #include <algorithm>
 #include <cmath>

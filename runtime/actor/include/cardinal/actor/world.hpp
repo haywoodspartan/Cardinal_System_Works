@@ -17,9 +17,9 @@
 
 #include <cardinal/actor/actor.hpp>
 #include <cardinal/core/types.hpp>        // function/memory/string
-#include <cardinal/core/any.hpp>          // cardinal::any
-#include <cardinal/core/utility.hpp>      // cardinal::move
-#include <cardinal/core/containers.hpp>   // unordered_map/vector
+#include <cardinal/core/std/any.hpp>          // cardinal::any
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/containers.hpp>   // unordered_map/vector
 #include <cardinal/core/dense_map.hpp>    // dense_map (O(1) id index)
 #include <cardinal/core/small_vector.hpp> // small_vector (per-event subscriber lists)
 

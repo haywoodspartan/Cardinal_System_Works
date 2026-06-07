@@ -36,8 +36,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // function/memory/string
-#include <cardinal/core/future.hpp>       // cardinal::future/promise
-#include <cardinal/core/containers.hpp>   // unordered_map/vector
+#include <cardinal/core/std/future.hpp>       // cardinal::future/promise
+#include <cardinal/core/std/containers.hpp>   // unordered_map/vector
 #include <cardinal/cook/cook.hpp>
 
 namespace cardinal::pack {

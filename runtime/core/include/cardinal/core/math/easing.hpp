@@ -16,7 +16,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/cmath.hpp>     // cardinal::sin/cos/pow/sqrt/abs
+#include <cardinal/core/std/cmath.hpp>     // cardinal::sin/cos/pow/sqrt/abs
 #include <cardinal/core/math/math.hpp> // Vec3 (spline overloads)
 
 namespace cardinal::core::curve {

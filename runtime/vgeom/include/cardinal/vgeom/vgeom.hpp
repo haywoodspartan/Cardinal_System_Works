@@ -110,9 +110,9 @@
 // Public API
 // =============================================================================
 
-#include <cardinal/core/math.hpp>      // core::Vec3 / Vec4 / Mat4 (canonical types)
+#include <cardinal/core/math/math.hpp>      // core::Vec3 / Vec4 / Mat4 (canonical types)
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/containers.hpp>
+#include <cardinal/core/std/containers.hpp>
 
 namespace cardinal::vgeom {
 

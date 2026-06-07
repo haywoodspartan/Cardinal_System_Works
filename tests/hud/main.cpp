@@ -24,7 +24,7 @@
 // =============================================================================
 
 #include <cardinal/hud/hud.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 namespace {
 

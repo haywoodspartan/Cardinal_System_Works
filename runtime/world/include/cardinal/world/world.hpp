@@ -34,11 +34,11 @@
 // voxel scenes set both radii equal to get a sphere.
 // =============================================================================
 
-#include <cardinal/core/math.hpp>
-#include <cardinal/core/spatial.hpp>
+#include <cardinal/core/math/math.hpp>
+#include <cardinal/core/math/spatial.hpp>
 #include <cardinal/core/types.hpp>        // function/memory
-#include <cardinal/core/utility.hpp>      // cardinal::move
-#include <cardinal/core/containers.hpp>   // unordered_set/vector
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/containers.hpp>   // unordered_set/vector
 
 namespace cardinal::world {
 

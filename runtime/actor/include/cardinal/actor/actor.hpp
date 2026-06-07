@@ -14,9 +14,9 @@
 
 #include <cardinal/actor/component.hpp>
 #include <cardinal/core/types.hpp>        // memory/string
-#include <cardinal/core/utility.hpp>      // cardinal::move/forward
-#include <cardinal/core/cstring.hpp>      // cardinal::strcmp
-#include <cardinal/core/containers.hpp>   // unordered_map/vector
+#include <cardinal/core/std/utility.hpp>      // cardinal::move/forward
+#include <cardinal/core/std/cstring.hpp>      // cardinal::strcmp
+#include <cardinal/core/std/containers.hpp>   // unordered_map/vector
 
 namespace cardinal::actor {
 

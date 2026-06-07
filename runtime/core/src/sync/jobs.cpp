@@ -1,6 +1,6 @@
-#include <cardinal/core/jobs.hpp>
+#include <cardinal/core/sync/jobs.hpp>
 
-#include <cardinal/core/affinity.hpp>
+#include <cardinal/core/sync/affinity.hpp>
 #include <cardinal/core/platform.hpp>
 
 // Compiler optimization is disabled for this TU because MSVC's /O2 (and

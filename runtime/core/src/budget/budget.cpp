@@ -1,6 +1,6 @@
-#include <cardinal/core/budget.hpp>
+#include <cardinal/core/budget/budget.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <array>
 #include <atomic>

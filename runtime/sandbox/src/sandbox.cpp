@@ -11,16 +11,16 @@
 
 #include <cardinal/sandbox/sandbox.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/plugin/plugin.hpp>
 
-#include <cardinal/core/atomic.hpp>
-#include <cardinal/core/chrono.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/cstdio.hpp>
-#include <cardinal/core/cstring.hpp>
-#include <cardinal/core/filesystem.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/atomic.hpp>
+#include <cardinal/core/std/chrono.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/cstdio.hpp>
+#include <cardinal/core/std/cstring.hpp>
+#include <cardinal/core/std/filesystem.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 #if defined(_WIN32)
     #ifndef WIN32_LEAN_AND_MEAN

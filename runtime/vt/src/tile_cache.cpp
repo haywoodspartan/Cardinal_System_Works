@@ -1,8 +1,8 @@
 #include <cardinal/vt/tile_cache.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/cstring.hpp>
-#include <cardinal/core/thread.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/cstring.hpp>
+#include <cardinal/core/std/thread.hpp>
 
 namespace cardinal::vt {
 

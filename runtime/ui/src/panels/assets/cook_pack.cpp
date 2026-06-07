@@ -10,8 +10,8 @@
 
 #include <cardinal/ui/imgui.hpp>
 
-#include <cardinal/core/cstdio.hpp>
-#include <cardinal/core/fstream.hpp>
+#include <cardinal/core/std/cstdio.hpp>
+#include <cardinal/core/std/fstream.hpp>
 
 namespace cardinal::ui::panels::cook_pack_panel {
 

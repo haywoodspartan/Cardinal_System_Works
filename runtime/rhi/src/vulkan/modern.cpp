@@ -15,10 +15,10 @@
 
 #include "modern.h"
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/platform.hpp>
 
-#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/std/cstring.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
     #include <Windows.h>

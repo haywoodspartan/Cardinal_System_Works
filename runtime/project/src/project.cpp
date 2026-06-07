@@ -1,14 +1,14 @@
 #include <cardinal/project/project.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
-#include <cardinal/core/algorithm.hpp>    // cardinal::sort/remove
-#include <cardinal/core/cstdio.hpp>       // cardinal::snprintf
-#include <cardinal/core/filesystem.hpp>   // cardinal::fs, error_code
-#include <cardinal/core/fstream.hpp>      // ifstream/ofstream/ios/getline
-#include <cardinal/core/sstream.hpp>      // cardinal::stringstream
-#include <cardinal/core/utility.hpp>      // cardinal::move
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/algorithm.hpp>    // cardinal::sort/remove
+#include <cardinal/core/std/cstdio.hpp>       // cardinal::snprintf
+#include <cardinal/core/std/filesystem.hpp>   // cardinal::fs, error_code
+#include <cardinal/core/std/fstream.hpp>      // ifstream/ofstream/ios/getline
+#include <cardinal/core/std/sstream.hpp>      // cardinal::stringstream
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 
 namespace fs = cardinal::fs;
 

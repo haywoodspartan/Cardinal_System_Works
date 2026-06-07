@@ -9,7 +9,7 @@
 // =============================================================================
 #include <cardinal/script/engine.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/platform.hpp>
 #include <cardinal/trace/timeline.hpp>
 
@@ -23,14 +23,14 @@ extern "C" {
     #include <Windows.h>
 #endif
 
-#include <cardinal/core/chrono.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/cstdio.hpp>
-#include <cardinal/core/cstring.hpp>
-#include <cardinal/core/fstream.hpp>
-#include <cardinal/core/sstream.hpp>
-#include <cardinal/core/thread.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/chrono.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/cstdio.hpp>
+#include <cardinal/core/std/cstring.hpp>
+#include <cardinal/core/std/fstream.hpp>
+#include <cardinal/core/std/sstream.hpp>
+#include <cardinal/core/std/thread.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::script {
 

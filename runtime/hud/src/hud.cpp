@@ -2,9 +2,9 @@
 
 #include <imgui.h>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/cmath.hpp>       // cardinal::isfinite
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/cmath.hpp>       // cardinal::isfinite
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::hud {
 

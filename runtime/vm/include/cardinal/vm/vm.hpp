@@ -58,7 +58,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>       // u8..i64, cardinal::string/unique_ptr
-#include <cardinal/core/containers.hpp>  // cardinal::vector
+#include <cardinal/core/std/containers.hpp>  // cardinal::vector
 
 namespace cardinal::vm {
 

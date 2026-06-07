@@ -24,7 +24,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // foundation: unique_ptr / u32 / …
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 
 namespace cardinal::net {
 

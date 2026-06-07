@@ -24,10 +24,10 @@
 #include <cardinal/render/frame_pacer.hpp>
 #include <cardinal/render/aegis_runner.hpp>
 #include <cardinal/render/pipeline.hpp>
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/utility.hpp>
-#include <cardinal/core/simd_math.hpp>
-#include <cardinal/core/geom.hpp>
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/std/utility.hpp>
+#include <cardinal/core/math/simd_math.hpp>
+#include <cardinal/core/math/geom.hpp>
 
 #include <limits>
 

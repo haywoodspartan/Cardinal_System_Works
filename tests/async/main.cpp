@@ -19,10 +19,10 @@
 // value correctness regardless of who wins.
 // =============================================================================
 
-#include <cardinal/core/async.hpp>
-#include <cardinal/core/jobs.hpp>
-#include <cardinal/core/topology.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/sync/async.hpp>
+#include <cardinal/core/sync/jobs.hpp>
+#include <cardinal/core/sync/topology.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <atomic>
 #include <functional>

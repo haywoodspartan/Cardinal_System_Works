@@ -16,14 +16,14 @@
 #include "sample_types.hpp"
 
 #include <cardinal/console/console.hpp>
-#include <cardinal/core/async.hpp>
-#include <cardinal/core/budget.hpp>
-#include <cardinal/core/crash.hpp>
-#include <cardinal/core/frame_pacer.hpp>
-#include <cardinal/core/jobs.hpp>
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/memory.hpp>
-#include <cardinal/core/topology.hpp>
+#include <cardinal/core/sync/async.hpp>
+#include <cardinal/core/budget/budget.hpp>
+#include <cardinal/core/diag/crash.hpp>
+#include <cardinal/core/sync/frame_pacer.hpp>
+#include <cardinal/core/sync/jobs.hpp>
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/budget/memory.hpp>
+#include <cardinal/core/sync/topology.hpp>
 #include <cardinal/cppscript/cppscript.hpp>
 #include <cardinal/edit/brush.hpp>
 #include <cardinal/edit/editor_mode.hpp>
@@ -44,7 +44,7 @@
 #include <cardinal/game/reflection.hpp>
 #include <cardinal/sky/sky.hpp>
 #include <cardinal/scene/light.hpp>
-#include <cardinal/core/autoscaler.hpp>
+#include <cardinal/core/sync/autoscaler.hpp>
 #include <cardinal/input/input.hpp>
 #include <cardinal/serial/serial.hpp>
 #include <cardinal/particles/particles.hpp>
@@ -57,9 +57,9 @@
 #include <cardinal/asset/asset.hpp>
 #include <cardinal/import/import.hpp>      // DCC / Megascans import (File>Import)
 #include <cardinal/import/to_asset.hpp>    // ImportScene -> engine asset structs
-#include <cardinal/core/hal.hpp>
-#include <cardinal/core/io.hpp>
-#include <cardinal/core/geom.hpp>
+#include <cardinal/core/os/hal.hpp>
+#include <cardinal/core/os/io.hpp>
+#include <cardinal/core/math/geom.hpp>
 #include <cardinal/partition/partition.hpp>
 #include <cardinal/level/level.hpp>
 #include <cardinal/mass/mass.hpp>

@@ -25,7 +25,7 @@
 // =============================================================================
 
 #include <cardinal/render/precision.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <array>
 #include <limits>

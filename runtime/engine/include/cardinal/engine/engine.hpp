@@ -36,8 +36,8 @@
 // Editor-flavoured host:  use cardinal::ui::StudioEngine instead.
 // =============================================================================
 
-#include <cardinal/core/frame_pacer.hpp>
-#include <cardinal/core/time.hpp>
+#include <cardinal/core/sync/frame_pacer.hpp>
+#include <cardinal/core/clock/time.hpp>
 #include <cardinal/core/types.hpp>   // function/unique_ptr/string vocabulary
 
 namespace cardinal::rhi      { class Device; class Swapchain; }

@@ -7,7 +7,7 @@
 
 #include <cardinal/ui/imgui.hpp>
 
-#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/std/cstring.hpp>
 
 namespace cardinal::ui::panels::inspector_panel {
 

@@ -17,9 +17,9 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // cardinal::string
-#include <cardinal/core/atomic.hpp>       // cardinal::atomic
-#include <cardinal/core/chrono.hpp>       // cardinal::chrono
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/atomic.hpp>       // cardinal::atomic
+#include <cardinal/core/std/chrono.hpp>       // cardinal::chrono
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 
 namespace cardinal::trace {
 

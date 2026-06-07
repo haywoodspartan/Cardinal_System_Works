@@ -16,7 +16,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // memory/string
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 #include <cardinal/scene/math.hpp>
 
 namespace cardinal::actor {

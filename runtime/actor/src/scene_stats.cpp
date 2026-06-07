@@ -4,7 +4,7 @@
 #include <cardinal/actor/scene_stats.hpp>
 
 #include <cardinal/actor/world.hpp>
-#include <cardinal/core/algorithm.hpp>   // cardinal::sort
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::sort
 
 namespace cardinal::actor {
 

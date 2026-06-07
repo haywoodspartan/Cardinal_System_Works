@@ -12,13 +12,13 @@
 // =============================================================================
 
 #include <cardinal/audio/audio.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
 
-#include <cardinal/core/atomic.hpp>
-#include <cardinal/core/thread.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/atomic.hpp>
+#include <cardinal/core/std/thread.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 #ifndef WIN32_LEAN_AND_MEAN          // already defined project-wide
 #define WIN32_LEAN_AND_MEAN

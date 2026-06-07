@@ -2,7 +2,7 @@
 
 #if CARDINAL_PLATFORM_LINUX
 
-#include <cardinal/core/topology.hpp>
+#include <cardinal/core/sync/topology.hpp>
 
 #include <algorithm>
 #include <filesystem>

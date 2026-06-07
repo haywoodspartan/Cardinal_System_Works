@@ -26,7 +26,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // foundation: string / u32 / …
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 #include <cardinal/scene/math.hpp>
 
 // NOTE: cardinal::import is deliberately core+scene only (NOT asset).

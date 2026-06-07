@@ -9,9 +9,9 @@
 #include <cardinal/actor/world.hpp>      // World (actor/layout commands)
 #include <cardinal/actor/validation.hpp> // validate_world / auto_fix_world
 #include <cardinal/edit/undo.hpp>        // UndoStack (edit.undo / edit.redo)
-#include <cardinal/core/cmath.hpp>     // cardinal::round
-#include <cardinal/core/algorithm.hpp> // cardinal::sort
-#include <cardinal/core/utility.hpp>   // cardinal::move
+#include <cardinal/core/std/cmath.hpp>     // cardinal::round
+#include <cardinal/core/std/algorithm.hpp> // cardinal::sort
+#include <cardinal/core/std/utility.hpp>   // cardinal::move
 
 namespace cardinal::cmd {
 

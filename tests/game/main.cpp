@@ -25,7 +25,7 @@
 #include <cardinal/game/reflection.hpp>
 #include <cardinal/sim/sim.hpp>
 #include <cardinal/actor/world.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 namespace cg = cardinal::game;
 using Vec3 = cardinal::scene::Vec3;

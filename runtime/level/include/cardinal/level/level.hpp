@@ -24,9 +24,9 @@
 
 #include <cardinal/actor/world.hpp>
 #include <cardinal/core/types.hpp>        // function/memory/string
-#include <cardinal/core/utility.hpp>      // cardinal::move
-#include <cardinal/core/containers.hpp>   // unordered_map/vector
-#include <cardinal/core/geom.hpp>
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/containers.hpp>   // unordered_map/vector
+#include <cardinal/core/math/geom.hpp>
 #include <cardinal/scene/math.hpp>
 
 namespace cardinal::level {

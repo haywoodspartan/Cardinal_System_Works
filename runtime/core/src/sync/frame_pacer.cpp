@@ -1,7 +1,7 @@
 // =============================================================================
 // Cardinal — frame pacer implementation.
 // =============================================================================
-#include <cardinal/core/frame_pacer.hpp>
+#include <cardinal/core/sync/frame_pacer.hpp>
 #include <cardinal/core/platform.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS

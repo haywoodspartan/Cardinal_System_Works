@@ -1,12 +1,12 @@
 #include <cardinal/sim/sim.hpp>
 
 #include <cardinal/actor/component.hpp>
-#include <cardinal/core/async.hpp>
-#include <cardinal/core/cmath.hpp>       // cardinal::isfinite
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/sync/async.hpp>
+#include <cardinal/core/std/cmath.hpp>       // cardinal::isfinite
+#include <cardinal/core/diag/log.hpp>
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::remove_if/max
-#include <cardinal/core/utility.hpp>     // cardinal::move
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::remove_if/max
+#include <cardinal/core/std/utility.hpp>     // cardinal::move
 // cardinal::make_unique/vector/function arrive via sim.hpp
 
 namespace cardinal::sim {

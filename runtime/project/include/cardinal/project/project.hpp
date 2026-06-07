@@ -19,7 +19,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // function/memory/string
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 
 namespace cardinal::project {
 

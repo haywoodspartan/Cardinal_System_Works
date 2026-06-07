@@ -1,6 +1,6 @@
 #pragma once
 
-#include <cardinal/core/topology.hpp>
+#include <cardinal/core/sync/topology.hpp>
 #include <cardinal/core/types.hpp>
 
 #include <vector>

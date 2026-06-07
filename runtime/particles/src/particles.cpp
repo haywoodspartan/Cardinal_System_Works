@@ -1,8 +1,8 @@
 #include <cardinal/particles/particles.hpp>
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::clamp/remove_if
-#include <cardinal/core/cmath.hpp>       // cardinal scalar math
-#include <cardinal/core/utility.hpp>     // cardinal::move
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::clamp/remove_if
+#include <cardinal/core/std/cmath.hpp>       // cardinal scalar math
+#include <cardinal/core/std/utility.hpp>     // cardinal::move
 
 namespace cardinal::particles {
 

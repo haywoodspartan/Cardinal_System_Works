@@ -4,8 +4,8 @@
 #include "world_systems.hpp"
 
 #include <cardinal/ai/ai.hpp>
-#include <cardinal/core/hal.hpp>
-#include <cardinal/core/io.hpp>
+#include <cardinal/core/os/hal.hpp>
+#include <cardinal/core/os/io.hpp>
 #include <cardinal/level/level.hpp>
 #include <cardinal/mass/mass.hpp>
 #include <cardinal/navmesh/navmesh.hpp>
@@ -13,7 +13,7 @@
 
 #include <cardinal/ui/imgui.hpp>
 
-#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/std/cstdio.hpp>
 
 namespace cardinal::ui::panels::world_systems_panel {
 

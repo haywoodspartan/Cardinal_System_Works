@@ -3,9 +3,9 @@
 // =============================================================================
 #include <cardinal/render/pipeline.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
-#include <cardinal/core/cstring.hpp>
+#include <cardinal/core/std/cstring.hpp>
 
 namespace cardinal::render {
 

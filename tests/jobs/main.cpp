@@ -11,9 +11,9 @@
 // the work submitted. Exit 0 = all pass.
 // =============================================================================
 
-#include <cardinal/core/jobs.hpp>
-#include <cardinal/core/topology.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/sync/jobs.hpp>
+#include <cardinal/core/sync/topology.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <atomic>
 #include <vector>

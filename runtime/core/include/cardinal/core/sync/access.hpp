@@ -40,7 +40,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/atomic.hpp>
+#include <cardinal/core/std/atomic.hpp>
 #include <cardinal/core/sync/lock.hpp>
 
 namespace cardinal::core {

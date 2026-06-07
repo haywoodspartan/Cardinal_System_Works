@@ -24,8 +24,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // function/memory/string
-#include <cardinal/core/containers.hpp>   // unordered_map/unordered_set/vector
-#include <cardinal/core/geom.hpp>
+#include <cardinal/core/std/containers.hpp>   // unordered_map/unordered_set/vector
+#include <cardinal/core/math/geom.hpp>
 #include <cardinal/scene/math.hpp>
 
 namespace cardinal::partition {

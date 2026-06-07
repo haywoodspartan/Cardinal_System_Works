@@ -14,7 +14,7 @@
 // =============================================================================
 
 #include <cardinal/nav/nav.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <vector>
 

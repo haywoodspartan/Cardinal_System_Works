@@ -19,8 +19,8 @@
 #if defined(_WIN32) && !defined(CARDINAL_NO_D3D12)
 
 #include "internal.hpp"
-#include <cardinal/core/linear_allocator.hpp>
-#include <cardinal/core/arena_allocator.hpp>
+#include <cardinal/core/alloc/linear_allocator.hpp>
+#include <cardinal/core/alloc/arena_allocator.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
 

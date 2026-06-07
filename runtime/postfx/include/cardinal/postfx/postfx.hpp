@@ -28,8 +28,8 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/memory.hpp>
-#include <cardinal/core/containers.hpp>
+#include <cardinal/core/budget/memory.hpp>
+#include <cardinal/core/std/containers.hpp>
 #include <cardinal/render/pipeline.hpp>   // for render::Knob
 
 namespace cardinal::postfx {

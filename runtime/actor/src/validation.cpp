@@ -4,8 +4,8 @@
 #include <cardinal/actor/validation.hpp>
 
 #include <cardinal/actor/world.hpp>
-#include <cardinal/core/cstdio.hpp>      // cardinal::snprintf
-#include <cardinal/core/cmath.hpp>       // cardinal::isfinite
+#include <cardinal/core/std/cstdio.hpp>      // cardinal::snprintf
+#include <cardinal/core/std/cmath.hpp>       // cardinal::isfinite
 
 namespace cardinal::actor {
 

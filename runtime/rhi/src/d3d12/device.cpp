@@ -12,7 +12,7 @@
 // =============================================================================
 
 #include <cardinal/rhi/rhi.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/platform.hpp>
 
 #if !CARDINAL_PLATFORM_WINDOWS

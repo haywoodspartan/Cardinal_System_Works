@@ -12,7 +12,7 @@
 //                   Single-threaded — wrap externally for cross-thread use.
 // =============================================================================
 
-#include <cardinal/core/handle.hpp>
+#include <cardinal/core/handle/handle.hpp>
 #include <cardinal/core/types.hpp>
 
 #include <atomic>

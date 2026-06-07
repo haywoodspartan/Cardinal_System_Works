@@ -1,6 +1,6 @@
 #include <cardinal/cook/cook.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/import/import.hpp>   // robust OBJ/glTF DCC ingest
 #include <cardinal/edit/mesh_ops.hpp>
 #include <cardinal/edit/tex_ops.hpp>
@@ -9,16 +9,16 @@
 #include <cardinal/scene/scene.hpp>           // for scene::Vertex (used by mesh_ops)
 #include <cardinal/shader/shader.hpp>
 
-#include <cardinal/core/algorithm.hpp>    // cardinal::transform
-#include <cardinal/core/bit.hpp>          // cardinal::bit_cast
-#include <cardinal/core/cctype.hpp>       // cardinal::tolower
-#include <cardinal/core/cstdio.hpp>       // cardinal::sscanf
-#include <cardinal/core/cstdlib.hpp>      // cardinal::strtoull
-#include <cardinal/core/cstring.hpp>      // cardinal::memcmp
-#include <cardinal/core/filesystem.hpp>   // cardinal::fs
-#include <cardinal/core/fstream.hpp>      // cardinal::ifstream/ofstream
-#include <cardinal/core/utility.hpp>      // cardinal::move
-#include <cardinal/core/containers.hpp>   // cardinal::vector
+#include <cardinal/core/std/algorithm.hpp>    // cardinal::transform
+#include <cardinal/core/std/bit.hpp>          // cardinal::bit_cast
+#include <cardinal/core/std/cctype.hpp>       // cardinal::tolower
+#include <cardinal/core/std/cstdio.hpp>       // cardinal::sscanf
+#include <cardinal/core/std/cstdlib.hpp>      // cardinal::strtoull
+#include <cardinal/core/std/cstring.hpp>      // cardinal::memcmp
+#include <cardinal/core/std/filesystem.hpp>   // cardinal::fs
+#include <cardinal/core/std/fstream.hpp>      // cardinal::ifstream/ofstream
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/containers.hpp>   // cardinal::vector
 
 namespace fs = cardinal::fs;
 

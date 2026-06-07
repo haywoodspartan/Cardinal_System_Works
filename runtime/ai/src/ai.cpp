@@ -1,7 +1,7 @@
 #include <cardinal/ai/ai.hpp>
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::sort/remove_if
-#include <cardinal/core/cmath.hpp>       // cardinal::sqrt
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::sort/remove_if
+#include <cardinal/core/std/cmath.hpp>       // cardinal::sqrt
 // cardinal::get_if/variant/move arrive via ai.hpp (core/utility.hpp)
 
 namespace cardinal::ai {

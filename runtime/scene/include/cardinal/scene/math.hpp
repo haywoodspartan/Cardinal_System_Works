@@ -4,7 +4,7 @@
 // Cardinal Scene — math.
 //
 // As of the core-types unification, scene::Vec3 / Vec4 / Mat4 / Quat are
-// `using` aliases of the canonical types in <cardinal/core/math.hpp>. This
+// `using` aliases of the canonical types in <cardinal/core/math/math.hpp>. This
 // header exists for back-compat (a lot of code says scn::Vec3 / scn::Mat4)
 // and to add scene-specific helpers (Ray, ray_*_intersect, unproject).
 //
@@ -13,11 +13,11 @@
 // uploads all see the same { f32 x, y, z } layout).
 // =============================================================================
 
-#include <cardinal/core/math.hpp>
-#include <cardinal/core/spatial.hpp>
+#include <cardinal/core/math/math.hpp>
+#include <cardinal/core/math/spatial.hpp>
 #include <cardinal/core/types.hpp>
 
-#include <cardinal/core/cmath.hpp>
+#include <cardinal/core/std/cmath.hpp>
 
 namespace cardinal::scene {
 

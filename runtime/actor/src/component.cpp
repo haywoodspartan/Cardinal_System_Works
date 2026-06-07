@@ -1,11 +1,11 @@
 #include <cardinal/actor/component.hpp>
 #include <cardinal/actor/actor.hpp>      // Actor::get_component<> (PlayerController)
 
-#include <cardinal/core/algorithm.hpp>   // cardinal::find/remove/clamp/min/max
-#include <cardinal/core/cmath.hpp>       // cardinal::sin/cos/atan2/asin/sqrt
-#include <cardinal/core/utility.hpp>     // cardinal::move
-#include <cardinal/core/cstdio.hpp>      // cardinal::snprintf
-#include <cardinal/core/cstdlib.hpp>     // cardinal::strtof / strtol
+#include <cardinal/core/std/algorithm.hpp>   // cardinal::find/remove/clamp/min/max
+#include <cardinal/core/std/cmath.hpp>       // cardinal::sin/cos/atan2/asin/sqrt
+#include <cardinal/core/std/utility.hpp>     // cardinal::move
+#include <cardinal/core/std/cstdio.hpp>      // cardinal::snprintf
+#include <cardinal/core/std/cstdlib.hpp>     // cardinal::strtof / strtol
 
 namespace cardinal::actor {
 

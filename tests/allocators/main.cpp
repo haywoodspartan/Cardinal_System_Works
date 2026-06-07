@@ -2,9 +2,9 @@
 // Cardinal — LinearAllocator / PoolAllocator regression suite.
 // =============================================================================
 
-#include <cardinal/core/linear_allocator.hpp>
-#include <cardinal/core/pool_allocator.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/alloc/linear_allocator.hpp>
+#include <cardinal/core/alloc/pool_allocator.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <atomic>
 #include <thread>

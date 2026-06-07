@@ -20,7 +20,7 @@
 // =============================================================================
 
 #include <cardinal/rhi/rhi.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/platform.hpp>
 
 #if defined(_WIN32)
@@ -57,11 +57,11 @@
     #endif
 #endif
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/cstdio.hpp>
-#include <cardinal/core/cstring.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/cstdio.hpp>
+#include <cardinal/core/std/cstring.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::rhi {
 

@@ -25,10 +25,10 @@
 // Exit 0 = all pass.
 // =============================================================================
 
-#include <cardinal/core/autoscaler.hpp>
-#include <cardinal/core/budget.hpp>
-#include <cardinal/core/memory.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/sync/autoscaler.hpp>
+#include <cardinal/core/budget/budget.hpp>
+#include <cardinal/core/budget/memory.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <string>
 #include <vector>

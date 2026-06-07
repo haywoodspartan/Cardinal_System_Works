@@ -24,7 +24,7 @@
 #include <cardinal/actor/world.hpp>
 #include <cardinal/game/game.hpp>
 #include <cardinal/sim/sim.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <filesystem>
 #include <vector>

@@ -12,8 +12,8 @@
 #include <cardinal/ui/studio_engine.hpp>
 #include <cardinal/ui/studio.hpp>
 
-#include <cardinal/core/frame_pacer.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/sync/frame_pacer.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/plugin/plugin.hpp>
 #include <cardinal/rhi/rhi.hpp>
 #include <cardinal/scene/fly_camera.hpp>
@@ -23,8 +23,8 @@
 #include <cardinal/ui/imgui.hpp>
 #include <imgui_internal.h>
 
-#include <cardinal/core/cstring.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/cstring.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::ui {
 

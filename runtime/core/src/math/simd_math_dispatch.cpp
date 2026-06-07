@@ -12,10 +12,10 @@
 // every public-API call also nudges init() so a thread that beats
 // static-init ordering still gets a valid binding.
 // =============================================================================
-#include <cardinal/core/simd_math.hpp>
+#include <cardinal/core/math/simd_math.hpp>
 
-#include <cardinal/core/hal.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/os/hal.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <atomic>
 

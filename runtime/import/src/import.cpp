@@ -10,17 +10,17 @@
 // =============================================================================
 
 #include <cardinal/import/import.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
-#include <cardinal/core/algorithm.hpp>    // cardinal::min/max/sort
-#include <cardinal/core/cctype.hpp>       // cardinal::tolower
-#include <cardinal/core/cmath.hpp>        // cardinal::sqrt
-#include <cardinal/core/cstdlib.hpp>      // cardinal::strtol
-#include <cardinal/core/cstring.hpp>      // cardinal raw byte ops
-#include <cardinal/core/fstream.hpp>      // cardinal::ifstream/ios/getline
-#include <cardinal/core/sstream.hpp>      // cardinal::istringstream/ostringstream
-#include <cardinal/core/utility.hpp>      // cardinal::move
-#include <cardinal/core/containers.hpp>   // cardinal::unordered_map/vector
+#include <cardinal/core/std/algorithm.hpp>    // cardinal::min/max/sort
+#include <cardinal/core/std/cctype.hpp>       // cardinal::tolower
+#include <cardinal/core/std/cmath.hpp>        // cardinal::sqrt
+#include <cardinal/core/std/cstdlib.hpp>      // cardinal::strtol
+#include <cardinal/core/std/cstring.hpp>      // cardinal raw byte ops
+#include <cardinal/core/std/fstream.hpp>      // cardinal::ifstream/ios/getline
+#include <cardinal/core/std/sstream.hpp>      // cardinal::istringstream/ostringstream
+#include <cardinal/core/std/utility.hpp>      // cardinal::move
+#include <cardinal/core/std/containers.hpp>   // cardinal::unordered_map/vector
 
 namespace cardinal::import {
 

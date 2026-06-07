@@ -35,7 +35,7 @@
 // =============================================================================
 
 #include <cardinal/edit/tex_ops.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <vector>
 

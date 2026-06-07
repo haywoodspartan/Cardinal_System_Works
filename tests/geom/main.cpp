@@ -11,9 +11,9 @@
 // the test can't share a bug with the implementation. Exit 0 = pass.
 // =============================================================================
 
-#include <cardinal/core/geom.hpp>
-#include <cardinal/core/math.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/math/geom.hpp>
+#include <cardinal/core/math/math.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <vector>
 

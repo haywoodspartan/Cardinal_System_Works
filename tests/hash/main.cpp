@@ -22,8 +22,8 @@
 // little-endian (the engine targets x64 / ARM64 LE). Exit 0 = all pass.
 // =============================================================================
 
-#include <cardinal/core/hash.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/std/hash.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 namespace {
 

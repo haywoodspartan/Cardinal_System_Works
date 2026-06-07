@@ -22,7 +22,7 @@
 
 #include <cardinal/core/types.hpp>
 #include <cardinal/core/std/hash.hpp>   // splitmix64
-#include <cardinal/core/cmath.hpp>      // cardinal::floor
+#include <cardinal/core/std/cmath.hpp>      // cardinal::floor
 
 namespace cardinal::core::noise {
 

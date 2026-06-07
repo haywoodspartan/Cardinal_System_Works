@@ -15,9 +15,9 @@
 // Exit 0 = all pass.
 // =============================================================================
 
-#include <cardinal/core/kernel_object_attribute.hpp>
-#include <cardinal/core/log.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/os/kernel_object_attribute.hpp>
+#include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
 #include <Windows.h>

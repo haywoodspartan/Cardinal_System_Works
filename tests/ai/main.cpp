@@ -26,7 +26,7 @@
 // =============================================================================
 
 #include <cardinal/ai/ai.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <string>
 #include <utility>          // std::move

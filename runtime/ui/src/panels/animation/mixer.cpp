@@ -7,9 +7,9 @@
 
 #include <cardinal/ui/imgui.hpp>
 
-#include <cardinal/core/algorithm.hpp>
-#include <cardinal/core/containers.hpp>
-#include <cardinal/core/utility.hpp>
+#include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/containers.hpp>
+#include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::ui::panels::mixer_panel {
 

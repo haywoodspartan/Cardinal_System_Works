@@ -4,7 +4,7 @@
 #include "editor_modes.hpp"
 
 #include <cardinal/edit/editor_mode.hpp>
-#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/std/cstdio.hpp>
 
 #include <cardinal/ui/imgui.hpp>
 

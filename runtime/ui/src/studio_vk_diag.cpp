@@ -10,7 +10,7 @@
 
 #include <cardinal/core/types.hpp>   // u64 / usize / i64
 #include <cardinal/core/std.hpp>     // cardinal::mutex/lock_guard/array/string
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/trace/stack.hpp>
 
 namespace cardinal::ui::detail {

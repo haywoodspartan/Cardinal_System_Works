@@ -19,7 +19,7 @@
 // is just ergonomics + bookkeeping.
 // =============================================================================
 
-#include <cardinal/core/jobs.hpp>
+#include <cardinal/core/sync/jobs.hpp>
 #include <cardinal/core/types.hpp>
 
 #include <atomic>

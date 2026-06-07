@@ -11,8 +11,8 @@
 // deterministic. Exit 0 = all pass.
 // =============================================================================
 
-#include <cardinal/core/spatial.hpp>
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/math/spatial.hpp>
+#include <cardinal/core/diag/log.hpp>
 
 #include <type_traits>
 #include <unordered_set>

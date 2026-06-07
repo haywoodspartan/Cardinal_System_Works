@@ -7,7 +7,7 @@
 
 #include <cardinal/ui/imgui.hpp>
 
-#include <cardinal/core/cstdio.hpp>
+#include <cardinal/core/std/cstdio.hpp>
 
 namespace cardinal::ui::panels::shader_compiler_panel {
 

@@ -2,9 +2,9 @@
 
 #include <cardinal/scene/scene.hpp>
 
-#include <cardinal/core/algorithm.hpp>    // cardinal::min/max/find
-#include <cardinal/core/cmath.hpp>        // cardinal::sqrt/sin/cos/floor
-#include <cardinal/core/containers.hpp>   // cardinal::unordered_map
+#include <cardinal/core/std/algorithm.hpp>    // cardinal::min/max/find
+#include <cardinal/core/std/cmath.hpp>        // cardinal::sqrt/sin/cos/floor
+#include <cardinal/core/std/containers.hpp>   // cardinal::unordered_map
 
 namespace cardinal::edit::mesh_ops {
 

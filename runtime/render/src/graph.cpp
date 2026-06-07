@@ -1,11 +1,11 @@
 #include <cardinal/render/graph.hpp>
 
-#include <cardinal/core/algorithm.hpp>      // cardinal::clamp
-#include <cardinal/core/cstring.hpp>        // cardinal::strcmp / strlen
-#include <cardinal/core/utility.hpp>        // cardinal::move
-#include <cardinal/core/async.hpp>          // cardinal::async::parallel_for_each
-#include <cardinal/core/linear_allocator.hpp>   // per-compile transient arena
-#include <cardinal/core/arena_allocator.hpp>    // STL adapter for the arena
+#include <cardinal/core/std/algorithm.hpp>      // cardinal::clamp
+#include <cardinal/core/std/cstring.hpp>        // cardinal::strcmp / strlen
+#include <cardinal/core/std/utility.hpp>        // cardinal::move
+#include <cardinal/core/sync/async.hpp>          // cardinal::async::parallel_for_each
+#include <cardinal/core/alloc/linear_allocator.hpp>   // per-compile transient arena
+#include <cardinal/core/alloc/arena_allocator.hpp>    // STL adapter for the arena
 #include <cardinal/rhi/rhi.hpp>             // rhi::Device + Swapchain (for RhiBackend)
 
 #include <chrono>

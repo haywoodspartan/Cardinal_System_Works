@@ -35,7 +35,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>        // cardinal::unique_ptr/string
-#include <cardinal/core/containers.hpp>   // unordered_map/vector
+#include <cardinal/core/std/containers.hpp>   // unordered_map/vector
 
 namespace cardinal::actor { class World; }
 namespace cardinal::game  { class Game;  }

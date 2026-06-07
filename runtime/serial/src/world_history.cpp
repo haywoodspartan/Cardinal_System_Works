@@ -6,7 +6,7 @@
 
 #include <cardinal/game/game.hpp>
 #include <cardinal/actor/world.hpp>
-#include <cardinal/core/utility.hpp>   // cardinal::move
+#include <cardinal/core/std/utility.hpp>   // cardinal::move
 
 namespace cardinal::serial {
 

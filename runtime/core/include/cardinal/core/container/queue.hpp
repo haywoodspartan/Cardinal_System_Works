@@ -23,7 +23,7 @@
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
-#include <cardinal/core/containers.hpp>     // cardinal::vector / cardinal::deque
+#include <cardinal/core/std/containers.hpp>     // cardinal::vector / cardinal::deque
 #include <cardinal/core/sync/lock.hpp>
 
 #include <deque>

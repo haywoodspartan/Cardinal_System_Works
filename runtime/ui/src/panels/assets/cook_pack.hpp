@@ -10,7 +10,7 @@
 
 #include <cardinal/core/types.hpp>
 #include <cardinal/cook/cook.hpp>      // CookResult is held by value in State
-#include <cardinal/core/containers.hpp>
+#include <cardinal/core/std/containers.hpp>
 
 namespace cardinal::project { class Project; }
 namespace cardinal::pack    { class Archive; }

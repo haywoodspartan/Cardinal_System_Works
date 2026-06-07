@@ -22,7 +22,7 @@
 // reaction onto worker threads, that's the subsystem's call.
 // =============================================================================
 
-#include <cardinal/core/memory.hpp>
+#include <cardinal/core/budget/memory.hpp>
 #include <cardinal/core/types.hpp>
 
 #include <functional>

@@ -5,9 +5,9 @@
 // overflow — once full, we drop and log once. JSON serialisation is
 // inline (no std::format / nlohmann::json dependency).
 // =============================================================================
-#include <cardinal/core/trace_export.hpp>
+#include <cardinal/core/diag/trace_export.hpp>
 
-#include <cardinal/core/log.hpp>
+#include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/platform.hpp>
 
 #include <atomic>

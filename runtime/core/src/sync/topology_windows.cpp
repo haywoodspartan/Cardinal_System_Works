@@ -2,7 +2,7 @@
 
 #if CARDINAL_PLATFORM_WINDOWS
 
-#include <cardinal/core/topology.hpp>
+#include <cardinal/core/sync/topology.hpp>
 
 #include <Windows.h>
 
