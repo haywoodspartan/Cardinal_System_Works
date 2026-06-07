@@ -42,6 +42,20 @@ using cardinal::i64;
 using cardinal::f64;
 using cardinal::usize;
 
+// Find a knob on the AEGIS pipeline by id (nullptr when AEGIS isn't the
+// registered pipeline or the knob is absent) — bridges AEGIS knobs to
+// r.aegis.* cvars so they're settable from the console + Options window +
+// persisted via config.save. The bridge's apply_config() reads the knob each
+// frame, so a cvar set propagates into the live AegisConfig.
+static rnd::Knob* aegis_knob(rnd::Registry* pipelines, const char* id) {
+    if (!pipelines) return nullptr;
+    for (auto* p : pipelines->all())
+        if (p && p->id() == rnd::PipelineId::Aegis)
+            for (auto& k : p->knobs())
+                if (k.id == id) return &k;
+    return nullptr;
+}
+
 void register_engine_console_commands(const ConsoleSetupContext& ctx) {
     // Snapshot pointers locally so each lambda captures by value and stays
     // independent of the ctx parameter's lifetime.
@@ -149,6 +163,53 @@ void register_engine_console_commands(const ConsoleSetupContext& ctx) {
                     static_cast<unsigned>(p->id()), p->name(), p->description());
             }
         });
+
+    // ---- AEGIS Pipeline 2.0 GPU features + precision tier (cvars) ----------
+    // Surface the AEGIS knobs as r.aegis.* cvars so the GPU features
+    // (DirectStorage / Bindless / Async / VRS / FP8 / FP4) + quality knobs are
+    // settable from the console AND the Options/Settings window AND persisted
+    // via config.save. Each bridges to the live AEGIS knob; the pipeline's
+    // apply_config() then propagates the change into the AegisConfig each frame
+    // (so e.g. `set r.aegis.geometry_tier 3` escalates the tier to FP4).
+    CARDINAL_CVAR_BOOL("r.aegis.async_compute",
+        "AEGIS async-compute feature (device-gated)",
+        [pipelines]{ auto* k = aegis_knob(pipelines, "async_compute"); return k && k->b; },
+        [pipelines](bool v){ if (auto* k = aegis_knob(pipelines, "async_compute")) k->b = v; });
+    CARDINAL_CVAR_BOOL("r.aegis.variable_rate_shading",
+        "AEGIS variable-rate shading (device-gated)",
+        [pipelines]{ auto* k = aegis_knob(pipelines, "variable_rate_shading"); return k && k->b; },
+        [pipelines](bool v){ if (auto* k = aegis_knob(pipelines, "variable_rate_shading")) k->b = v; });
+    CARDINAL_CVAR_BOOL("r.aegis.bindless_resources",
+        "AEGIS bindless resources (device-gated)",
+        [pipelines]{ auto* k = aegis_knob(pipelines, "bindless_resources"); return k && k->b; },
+        [pipelines](bool v){ if (auto* k = aegis_knob(pipelines, "bindless_resources")) k->b = v; });
+    CARDINAL_CVAR_BOOL("r.aegis.direct_storage",
+        "AEGIS DirectStorage / RTX IO streaming (device-gated)",
+        [pipelines]{ auto* k = aegis_knob(pipelines, "direct_storage"); return k && k->b; },
+        [pipelines](bool v){ if (auto* k = aegis_knob(pipelines, "direct_storage")) k->b = v; });
+    CARDINAL_CVAR_BOOL("r.aegis.allow_fp8",
+        "AEGIS: permit the geometry tier to escalate to FP8 (device-gated)",
+        [pipelines]{ auto* k = aegis_knob(pipelines, "max_tier_fp8"); return k && k->b; },
+        [pipelines](bool v){ if (auto* k = aegis_knob(pipelines, "max_tier_fp8")) k->b = v; });
+    CARDINAL_CVAR_BOOL("r.aegis.allow_fp4",
+        "AEGIS: permit the geometry tier to escalate to FP4 (device-gated)",
+        [pipelines]{ auto* k = aegis_knob(pipelines, "max_tier_fp4"); return k && k->b; },
+        [pipelines](bool v){ if (auto* k = aegis_knob(pipelines, "max_tier_fp4")) k->b = v; });
+    CARDINAL_CVAR_INT("r.aegis.geometry_tier",
+        "AEGIS max geometry tier — 0=FP32 1=FP16 2=FP8 3=FP4 (clamped to device)",
+        0, 3,
+        [pipelines]() -> i64 { auto* k = aegis_knob(pipelines, "max_tier"); return k ? static_cast<i64>(k->e) : 1; },
+        [pipelines](i64 v){ if (auto* k = aegis_knob(pipelines, "max_tier")) k->e = static_cast<int>(v); });
+    CARDINAL_CVAR_FLOAT("r.aegis.exposure",
+        "AEGIS tonemap exposure (EV)",
+        0.0, 4.0,
+        [pipelines]() -> f64 { auto* k = aegis_knob(pipelines, "exposure"); return k ? static_cast<f64>(k->f) : 1.0; },
+        [pipelines](f64 v){ if (auto* k = aegis_knob(pipelines, "exposure")) k->f = static_cast<float>(v); });
+    CARDINAL_CVAR_FLOAT("r.aegis.resolution_scale",
+        "AEGIS internal resolution scale (0.5 = quarter pixels, 2.0 = SSAA x2)",
+        0.5, 2.0,
+        [pipelines]() -> f64 { auto* k = aegis_knob(pipelines, "resolution_scale"); return k ? static_cast<f64>(k->f) : 1.0; },
+        [pipelines](f64 v){ if (auto* k = aegis_knob(pipelines, "resolution_scale")) k->f = static_cast<float>(v); });
 
     // ---- World streaming --------------------------------------------------
     CARDINAL_CVAR_FLOAT("world.chunk_size",
