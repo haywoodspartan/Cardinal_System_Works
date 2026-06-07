@@ -19,6 +19,7 @@
 #include <cardinal/core/string/fixed_string.hpp>
 #include <cardinal/core/string/string_id.hpp>
 #include <cardinal/core/string/string_builder.hpp>
+#include <cardinal/core/rng.hpp>
 #include <cardinal/core/small_vector.hpp>
 #include <cardinal/core/dense_map.hpp>
 #include <cardinal/core/sparse_set.hpp>
@@ -856,6 +857,64 @@ void test_sparse_set() {
     CHECK(Tracked::s_alive == 0);
 }
 
+void test_rng() {
+    // Determinism: same seed → identical sequence.
+    cardinal::Rng a(42), b(42);
+    bool same = true;
+    for (int i = 0; i < 16; ++i) if (a.next_u64() != b.next_u64()) same = false;
+    CHECK(same);
+
+    // Different seed → different sequence (overwhelmingly likely).
+    cardinal::Rng c(43), d(42);
+    bool diff = false;
+    for (int i = 0; i < 8; ++i) if (c.next_u64() != d.next_u64()) { diff = true; break; }
+    CHECK(diff);
+
+    // reseed restarts the stream.
+    cardinal::Rng e(7);
+    const cardinal::u64 e0 = e.next_u64();
+    e.reseed(7);
+    CHECK(e.next_u64() == e0);
+
+    // Unit-interval reals stay in [0,1).
+    cardinal::Rng r(123);
+    bool in01 = true, f01 = true;
+    for (int i = 0; i < 2000; ++i) {
+        const double x = r.next_double();
+        if (x < 0.0 || x >= 1.0) in01 = false;
+        const float y = r.next_float();
+        if (y < 0.0f || y >= 1.0f) f01 = false;
+    }
+    CHECK(in01 && f01);
+
+    // Inclusive integer range: in bounds + both ends reachable.
+    int mn = 1000, mx = -1000; bool inb = true;
+    for (int i = 0; i < 20000; ++i) {
+        const int v = r.range(0, 9);
+        if (v < 0 || v > 9) inb = false;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+    }
+    CHECK(inb && mn == 0 && mx == 9);
+    CHECK(r.range(5, 5) == 5);
+    CHECK(r.range(3, 2) == 3);            // hi <= lo → lo
+
+    // Float range in [lo, hi).
+    bool frb = true;
+    for (int i = 0; i < 2000; ++i) {
+        const float v = r.range_f(2.0f, 5.0f);
+        if (v < 2.0f || v >= 5.0f) frb = false;
+    }
+    CHECK(frb);
+
+    // next_bool yields both; chance() edges.
+    bool sawT = false, sawF = false;
+    for (int i = 0; i < 200; ++i) { if (r.next_bool()) sawT = true; else sawF = true; }
+    CHECK(sawT && sawF);
+    CHECK(!r.chance(0.0));                // [0,1) draw is never < 0
+    CHECK(r.chance(1.0));                 // and always < 1
+}
+
 void test_string_builder() {
     cardinal::StringBuilder sb;
     CHECK(sb.empty() && sb.size() == 0);
@@ -1087,6 +1146,7 @@ int main() {
     test_flags();
     test_dense_map();
     test_sparse_set();
+    test_rng();
     test_string_builder();
     test_slot_map();
     test_spsc_ring();
