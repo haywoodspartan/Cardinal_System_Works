@@ -171,8 +171,10 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
     VkPhysicalDeviceAccelerationStructureFeaturesKHR qas{}; qas.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
     VkPhysicalDeviceRayTracingPipelineFeaturesKHR    qrtp{}; qrtp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
     VkPhysicalDeviceRayQueryFeaturesKHR              qrq{};  qrq.sType  = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+    VkPhysicalDeviceFragmentShadingRateFeaturesKHR  qvrs{}; qvrs.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR;
 
-    // Chain: f2 -> 11 -> 12 -> 13 -> mesh -> as -> rtp -> rq
+    // Chain: f2 -> 11 -> 12 -> 13 -> mesh -> as -> rtp -> rq -> vrs
+    qrq.pNext   = &qvrs;
     qrtp.pNext  = &qrq;
     qas.pNext   = &qrtp;
     qmesh.pNext = &qas;
@@ -221,6 +223,12 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
     if (ext_rtp)      dev_exts.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
     if (ext_rq)       dev_exts.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
 
+    // Variable Rate Shading (Block 12). Enable only when the per-pipeline rate
+    // feature is actually reported, so vkCreateDevice can't fail on it.
+    const bool ext_vrs = has_ext(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME) &&
+                         qvrs.pipelineFragmentShadingRate;
+    if (ext_vrs) dev_exts.push_back(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+
     // VK_EXT_memory_budget: enables vkGetPhysicalDeviceMemoryProperties2 with a
     // VkPhysicalDeviceMemoryBudgetPropertiesEXT pNext, which gives us per-heap
     // budget + usage. Universally supported on Vulkan 1.1+ desktop drivers.
@@ -246,6 +254,7 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
     VkPhysicalDeviceAccelerationStructureFeaturesKHR eas{};  eas.sType  = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
     VkPhysicalDeviceRayTracingPipelineFeaturesKHR    ertp{}; ertp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
     VkPhysicalDeviceRayQueryFeaturesKHR              erq{};  erq.sType  = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+    VkPhysicalDeviceFragmentShadingRateFeaturesKHR  evrs{}; evrs.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR;
 
     // 1.3 core
     e13.dynamicRendering = q13.dynamicRendering;
@@ -281,6 +290,10 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
     if (ext_as)  eas.accelerationStructure  = qas.accelerationStructure;
     if (ext_rtp) ertp.rayTracingPipeline    = qrtp.rayTracingPipeline;
     if (ext_rq)  erq.rayQuery               = qrq.rayQuery;
+    if (ext_vrs) {
+        evrs.pipelineFragmentShadingRate   = VK_TRUE;
+        evrs.attachmentFragmentShadingRate = qvrs.attachmentFragmentShadingRate;
+    }
 
     // Build the chain — only attach what we're actually using.
     void* chain_head = &e13;
@@ -291,6 +304,7 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
     if (ext_as)   { *tail_pnext = &eas;   tail_pnext = &eas.pNext;   }
     if (ext_rtp)  { *tail_pnext = &ertp;  tail_pnext = &ertp.pNext;  }
     if (ext_rq)   { *tail_pnext = &erq;   tail_pnext = &erq.pNext;   }
+    if (ext_vrs)  { *tail_pnext = &evrs;  tail_pnext = &evrs.pNext;  }
 
     // ------------------------------------------------------------------------
     // Logical device.
@@ -359,8 +373,8 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
     caps_.indirect_dispatch        = true;                  // vkCmdDispatchIndirect is core
     caps_.indirect_draw_count      = q12.drawIndirectCount;
     caps_.bindless_resources       = q12.descriptorIndexing && q12.runtimeDescriptorArray;
-    caps_.variable_rate_shading    = has_ext(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
-    caps_.variable_rate_image      = caps_.variable_rate_shading;   // tier-2 refined when VRS recording lands
+    caps_.variable_rate_shading    = ext_vrs;                       // ext enabled + pipeline rate
+    caps_.variable_rate_image      = ext_vrs && qvrs.attachmentFragmentShadingRate;
     // fp8_math / fp4_math / tensor_cores: gated on VK_KHR_shader_float8 /
     // VK_KHR_cooperative_matrix (header-version dependent) — left false until a
     // coop-matrix probe lands. direct_storage_capable: no Vulkan-native

@@ -260,6 +260,7 @@ public:
     void uav_barrier(Buffer* b) override;                        // RAW/WAW flush
     void transition_buffer_state(Buffer* b, ResourceState before,
                                  ResourceState after) override;
+    void set_shading_rate(ShadingRate rate) override;            // VRS (Block 12)
     void begin_shadow_pass(Texture* depth) override;
     void end_shadow_pass() override;
     void bind_sampled_texture(u32 slot, Texture* tex) override;

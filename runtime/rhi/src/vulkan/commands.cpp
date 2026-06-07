@@ -411,5 +411,28 @@ void VulkanSwapchain::transition_buffer_state(Buffer* b, ResourceState before, R
         0, 0, nullptr, 1, &bb, 0, nullptr);
 }
 
+// ---- Variable Rate Shading (Block 12 — graphics passes) --------------------
+void VulkanSwapchain::set_shading_rate(ShadingRate rate) {
+    if (vkCmdSetFragmentShadingRateKHR == nullptr) return;   // VRS ext not enabled
+    VkExtent2D sz{1, 1};
+    switch (rate) {
+        case ShadingRate::Rate_1x1: sz = {1, 1}; break;
+        case ShadingRate::Rate_1x2: sz = {1, 2}; break;
+        case ShadingRate::Rate_2x1: sz = {2, 1}; break;
+        case ShadingRate::Rate_2x2: sz = {2, 2}; break;
+        case ShadingRate::Rate_2x4: sz = {2, 4}; break;
+        case ShadingRate::Rate_4x2: sz = {4, 2}; break;
+        case ShadingRate::Rate_4x4: sz = {4, 4}; break;
+    }
+    const VkFragmentShadingRateCombinerOpKHR combiners[2] = {
+        VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
+        VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
+    };
+    vkCmdSetFragmentShadingRateKHR(frames_[frame_index_].cmd, &sz, combiners);
+    // Per-tile rate-image VRS (bind_shading_rate_image) needs the rate image
+    // attached at vkCmdBeginRendering via VkRenderingFragmentShadingRateAttachmentInfoKHR
+    // — deferred to the dynamic-rendering begin plumbing (a follow-up).
+}
+
 
 }  // namespace cardinal::rhi

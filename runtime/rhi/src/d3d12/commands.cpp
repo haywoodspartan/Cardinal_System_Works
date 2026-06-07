@@ -225,6 +225,37 @@ void D3D12Swapchain::uav_barrier(Buffer* b) {
     frames_[frame_index_].cmd->ResourceBarrier(1, &bar);
 }
 
+// ---- Variable Rate Shading (Block 12 — graphics passes) --------------------
+namespace {
+D3D12_SHADING_RATE to_d3d_shading_rate(Swapchain::ShadingRate r) {
+    switch (r) {
+        case Swapchain::ShadingRate::Rate_1x1: return D3D12_SHADING_RATE_1X1;
+        case Swapchain::ShadingRate::Rate_1x2: return D3D12_SHADING_RATE_1X2;
+        case Swapchain::ShadingRate::Rate_2x1: return D3D12_SHADING_RATE_2X1;
+        case Swapchain::ShadingRate::Rate_2x2: return D3D12_SHADING_RATE_2X2;
+        case Swapchain::ShadingRate::Rate_2x4: return D3D12_SHADING_RATE_2X4;
+        case Swapchain::ShadingRate::Rate_4x2: return D3D12_SHADING_RATE_4X2;
+        case Swapchain::ShadingRate::Rate_4x4: return D3D12_SHADING_RATE_4X4;
+    }
+    return D3D12_SHADING_RATE_1X1;
+}
+}  // namespace
+
+void D3D12Swapchain::set_shading_rate(ShadingRate rate) {
+    ComPtr<ID3D12GraphicsCommandList5> cmd5;
+    if (FAILED(frames_[frame_index_].cmd.As(&cmd5))) return;   // VRS unsupported
+    cmd5->RSSetShadingRate(to_d3d_shading_rate(rate), nullptr);
+}
+
+void D3D12Swapchain::bind_shading_rate_image(Texture* per_tile_rate_image) {
+    auto* dt = static_cast<D3D12Texture*>(per_tile_rate_image);
+    ComPtr<ID3D12GraphicsCommandList5> cmd5;
+    if (FAILED(frames_[frame_index_].cmd.As(&cmd5))) return;
+    // Per-tile R8_UINT rate image; caller transitions it to
+    // SHADING_RATE_SOURCE. Pass nullptr to clear back to per-draw rate.
+    cmd5->RSSetShadingRateImage(dt ? dt->resource() : nullptr);
+}
+
 void D3D12Swapchain::transition_buffer_state(Buffer* b, ResourceState before, ResourceState after) {
     auto* db = static_cast<D3D12Buffer*>(b);
     if (db == nullptr || before == after) return;
