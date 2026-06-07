@@ -11,8 +11,16 @@ set(CARDINAL_RHI_HEADERS
 set(CARDINAL_RHI_SOURCES
     src/rhi.cpp
     # ---- Vulkan backend (Linux + Windows) -----------------------------
-    src/vulkan/vulkan.cpp        # VulkanDevice + Swapchain + Buffer +
-                                 # Texture + Pipeline + AccelStructure
+    # Per-concern TUs sharing vulkan_internal.hpp (includes + inline helpers +
+    # leaf classes Buffer/Texture/Pipeline/AccelStructure + Swapchain/Device
+    # declarations), mirroring the D3D12 split for finer incremental rebuilds.
+    src/vulkan/vulkan.cpp        # VulkanDevice methods + create_vulkan_device
+                                 # factory + vulkan_interop downcasts
+    src/vulkan/swapchain.cpp     # VulkanSwapchain core: surface / objects /
+                                 # viewports / per-frame / resize / frame loop
+    src/vulkan/commands.cpp      # VulkanSwapchain recording: bind / draw /
+                                 # push / shadow pass / descriptor / storage
+    src/vulkan/compute.cpp       # async compute (Block 10): Fence / ComputeQueue
     src/vulkan/alloc.cpp         # VMA glue
     src/vulkan/modern.cpp        # NVIDIA SDK shims (DLSS/Reflex/Streamline/RTXMU)
     # ---- D3D12 backend (Windows only) ---------------------------------
