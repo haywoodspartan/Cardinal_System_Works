@@ -1765,6 +1765,17 @@ int main(int argc, char** argv) {
 
         draw_dockspace(first_layout, initial_viewport_titles);
 
+        // World (level) save helper — shared by File > Save World and Ctrl+S.
+        // Writes the actor world to the current project's startup-world path
+        // (serial "# Cardinal save v1"). No-op when no project is open.
+        auto save_world_now = [&]() {
+            if (!current_project) return;
+            const std::string wp = current_project->dirs().root + "/" +
+                                   current_project->info().startup_world;
+            cardinal::string serr;
+            cardinal::serial::save_world(game.world(), wp, &serr);
+        };
+
         if (ImGui::BeginMenuBar()) {
             if (ImGui::BeginMenu("File")) {
                 if (ImGui::MenuItem("Import 3D Asset…")) {
@@ -1775,6 +1786,17 @@ int main(int argc, char** argv) {
                 }
                 if (ImGui::MenuItem("Import Heightmap (Terrain)…")) {
                     show_heightmap_window = true;
+                }
+                ImGui::Separator();
+                // World (level) operations — use the open project's startup world.
+                const bool have_proj = static_cast<bool>(current_project);
+                if (ImGui::MenuItem("Save World", "Ctrl+S", false, have_proj))
+                    save_world_now();
+                if (ImGui::MenuItem("Open World", nullptr, false, have_proj)) {
+                    const std::string wp = current_project->dirs().root + "/" +
+                                           current_project->info().startup_world;
+                    cardinal::string serr;
+                    cardinal::serial::load_world(game, wp, true, &serr);
                 }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Quit")) want_quit = true;
@@ -2660,6 +2682,7 @@ int main(int argc, char** argv) {
             const ImGuiIO& io = ImGui::GetIO();
             if (!io.WantTextInput) {
                 const bool ctrl = io.KeyCtrl || io.KeySuper;
+                if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) save_world_now();  // Ctrl+S
                 if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D, false) && selected_id != 0)
                     menu_duplicate = true;                                  // Ctrl+D
                 if (ctrl && ImGui::IsKeyPressed(ImGuiKey_A, false)) {       // Ctrl+A
