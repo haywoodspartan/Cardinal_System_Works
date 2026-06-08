@@ -643,6 +643,16 @@ int main(int argc, char** argv) {
     // undo-integrated duplicate / delete / focus paths.
     bool menu_duplicate = false, menu_delete = false, menu_focus = false;
 
+    // Entity clipboard for Edit > Copy / Paste (persists across frames).
+    struct EntityClip {
+        bool                                        has = false;
+        cardinal::string                            name;
+        cardinal::scene::Transform                  transform;
+        cardinal::shared_ptr<cardinal::scene::Mesh> mesh;
+        cardinal::scene::Vec3                       tint{1, 1, 1};
+        cardinal::scene::Material                   material;
+    } entity_clip;
+
     // Fly camera replaces the demo orbit. It only takes input when the
     // Viewport panel is hovered (gated below).
     scn::FlyCamera fly_cam;
@@ -1776,6 +1786,23 @@ int main(int argc, char** argv) {
             cardinal::serial::save_world(game.world(), wp, &serr);
         };
 
+        // Entity copy / paste — shared by the Edit menu + Ctrl+C / Ctrl+V.
+        auto copy_entity = [&]() {
+            if (selected_id == 0) return;
+            if (auto* e = scene.find_by_id(selected_id))
+                entity_clip = { true, e->name, e->transform, e->mesh, e->tint, e->material };
+        };
+        auto paste_entity = [&]() {
+            if (!entity_clip.has) return;
+            auto& ne = scene.add_entity(entity_clip.name + " (copy)");
+            ne.transform = entity_clip.transform;
+            ne.transform.translation.x += 1.0f;
+            ne.mesh     = entity_clip.mesh;
+            ne.tint     = entity_clip.tint;
+            ne.material = entity_clip.material;
+            selected_id = ne.id;
+        };
+
         if (ImGui::BeginMenuBar()) {
             if (ImGui::BeginMenu("File")) {
                 if (ImGui::MenuItem("Import 3D Asset…")) {
@@ -2084,6 +2111,8 @@ int main(int argc, char** argv) {
                 if (ImGui::MenuItem("Redo", "Ctrl+Y", false, undo.can_redo())) undo.redo();
                 ImGui::Separator();
                 const bool has_sel = (selected_id != 0);
+                if (ImGui::MenuItem("Copy",  "Ctrl+C", false, has_sel)) copy_entity();
+                if (ImGui::MenuItem("Paste", "Ctrl+V", false, entity_clip.has)) paste_entity();
                 if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, has_sel)) menu_duplicate = true;
                 if (ImGui::MenuItem("Delete",    "Del",    false, has_sel)) menu_delete = true;
                 if (ImGui::MenuItem("Focus in Viewport", "F", false, has_sel)) menu_focus = true;
@@ -2704,6 +2733,8 @@ int main(int argc, char** argv) {
             if (!io.WantTextInput) {
                 const bool ctrl = io.KeyCtrl || io.KeySuper;
                 if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) save_world_now();  // Ctrl+S
+                if (ctrl && ImGui::IsKeyPressed(ImGuiKey_C, false)) copy_entity();     // Ctrl+C
+                if (ctrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) paste_entity();    // Ctrl+V
                 if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D, false) && selected_id != 0)
                     menu_duplicate = true;                                  // Ctrl+D
                 if (ctrl && ImGui::IsKeyPressed(ImGuiKey_A, false)) {       // Ctrl+A
