@@ -1,0 +1,189 @@
+// =============================================================================
+// Cardinal UI — core widget implementations.
+// =============================================================================
+#include <cardinal/cui/widgets.hpp>
+#include <cardinal/cui/context.hpp>
+
+namespace cardinal::cui {
+
+namespace {
+inline float maxf(float a, float b) noexcept { return a > b ? a : b; }
+inline float clamp01(float t) noexcept { return t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t); }
+}  // namespace
+
+// -----------------------------------------------------------------------------
+// Stack
+// -----------------------------------------------------------------------------
+Vec2 Stack::measure(const Constraints& c) {
+    float main = 0.0f, cross = 0.0f;
+    int n = 0;
+    for (auto& ch : children_) {
+        if (!ch || !ch->visible()) continue;
+        const Vec2 s = ch->measure(c);
+        if (axis_ == Axis::Vertical) { main += s.y; cross = maxf(cross, s.x); }
+        else                         { main += s.x; cross = maxf(cross, s.y); }
+        ++n;
+    }
+    if (n > 1) main += spacing_ * static_cast<float>(n - 1);
+
+    Vec2 sz = (axis_ == Axis::Vertical) ? Vec2{cross, main} : Vec2{main, cross};
+    sz.x = c.clamp_w(sz.x);
+    sz.y = c.clamp_h(sz.y);
+    measured_ = sz;
+    return sz;
+}
+
+void Stack::arrange(const Rect& r) {
+    rect_ = r;
+    float cursor = (axis_ == Axis::Vertical) ? r.top() : r.left();
+    for (auto& ch : children_) {
+        if (!ch || !ch->visible()) continue;
+        const Vec2 s = ch->measure(Constraints::loose(r.width(), r.height()));
+        Rect cr;
+        if (axis_ == Axis::Vertical) {
+            float w = (cross_ == Align::Stretch) ? r.width() : s.x;
+            float x = r.left();
+            if      (cross_ == Align::Center) x = r.left() + (r.width() - w) * 0.5f;
+            else if (cross_ == Align::End)    x = r.right() - w;
+            cr = { { x, cursor }, { w, s.y } };
+            cursor += s.y + spacing_;
+        } else {
+            float h = (cross_ == Align::Stretch) ? r.height() : s.y;
+            float y = r.top();
+            if      (cross_ == Align::Center) y = r.top() + (r.height() - h) * 0.5f;
+            else if (cross_ == Align::End)    y = r.bottom() - h;
+            cr = { { cursor, y }, { s.x, h } };
+            cursor += s.x + spacing_;
+        }
+        ch->arrange(cr);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Panel
+// -----------------------------------------------------------------------------
+Vec2 Panel::measure(const Constraints& c) {
+    const Constraints inner = c.deflate(pad_);
+    Vec2 child{0.0f, 0.0f};
+    for (auto& ch : children_) {
+        if (!ch || !ch->visible()) continue;
+        const Vec2 s = ch->measure(inner);
+        child.x = maxf(child.x, s.x);
+        child.y = maxf(child.y, s.y);
+    }
+    Vec2 sz{ child.x + pad_.horiz(), child.y + pad_.vert() };
+    sz.x = c.clamp_w(sz.x);
+    sz.y = c.clamp_h(sz.y);
+    measured_ = sz;
+    return sz;
+}
+
+void Panel::arrange(const Rect& r) {
+    rect_ = r;
+    const Rect inner = r.inset(pad_.l, pad_.t, pad_.r, pad_.b);
+    for (auto& ch : children_) if (ch && ch->visible()) ch->arrange(inner);
+}
+
+void Panel::paint(PaintContext& ctx) {
+    ctx.dl->rect_filled(rect_, bg_, ctx.theme->rounding);
+    ctx.dl->rect_stroke(rect_, ctx.theme->border, 1.0f, ctx.theme->rounding);
+    paint_children(ctx);
+}
+
+// -----------------------------------------------------------------------------
+// Label
+// -----------------------------------------------------------------------------
+Vec2 Label::measure(const Constraints& c) {
+    Vec2 s{ text_advance(text_, font_size_), line_height(font_size_) };
+    s.x = c.clamp_w(s.x);
+    s.y = c.clamp_h(s.y);
+    measured_ = s;
+    return s;
+}
+
+void Label::paint(PaintContext& ctx) {
+    ctx.dl->text(rect_.pos, text_, ctx.theme->text, font_size_);
+}
+
+// -----------------------------------------------------------------------------
+// Button
+// -----------------------------------------------------------------------------
+Vec2 Button::measure(const Constraints& c) {
+    Vec2 s{ text_advance(text_, font_size_) + pad_.horiz(),
+            line_height(font_size_) + pad_.vert() };
+    s.x = c.clamp_w(s.x);
+    s.y = c.clamp_h(s.y);
+    measured_ = s;
+    return s;
+}
+
+void Button::paint(PaintContext& ctx) {
+    Color bg = ctx.theme->control;
+    if      (ctx.ui->is_active(this))  bg = ctx.theme->control_active;
+    else if (ctx.ui->is_hovered(this)) bg = ctx.theme->control_hot;
+    ctx.dl->rect_filled(rect_, bg, ctx.theme->rounding);
+    const Vec2 tp{ rect_.pos.x + pad_.l, rect_.pos.y + pad_.t };
+    ctx.dl->text(tp, text_, ctx.theme->text, font_size_);
+}
+
+// -----------------------------------------------------------------------------
+// Checkbox
+// -----------------------------------------------------------------------------
+Vec2 Checkbox::measure(const Constraints& c) {
+    Vec2 s{ box_ + gap_ + text_advance(label_, font_size_),
+            maxf(box_, line_height(font_size_)) };
+    s.x = c.clamp_w(s.x);
+    s.y = c.clamp_h(s.y);
+    measured_ = s;
+    return s;
+}
+
+void Checkbox::paint(PaintContext& ctx) {
+    const Rect box{ rect_.pos, { box_, box_ } };
+    const Color bg = ctx.ui->is_hovered(this) ? ctx.theme->control_hot : ctx.theme->control;
+    ctx.dl->rect_filled(box, bg, 2.0f);
+    ctx.dl->rect_stroke(box, ctx.theme->border, 1.0f, 2.0f);
+    if (value_ != nullptr && *value_) {
+        ctx.dl->rect_filled(box.inset(3, 3, 3, 3), ctx.theme->accent, 1.0f);
+    }
+    const Vec2 tp{ rect_.pos.x + box_ + gap_,
+                   rect_.pos.y + (box_ - line_height(font_size_)) * 0.5f };
+    ctx.dl->text(tp, label_, ctx.theme->text, font_size_);
+}
+
+// -----------------------------------------------------------------------------
+// Slider
+// -----------------------------------------------------------------------------
+Vec2 Slider::measure(const Constraints& c) {
+    // Take the offered width when finite, else a sensible default.
+    const float w = (c.max_w < 1e8f) ? c.max_w : 160.0f;
+    Vec2 s{ w, height_ };
+    s.x = c.clamp_w(s.x);
+    s.y = c.clamp_h(s.y);
+    measured_ = s;
+    return s;
+}
+
+void Slider::on_drag(Vec2 mouse) {
+    if (value_ == nullptr || rect_.width() <= 0.0f) return;
+    const float t = clamp01((mouse.x - rect_.left()) / rect_.width());
+    *value_ = min_ + t * (max_ - min_);
+}
+
+void Slider::paint(PaintContext& ctx) {
+    const Rect track{ { rect_.left(), rect_.center().y - 3.0f }, { rect_.width(), 6.0f } };
+    ctx.dl->rect_filled(track, ctx.theme->control, 3.0f);
+
+    float t = 0.0f;
+    if (value_ != nullptr && max_ > min_) t = clamp01((*value_ - min_) / (max_ - min_));
+
+    const Rect fill{ track.pos, { track.width() * t, track.height() } };
+    ctx.dl->rect_filled(fill, ctx.theme->accent, 3.0f);
+
+    const float hx = rect_.left() + rect_.width() * t;
+    const Rect  knob{ { hx - 4.0f, rect_.top() }, { 8.0f, rect_.height() } };
+    const Color kc = ctx.ui->is_active(this) ? ctx.theme->control_active : ctx.theme->control_hot;
+    ctx.dl->rect_filled(knob, kc, 2.0f);
+}
+
+}  // namespace cardinal::cui
