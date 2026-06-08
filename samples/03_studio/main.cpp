@@ -98,8 +98,11 @@ namespace cardinal::input {
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <fstream>
+#include <memory>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #if defined(_WIN32) && !defined(NDEBUG)
@@ -1126,6 +1129,102 @@ int main(int argc, char** argv) {
         "G:/Cardinal_System_Works/build/recent_projects.txt");
     recent_projects.load();
 
+    // ---- Imported-asset persistence -----------------------------------------
+    // Imported meshes must live IN the project (cooked) so a saved level still
+    // resolves them after the editor is closed + reopened — not just this
+    // session. We cook each imported mesh into <project>/cooked, list it in a
+    // per-project import manifest, and register a reload-safe AssetCatalog
+    // factory that LOADS the mesh from the asset registry on spawn (vs capturing
+    // an in-memory pointer that dies with the session).
+    auto imported_mesh_cache =
+        std::make_shared<std::unordered_map<std::string, cardinal::shared_ptr<scn::Mesh>>>();
+
+    auto imported_manifest_path = [&]() -> std::string {
+        return current_project ? (current_project->dirs().root + "/imported_assets.cardinal")
+                               : std::string();
+    };
+
+    auto register_imported_factory = [&](const std::string& key, const std::string& label) {
+        if (scn::AssetCatalog::instance().find(key.c_str()) != nullptr) return;
+        scn::AssetDesc d{};
+        d.id       = key;
+        d.label    = label;
+        d.category = "Imported";
+        d.tooltip  = "Imported asset: " + key;
+        d.kind     = scn::AssetKind::Primitive;
+        auto reg   = asset_registry;          // shared ownership (reload-safe)
+        auto cache = imported_mesh_cache;
+        std::string kc = key, lc = label;
+        d.factory = [reg, cache, kc, lc](const scn::AssetSpawnContext& ctx)
+                        -> scn::AssetSpawnResult {
+            if (ctx.scene == nullptr || ctx.device == nullptr) return {};
+            cardinal::shared_ptr<scn::Mesh> mesh;
+            auto it = cache->find(kc);
+            if (it != cache->end()) mesh = it->second;
+            if (!mesh) {
+                auto ma = reg->load_mesh(cardinal::string(kc.c_str()));
+                if (ma && !ma->vertices.empty() && !ma->indices.empty()) {
+                    std::vector<scn::Vertex> verts;
+                    verts.reserve(ma->indices.size());
+                    for (cardinal::u32 idx : ma->indices) {
+                        if (idx >= ma->vertices.size()) continue;
+                        const auto& mv = ma->vertices[idx];
+                        scn::Vertex v;
+                        v.position = mv.position; v.normal = mv.normal; v.color = mv.color;
+                        verts.push_back(v);
+                    }
+                    if (!verts.empty()) {
+                        mesh = scn::Mesh::from_vertices(
+                            *ctx.device, verts.data(), static_cast<cardinal::u32>(verts.size()));
+                        if (mesh) (*cache)[kc] = mesh;
+                    }
+                }
+            }
+            if (!mesh) return {};
+            auto& e = ctx.scene->add_entity(lc);
+            e.mesh  = mesh;
+            e.transform.translation = ctx.position;
+            e.tint  = { 0.80f, 0.80f, 0.82f };
+            return scn::AssetSpawnResult{ { e.id }, e.id };
+        };
+        scn::AssetCatalog::instance().register_asset(std::move(d));
+    };
+
+    auto persist_imported_mesh = [&](const std::string& key,
+                                     const cardinal::asset::MeshAsset& ma) -> bool {
+        if (!current_project) return false;
+        cardinal::cook::CookedAsset ca;
+        ca.type    = cardinal::cook::AssetType::Mesh;
+        ca.payload = cardinal::asset::codec::encode_mesh(ma);
+        const cardinal::vector<cardinal::u8> bytes = ca.serialize();
+        const std::string path = current_project->dirs().cooked + "/" + key + ".cooked";
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+        if (!f) return false;
+        f.write(reinterpret_cast<const char*>(bytes.data()),
+                static_cast<std::streamsize>(bytes.size()));
+        return static_cast<bool>(f);
+    };
+
+    // Mount the project's cooked dir + re-register factories for every imported
+    // asset in the manifest, so a saved world's imported meshes resolve. Call
+    // BEFORE loading a project's world.
+    auto load_imported_manifest = [&]() {
+        if (!current_project) return;
+        asset_registry->mount_directory(current_project->dirs().cooked);
+        std::ifstream f(imported_manifest_path());
+        if (!f) return;
+        std::string line;
+        while (std::getline(f, line)) {
+            if (line.empty()) continue;
+            const auto tab = line.find('\t');
+            const std::string key   = (tab == std::string::npos) ? line : line.substr(0, tab);
+            const std::string label = (tab == std::string::npos) ? key  : line.substr(tab + 1);
+            if (!key.empty()) register_imported_factory(key, label);
+        }
+    };
+
     // ----- World systems: HAL + IO + Partition + Level/HLOD + Mass +
     //                      Navmesh + AI ----------------------------------
     //
@@ -1856,9 +1955,18 @@ int main(int argc, char** argv) {
                     std::snprintf(save_as_path, sizeof(save_as_path), "%s", def.c_str());
                     open_save_as_modal = true;
                 }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Save Project", nullptr, false, have_proj))
+                    current_project->save();
+                if (ImGui::MenuItem("Save All (Project + World)", "Ctrl+Shift+S", false, have_proj)) {
+                    save_world_now();
+                    if (current_project) current_project->save();
+                }
+                ImGui::Separator();
                 if (ImGui::MenuItem("Open World", nullptr, false, have_proj)) {
                     const std::string wp = current_project->dirs().root + "/" +
                                            current_project->info().startup_world;
+                    load_imported_manifest();   // re-register imported meshes first
                     cardinal::string serr;
                     cardinal::serial::load_world(game, wp, true, &serr);
                 }
@@ -1876,6 +1984,7 @@ int main(int argc, char** argv) {
                                 recent_projects.save();
                                 const std::string wp = p->dirs().root + "/" +
                                                        p->info().startup_world;
+                                load_imported_manifest();   // re-register imported meshes first
                                 cardinal::string werr;
                                 cardinal::serial::load_world(game, wp, true, &werr);
                             }
@@ -2555,32 +2664,44 @@ int main(int argc, char** argv) {
             for (const auto& im : isc.meshes) {
                 cardinal::asset::MeshAsset ma = cardinal::import::to_asset_mesh(im);
                 if (ma.vertices.empty() || ma.indices.empty()) continue;
-                // Mesh::from_vertices wants a de-indexed triangle list.
+
+                const std::string base =
+                    im.name.empty() ? std::string("mesh") : std::string(im.name.c_str());
+                const std::string key =
+                    "imported/" + base + "." + std::to_string(import_counter++);
+
+                // Preferred: persist the mesh INTO the project (cooked) + record
+                // it in the import manifest + register a reload-safe load factory,
+                // so it survives save + reopen. spawn_asset_at goes through the
+                // same place command the viewport uses.
+                if (current_project && persist_imported_mesh(key, ma)) {
+                    std::ofstream mf(imported_manifest_path(), std::ios::app);
+                    if (mf) mf << key << "\t" << base << "\n";
+                    register_imported_factory(key, base);
+                    spawn_asset_at(key.c_str(), pos);
+                    ++spawned;
+                    continue;
+                }
+
+                // Fallback (no project open): session-only in-memory mesh.
                 std::vector<scn::Vertex> verts;
                 verts.reserve(ma.indices.size());
                 for (cardinal::u32 idx : ma.indices) {
                     if (idx >= ma.vertices.size()) continue;
                     const auto& mv = ma.vertices[idx];
                     scn::Vertex v;
-                    v.position = mv.position;
-                    v.normal   = mv.normal;
-                    v.color    = mv.color;
+                    v.position = mv.position; v.normal = mv.normal; v.color = mv.color;
                     verts.push_back(v);
                 }
                 if (verts.empty()) continue;
                 auto mesh = scn::Mesh::from_vertices(
                     *device, verts.data(), static_cast<cardinal::u32>(verts.size()));
                 if (!mesh) continue;
-
-                const std::string base =
-                    im.name.empty() ? std::string("mesh") : std::string(im.name.c_str());
-                const std::string id =
-                    "imported." + base + "." + std::to_string(import_counter++);
                 scn::AssetDesc d{};
-                d.id       = id;
+                d.id       = key;
                 d.label    = base;
                 d.category = "Imported";
-                d.tooltip  = "Imported from " + path;
+                d.tooltip  = "Imported from " + path + " (session-only — open a project to persist)";
                 d.kind     = scn::AssetKind::Primitive;
                 auto        mesh_cap  = mesh;
                 std::string label_cap = base;
@@ -2594,7 +2715,7 @@ int main(int argc, char** argv) {
                     return scn::AssetSpawnResult{ { e.id }, e.id };
                 };
                 scn::AssetCatalog::instance().register_asset(std::move(d));
-                spawn_asset_at(id.c_str(), pos);
+                spawn_asset_at(key.c_str(), pos);
                 ++spawned;
             }
             if (spawned == 0)
@@ -2800,7 +2921,10 @@ int main(int argc, char** argv) {
             const ImGuiIO& io = ImGui::GetIO();
             if (!io.WantTextInput) {
                 const bool ctrl = io.KeyCtrl || io.KeySuper;
-                if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) save_world_now();  // Ctrl+S
+                if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {                  // Ctrl+(Shift+)S
+                    save_world_now();
+                    if (io.KeyShift && current_project) current_project->save();       // Save All
+                }
                 if (ctrl && ImGui::IsKeyPressed(ImGuiKey_C, false)) copy_entity();     // Ctrl+C
                 if (ctrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) paste_entity();    // Ctrl+V
                 if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D, false) && selected_id != 0)
@@ -3076,6 +3200,7 @@ int main(int argc, char** argv) {
                 const auto& pinfo = act.opened->info();
                 const std::string world_path =
                     act.opened->dirs().root + "/" + pinfo.startup_world;
+                load_imported_manifest();   // re-register imported meshes so the world resolves
                 std::string werr;
                 const auto ls = cardinal::serial::load_world(
                     game, world_path, /*replace_existing=*/true, &werr);
