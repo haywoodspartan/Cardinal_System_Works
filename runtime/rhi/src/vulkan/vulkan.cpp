@@ -375,10 +375,11 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
     caps_.bindless_resources       = q12.descriptorIndexing && q12.runtimeDescriptorArray;
     caps_.variable_rate_shading    = ext_vrs;                       // ext enabled + pipeline rate
     caps_.variable_rate_image      = ext_vrs && qvrs.attachmentFragmentShadingRate;
-    // fp8_math / fp4_math / tensor_cores: gated on VK_KHR_shader_float8 /
-    // VK_KHR_cooperative_matrix (header-version dependent) — left false until a
-    // coop-matrix probe lands. direct_storage_capable: no Vulkan-native
-    // equivalent — left false. (Matches the D3D12 honesty stance.)
+    // FP8 math: probe VK_KHR_shader_float8 by NAME (the vendored headers may not
+    // define the macro yet, so has_ext takes the literal string). fp4_math has
+    // no standard Vulkan ext; tensor_cores + direct_storage_capable are
+    // D3D12-native paths here — all left false honestly.
+    caps_.fp8_math                 = has_ext("VK_KHR_shader_float8");
 
     // Vendor-specific paths.
     const bool is_nvidia = cardinal::strcmp(caps_.vendor_name, "NVIDIA Corporation") == 0;

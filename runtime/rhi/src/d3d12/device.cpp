@@ -163,6 +163,19 @@ bool D3D12Device::init_dxc() {
     return true;
 }
 
+// DirectStorage availability probe: the dstorage.dll + dstoragecore.dll are
+// deployed next to the exe (NTC SDK). We can't compile against the IDStorage
+// API (no dstorage.h vendored), but we CAN honestly report the cap by
+// dynamically loading the DLL and resolving its public entry point. The full
+// streaming subsystem lights up once dstorage.h is vendored.
+static bool probe_direct_storage() {
+    HMODULE m = ::LoadLibraryW(L"dstorage.dll");
+    if (m == nullptr) return false;
+    const bool ok = (::GetProcAddress(m, "DStorageGetFactory") != nullptr);
+    ::FreeLibrary(m);
+    return ok;
+}
+
 void D3D12Device::populate_capabilities() {
     // Probe the bits the engine cares about. D3D12 makes most of what we want
     // mandatory at FL_12_0+ (mesh shaders need _2 options struct), so we just
@@ -171,7 +184,14 @@ void D3D12Device::populate_capabilities() {
     D3D12_FEATURE_DATA_D3D12_OPTIONS5 o5{};
     D3D12_FEATURE_DATA_D3D12_OPTIONS6 o6{};
     D3D12_FEATURE_DATA_D3D12_OPTIONS7 o7{};
+    // Request the highest SM the SDK knows about so HighestShaderModel can come
+    // back as 6.9 (FP8) on capable hardware. CheckFeatureSupport clamps to the
+    // requested ceiling, so requesting only 6.8 would mask 6.9 support.
+#if defined(D3D_SHADER_MODEL_6_9)
+    D3D12_FEATURE_DATA_SHADER_MODEL   sm{D3D_SHADER_MODEL_6_9};
+#else
     D3D12_FEATURE_DATA_SHADER_MODEL   sm{D3D_SHADER_MODEL_6_8};
+#endif
 
     device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS,  &o,  sizeof(o));
     device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &o5, sizeof(o5));
@@ -207,10 +227,18 @@ void D3D12Device::populate_capabilities() {
     caps_.variable_rate_image      = (o6.VariableShadingRateTier >= D3D12_VARIABLE_SHADING_RATE_TIER_2);
     caps_.tensor_cores             = (cardinal::strstr(caps_.vendor_name, "NVIDIA") != nullptr)
                                   && (o5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0);
-    // fp8_math / fp4_math: no queryable D3D12 cap before SM6.9 (the in-tree
-    // Agility SDK predates the float8 enums) — left false; honest gate lands
-    // with an SDK bump. direct_storage_capable: needs a DStorageGetFactory
-    // probe (separate SDK) — left false.
+    // FP8 (E4M3 / E5M2) math-division tier — SM6.9 cooperative vectors expose
+    // native sub-FP16 math. Guarded so older SDKs (no 6.9 enum) compile + stay
+    // false. The AEGIS adaptive-geometry tier already consumes this cap.
+#if defined(D3D_SHADER_MODEL_6_9)
+    caps_.fp8_math = (sm.HighestShaderModel >= D3D_SHADER_MODEL_6_9);
+    // FP4 (E2M1) is the next sub-byte tier on the same SM6.9 cooperative-vector
+    // path; finer per-format HW detection (Blackwell-class) would refine this.
+    caps_.fp4_math = caps_.fp8_math;
+#endif
+    // DirectStorage / RTX IO: dstorage.dll is deployed alongside the exe — probe
+    // it dynamically (the full IDStorage streaming API needs dstorage.h vendored).
+    caps_.direct_storage_capable = probe_direct_storage();
 
     caps_.nvidia_dlss_capable      = (cardinal::strstr(caps_.vendor_name, "NVIDIA") != nullptr)
                                   && caps_.ray_tracing_pipeline;
