@@ -53,9 +53,19 @@ void draw(cardinal::scene::Scene& scene,
         e->transform.rotation_euler.z = rot_deg[2] * (3.14159265f / 180.0f);
     }
     ImGui::DragFloat3("Scale", &e->transform.scale.x, 0.01f, 0.001f, 100.0f);
+    if (ImGui::SmallButton("Reset Transform")) {
+        e->transform.translation.x = e->transform.translation.y = e->transform.translation.z = 0.0f;
+        e->transform.rotation_euler.x = e->transform.rotation_euler.y = e->transform.rotation_euler.z = 0.0f;
+        e->transform.scale.x = e->transform.scale.y = e->transform.scale.z = 1.0f;
+    }
 
     ImGui::SeparatorText("Material");
     ImGui::ColorEdit3("Tint", &e->tint.x);
+    ImGui::SliderFloat("Specular",  &e->material.specular_intensity, 0.0f, 1.0f);
+    ImGui::SliderFloat("Spec power", &e->material.specular_power, 1.0f, 256.0f, "%.0f");
+    ImGui::SliderFloat("Roughness", &e->material.roughness, 0.0f, 1.0f);
+    ImGui::SliderFloat("Metalness", &e->material.metalness, 0.0f, 1.0f);
+    ImGui::TextDisabled("(roughness / metalness reserved for the PBR pass)");
 
     ImGui::SeparatorText("Mesh");
     if (e->mesh) {
