@@ -638,6 +638,10 @@ int main(int argc, char** argv) {
     bool want_quit      = false;
     u32  selected_id    = 0;
     bool open_terrain_modal = false;
+    // Menu-bar editor commands (Edit / Actor menus). Set by the menu items and
+    // OR'd into the viewport context-action handler below so they run the same
+    // undo-integrated duplicate / delete / focus paths.
+    bool menu_duplicate = false, menu_delete = false, menu_focus = false;
 
     // Fly camera replaces the demo orbit. It only takes input when the
     // Viewport panel is hovered (gated below).
@@ -1973,6 +1977,67 @@ int main(int argc, char** argv) {
                 ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f), "(%s)",
                     placement_asset_id.empty() ? "pick from palette"
                                                : placement_asset_id.c_str());
+            }
+            // ---- Edit — undo/redo + clipboard-style ops + settings shortcuts.
+            if (ImGui::BeginMenu("Edit")) {
+                if (ImGui::MenuItem("Undo", "Ctrl+Z", false, undo.can_undo())) undo.undo();
+                if (ImGui::MenuItem("Redo", "Ctrl+Y", false, undo.can_redo())) undo.redo();
+                ImGui::Separator();
+                const bool has_sel = (selected_id != 0);
+                if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, has_sel)) menu_duplicate = true;
+                if (ImGui::MenuItem("Delete",    "Del",    false, has_sel)) menu_delete = true;
+                ImGui::Separator();
+                if (ImGui::MenuItem("Editor Preferences…")) show_options = true;
+                if (ImGui::MenuItem("Project Settings…"))   show_project = true;
+                ImGui::EndMenu();
+            }
+            // ---- Select — UE5-style selection ops over the scene.
+            if (ImGui::BeginMenu("Select")) {
+                if (ImGui::MenuItem("Select All", "Ctrl+A")) {
+                    selection.clear();
+                    for (const auto& e : scene.entities()) selection.push_back(e.id);
+                    selected_id = selection.empty() ? 0u : selection.back();
+                }
+                if (ImGui::MenuItem("Deselect All", "Esc", false, !selection.empty())) {
+                    selection.clear();
+                    selected_id = 0;
+                }
+                if (ImGui::MenuItem("Invert Selection")) {
+                    std::vector<u32> inv;
+                    for (const auto& e : scene.entities()) {
+                        bool sel = false;
+                        for (u32 id : selection) if (id == e.id) { sel = true; break; }
+                        if (!sel) inv.push_back(e.id);
+                    }
+                    selection.swap(inv);
+                    selected_id = selection.empty() ? 0u : selection.back();
+                }
+                ImGui::EndMenu();
+            }
+            // ---- Actor — operations on the selected actor(s).
+            if (ImGui::BeginMenu("Actor")) {
+                const bool has_sel = (selected_id != 0);
+                if (ImGui::MenuItem("Focus in Viewport", "F", false, has_sel)) menu_focus = true;
+                if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, has_sel)) menu_duplicate = true;
+                if (ImGui::MenuItem("Delete",    "Del",    false, has_sel)) menu_delete = true;
+                ImGui::Separator();
+                ImGui::MenuItem("Prefabs panel", nullptr, &show_prefabs);
+                ImGui::MenuItem("Actors panel",  nullptr, &show_actors);
+                ImGui::EndMenu();
+            }
+            // ---- Tools — editor tool panels.
+            if (ImGui::BeginMenu("Tools")) {
+                ImGui::MenuItem("Editor Modes",  nullptr, &show_modes);
+                ImGui::MenuItem("Brush",         nullptr, &show_brush);
+                ImGui::MenuItem("Mesh Tools",    nullptr, &show_mesh_tools);
+                ImGui::MenuItem("Texture Tools", nullptr, &show_tex_tools);
+                ImGui::MenuItem("World Systems", nullptr, &show_world_sys);
+                ImGui::Separator();
+                ImGui::MenuItem("Shader Compiler", nullptr, &show_shader_cc);
+                ImGui::MenuItem("Code Sandbox",    nullptr, &show_cppscript);
+                ImGui::Separator();
+                ImGui::MenuItem("Options / Settings (CVars)", nullptr, &show_options);
+                ImGui::EndMenu();
             }
             // ---- Build — UE5-style BuildCookRun dropdown (cardinal::buildtool).
             if (ImGui::BeginMenu("Build")) {
@@ -3391,6 +3456,10 @@ int main(int argc, char** argv) {
             // draw_viewport_panel (popup must live in the viewport's
             // ImGui Begin/End scope); we just read the snapshot here.
             ui::Studio::ViewportCtxAction vca = studio->last_viewport_ctx_action();
+            // Fold in Edit/Actor menu requests so they share these handlers.
+            if (menu_delete)    { vca.delete_selected    = true; menu_delete    = false; }
+            if (menu_duplicate) { vca.duplicate_selected = true; menu_duplicate = false; }
+            if (menu_focus)     { vca.focus_selected     = true; menu_focus     = false; }
             if (vca.delete_selected && selected_id != 0) {
                 // Snapshot before delete for undo (mesh + transform + tint).
                 if (auto* e = scene.find_by_id(selected_id)) {
