@@ -2206,6 +2206,19 @@ int main(int argc, char** argv) {
                     auto res = cardinal::buildtool::run_pipeline(*current_project, opt);
                     build_status = res.ok ? "Cook OK" : "Cook FAILED (see Log)";
                 }
+                if (ImGui::MenuItem("Build Engine", nullptr, false, have)) {
+                    // Drive the buildtool's engine-source build (validates the
+                    // project's engine_root + composes the cmake engine build).
+                    // Compose-only here, matching Package — the heavy compile is
+                    // run via build.bat / the run_compile path.
+                    cardinal::buildtool::PipelineOptions opt;
+                    opt.do_build_engine = true;  opt.run_compile = false;
+                    opt.do_build = false; opt.do_cook = false;
+                    opt.do_pack  = false; opt.do_archive = false;
+                    auto res = cardinal::buildtool::run_pipeline(*current_project, opt);
+                    build_status = res.ok ? "Engine build composed (see Log)"
+                                          : "Engine build FAILED (see Log)";
+                }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Package: Development", nullptr, false, have))
                     run_pkg(cardinal::buildtool::BuildConfig::Development, false);
