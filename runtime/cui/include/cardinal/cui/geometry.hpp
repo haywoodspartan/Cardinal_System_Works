@@ -96,7 +96,10 @@ enum class Align : u8 { Start, Center, End, Stretch };
 // on the CPU. A real renderer can override these once fonts exist.
 // -----------------------------------------------------------------------------
 inline float text_advance(const cardinal::string& s, float font_size) noexcept {
-    return static_cast<float>(s.size()) * font_size * 0.5f;
+    // 0.75 = the 8x8 bitmap font's advance (6 of 8 columns per glyph); the
+    // native cui_rhi renderer draws square pixels at this advance, so layout
+    // and rendering agree. (The ImGui-bridge preview measures its own font.)
+    return static_cast<float>(s.size()) * font_size * 0.75f;
 }
 inline float line_height(float font_size) noexcept { return font_size + 2.0f; }
 

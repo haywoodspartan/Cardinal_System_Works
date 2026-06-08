@@ -15,3 +15,6 @@ add_subdirectory(10_vm_sandbox)
 # Codebase stress world — heavy actor/sim/game + PlayerController +
 # particles + virtual texturing + net loopback + navmesh every frame.
 add_subdirectory(11_stress_world)
+# Cardinal Slate native UI — our own retained-mode framework as a native,
+# GPU-rendered windowed app (no ImGui): window + input + RHI renderer.
+add_subdirectory(12_slate_native)
