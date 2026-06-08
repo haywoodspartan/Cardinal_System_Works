@@ -90,6 +90,18 @@ struct Constraints {
 enum class Axis  : u8 { Horizontal, Vertical };
 enum class Align : u8 { Start, Center, End, Stretch };
 
+// 9-point anchor for absolute placement within a parent rect — Cardinal's take
+// on Pearl Abyss's PAUIBase H/V align model (ComputePos), reworked into a clean
+// composable form. Values are laid out row-major (row = index/3 = Top/Mid/Bot,
+// col = index%3 = Left/Center/Right) so a container can decode them branch-free.
+enum class Anchor : u8 {
+    TopLeft = 0, TopCenter,    TopRight,
+    CenterLeft, Center,        CenterRight,
+    BottomLeft, BottomCenter,  BottomRight,
+};
+inline constexpr int anchor_col(Anchor a) noexcept { return static_cast<int>(a) % 3; }   // 0 L,1 C,2 R
+inline constexpr int anchor_row(Anchor a) noexcept { return static_cast<int>(a) / 3; }   // 0 T,1 M,2 B
+
 // -----------------------------------------------------------------------------
 // Text metrics. Until a real font/glyph-atlas system lands (phase 2), widgets
 // size text with a fixed advance ratio so layout stays deterministic + testable

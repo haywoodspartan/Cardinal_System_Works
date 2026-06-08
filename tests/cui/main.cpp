@@ -158,6 +158,80 @@ void test_paint_emits_commands() {
     CHECK(found);
 }
 
+// A fixed-size leaf for exact layout assertions.
+struct FixedBox : ui::Widget {
+    ui::Vec2 sz;
+    explicit FixedBox(ui::Vec2 s) : sz(s) {}
+    ui::Vec2 measure(const ui::Constraints& c) override { return { c.clamp_w(sz.x), c.clamp_h(sz.y) }; }
+    void     paint(ui::PaintContext&) override {}
+};
+
+// ---- Canvas: 9-point anchor placement (PA ComputePos model) ---------------
+void test_canvas_anchors() {
+    ui::Ui u;
+    auto* canvas = static_cast<ui::Canvas*>(u.set_root(cardinal::make_unique<ui::Canvas>()));
+    auto* tl = static_cast<FixedBox*>(canvas->add_anchored(
+        cardinal::make_unique<FixedBox>(ui::Vec2{20, 10}), ui::Anchor::TopLeft));
+    auto* ce = static_cast<FixedBox*>(canvas->add_anchored(
+        cardinal::make_unique<FixedBox>(ui::Vec2{20, 10}), ui::Anchor::Center));
+    auto* br = static_cast<FixedBox*>(canvas->add_anchored(
+        cardinal::make_unique<FixedBox>(ui::Vec2{20, 10}), ui::Anchor::BottomRight, ui::Vec2{5, 3}));
+
+    u.layout({ 200, 100 });
+    CHECK(canvas->rect().width() == 200.0f && canvas->rect().height() == 100.0f);
+    // Top-left at origin.
+    CHECK(ap(tl->rect().pos.x, 0.0f) && ap(tl->rect().pos.y, 0.0f));
+    // Center: (200-20)/2, (100-10)/2.
+    CHECK(ap(ce->rect().pos.x, 90.0f) && ap(ce->rect().pos.y, 45.0f));
+    // Bottom-right, inset by offset: 200-20-5, 100-10-3.
+    CHECK(ap(br->rect().pos.x, 175.0f) && ap(br->rect().pos.y, 87.0f));
+}
+
+// ---- find by id (PA FindControl) ------------------------------------------
+void test_find_by_id() {
+    ui::Ui u;
+    auto* root = static_cast<ui::Panel*>(
+        u.set_root(cardinal::make_unique<ui::Panel>(u.theme().panel_bg)));
+    auto stack = cardinal::make_unique<ui::Stack>(ui::Axis::Vertical);
+    auto* btn = static_cast<ui::Button*>(stack->add(cardinal::make_unique<ui::Button>("Go")));
+    btn->set_id("go_button");
+    root->add(cardinal::move(stack));
+    CHECK(u.root()->find("go_button") == btn);
+    CHECK(u.root()->find("missing") == nullptr);
+}
+
+// ---- enable / ignore gate hit-testing (PA DISABLE / IGNORE) ---------------
+void test_state_hit_test() {
+    ui::Ui u;
+    auto* btn = static_cast<ui::Button*>(u.set_root(cardinal::make_unique<ui::Button>("Go")));
+    u.layout({ 200, 80 });
+    const ui::Vec2 c = btn->rect().center();
+    CHECK(u.root()->hit_test(c) == btn);          // normal -> hit
+    btn->set_enabled(false);
+    CHECK(u.root()->hit_test(c) == nullptr);      // disabled -> no hit
+    btn->set_enabled(true);
+    btn->set_ignore_input(true);
+    CHECK(u.root()->hit_test(c) == nullptr);      // ignore-input -> no hit
+}
+
+// ---- alpha cascade (PA SetAlphaChild) -------------------------------------
+void test_alpha_cascade() {
+    ui::Ui u;
+    auto* panel = static_cast<ui::Panel*>(
+        u.set_root(cardinal::make_unique<ui::Panel>(ui::Color{100, 100, 100, 200})));
+    panel->set_alpha(0.5f);                       // fade the whole subtree
+    panel->add(cardinal::make_unique<ui::Label>("X"));
+    u.layout({ 100, 100 });
+
+    ui::DrawList dl;
+    u.paint(dl);
+    // The label text (theme alpha 255) must be dimmed to ~127 by the 0.5 cascade.
+    bool dim_text = false;
+    for (const auto& cmd : dl.cmds())
+        if (cmd.kind == ui::DrawKind::Text && cmd.color.a >= 120 && cmd.color.a <= 132) dim_text = true;
+    CHECK(dim_text);
+}
+
 }  // namespace
 
 int main() {
@@ -167,6 +241,10 @@ int main() {
     test_checkbox_toggle();
     test_slider_drag();
     test_paint_emits_commands();
+    test_canvas_anchors();
+    test_find_by_id();
+    test_state_hit_test();
+    test_alpha_cascade();
 
     if (g_fail == 0) {
         cardinal::log::infof("cuitest", "OK  %d checks passed", g_checks);

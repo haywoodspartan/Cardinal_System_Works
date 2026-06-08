@@ -102,4 +102,23 @@ private:
     float  height_{20.0f};
 };
 
+// Canvas — absolute/anchor positioning container. Each child is placed within
+// the canvas's rect by a 9-point Anchor + a pixel offset (a "pan" inset from
+// the anchored edge), keeping its own measured size. This is Cardinal's clean
+// take on Pearl Abyss's PAUIBase anchor model (ComputePos): game UIs need
+// anchored absolute layout, not just flow. Best used as a root / full-region
+// container (it fills the space it is offered).
+class Canvas : public Widget {
+public:
+    Canvas() = default;
+    // Add `child` anchored at `a`, offset inward from the anchored edge.
+    Widget* add_anchored(cardinal::unique_ptr<Widget> child, Anchor a, Vec2 offset = {});
+    Vec2 measure(const Constraints& c) override;
+    void arrange(const Rect& r) override;
+    void paint(PaintContext& ctx) override { paint_children(ctx); }
+private:
+    struct Slot { Anchor anchor{Anchor::TopLeft}; Vec2 offset{}; };
+    cardinal::vector<Slot> slots_;   // parallel to children_
+};
+
 }  // namespace cardinal::cui

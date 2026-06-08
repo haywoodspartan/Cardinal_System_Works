@@ -40,8 +40,8 @@ void Ui::paint(DrawList& dl) {
     ctx.dl    = &dl;
     ctx.theme = &theme_;
     ctx.ui    = this;
-    dl.rect_filled(root_->rect(), theme_.window_bg, 0.0f);   // backdrop
-    root_->paint(ctx);
+    dl.rect_filled(root_->rect(), theme_.window_bg, 0.0f);   // backdrop (full alpha)
+    root_->paint_tree(ctx);                                  // cascades alpha down
 }
 
 }  // namespace cardinal::cui
