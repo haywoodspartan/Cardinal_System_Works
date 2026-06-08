@@ -2458,6 +2458,21 @@ public:
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Toggle visibility in viewport");
             ImGui::SameLine();
+            // Inline rename — double-click a row (below) swaps its label for an
+            // editor; Enter / Escape / click-away commits.
+            if (rename_id_ == e.id) {
+                ImGui::SetNextItemWidth(-1.0f);
+                if (rename_focus_) { ImGui::SetKeyboardFocusHere(); rename_focus_ = false; }
+                const bool committed = ImGui::InputText("##rename", rename_buf_,
+                    sizeof(rename_buf_),
+                    ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+                if (committed || ImGui::IsItemDeactivated()) {
+                    e.name = rename_buf_;
+                    rename_id_ = 0;
+                }
+                ImGui::PopID();
+                continue;
+            }
             char label[176];
             cardinal::snprintf(label, sizeof(label), "%s##he_%u",
                           e.name.empty() ? "(entity)" : e.name.c_str(),
@@ -2496,6 +2511,12 @@ public:
                     sel.clear();
                     sel.push_back(e.id);
                 }
+            }
+            if (ImGui::IsItemHovered() &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                rename_id_ = e.id;
+                cardinal::snprintf(rename_buf_, sizeof(rename_buf_), "%s", e.name.c_str());
+                rename_focus_ = true;
             }
             ImGui::PopID();
         }
@@ -4290,6 +4311,11 @@ private:
     cardinal::string                    asset_cwd_;
     cardinal::vector<AssetFile>         asset_files_;
     ImGuiTextFilter                asset_filter_;
+
+    // Outliner inline-rename state (double-click a row to rename in place).
+    u32                            rename_id_    {0};
+    bool                           rename_focus_ {false};
+    char                           rename_buf_[128] {};
 
     // Console / REPL state — actual panel rendering lives in
     // panels/console.cpp. We hold the scrollback + input + focus/submit
