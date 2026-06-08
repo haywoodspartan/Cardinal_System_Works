@@ -88,6 +88,62 @@ PipelineResult run_pipeline(const project::Project& proj,
                             const PipelineOptions& opts,
                             ProgressFn progress = nullptr, void* user = nullptr);
 
+// ----------------------------------------------------------------------------
+// Engine-source build orchestration.
+//
+// Unreal's UBT compiles the engine itself; the Cardinal buildtool OWNS the
+// engine build here — it validates the engine checkout, composes + drives a
+// cmake configure+build of the engine target, and streams per-module progress
+// (parsed from ninja's "[cur/total]" output) — while keeping cmake/ninja
+// underneath. This is distinct from stage_build (which builds a game PROJECT
+// and pulls the engine in transitively via add_subdirectory): build_engine
+// targets the engine checkout directly, e.g. for a Studio "Build Engine"
+// action or a CI step.
+// ----------------------------------------------------------------------------
+
+// Result of running a child process with captured output.
+struct ProcResult {
+    bool             launched {false};   // false if the process could not start
+    int              exit_code{-1};
+    cardinal::string output;             // combined stdout+stderr
+};
+
+// Run `command` through the platform shell, capturing its output. `on_line`, if
+// set, is called once per output line as it streams (live progress). Portable:
+// _popen on Windows, popen on POSIX. Public so it is unit-testable.
+using LineFn = void (*)(const char* line, void* user);
+ProcResult run_capture(const cardinal::string& command,
+                       LineFn on_line = nullptr, void* user = nullptr);
+
+struct EngineBuildOptions {
+    cardinal::string engine_root;                 // Cardinal checkout (has CMakeLists.txt)
+    BuildConfig      config {BuildConfig::Development};
+    cardinal::string target {"cardinal_engine"};  // cmake target to build
+    bool             run_compile {false};         // spawn cmake (else compose only)
+    cardinal::string build_dir;                   // default <root>/build/cardinal-engine-<config>
+};
+
+struct EngineBuildReport {
+    bool             ok {false};
+    bool             validated {false};   // engine_root has a top-level CMakeLists.txt
+    cardinal::string configure_command;   // composed `cmake -G Ninja -B ... -S ...`
+    cardinal::string build_command;       // composed `cmake --build ... --target ...`
+    cardinal::string build_dir;
+    bool             compiled {false};    // run_compile was set + the spawn ran
+    int              exit_code {0};
+    int              modules_total {0};   // parsed from ninja [cur/total]
+    int              modules_built {0};
+    cardinal::string log_tail;            // tail of captured output (diagnostics)
+};
+
+// Per-module progress: (current, total, last output line).
+using EngineProgressFn = void (*)(int cur, int total, const char* line, void* user);
+
+// Validate + compose (and, when run_compile is set, actually run) the engine
+// build. Compose-only (run_compile=false) is pure + headless-verifiable.
+EngineBuildReport build_engine(const EngineBuildOptions& opts,
+                               EngineProgressFn progress = nullptr, void* user = nullptr);
+
 // Composable individual stages (run_pipeline calls these).
 StageReport stage_build  (const project::Project& proj, const PipelineOptions& opts,
                           cardinal::string& build_command_out);

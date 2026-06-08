@@ -11,6 +11,8 @@
 #include <cardinal/core/std/cstdio.hpp>       // cardinal::snprintf
 #include <cardinal/core/std/utility.hpp>      // cardinal::move
 
+#include <cstdio>                             // FILE, fgets, _popen/_pclose (popen/pclose)
+
 namespace fs = cardinal::fs;
 
 namespace cardinal::buildtool {
@@ -71,7 +73,128 @@ cardinal::string resolve_archive_dir(const project::Project& proj, const Pipelin
            nonempty(proj.info().name, "Game") + "-" + build_config_name(opts.config);
 }
 
+// Parse ninja's leading "[cur/total]" progress token. Returns true + fills
+// cur/total on a match. Hand-rolled (no sscanf) so it stays allocation-free.
+bool parse_ninja_progress(const char* line, int& cur, int& total) noexcept {
+    if (line == nullptr || line[0] != '[') return false;
+    const char* p = line + 1;
+    int a = 0; bool any = false;
+    while (*p >= '0' && *p <= '9') { a = a * 10 + (*p - '0'); ++p; any = true; }
+    if (!any || *p != '/') return false;
+    ++p;
+    int b = 0; any = false;
+    while (*p >= '0' && *p <= '9') { b = b * 10 + (*p - '0'); ++p; any = true; }
+    if (!any || *p != ']') return false;
+    cur = a; total = b;
+    return true;
+}
+
+cardinal::string tail(const cardinal::string& s, cardinal::usize n = 600) {
+    return s.size() <= n ? s : s.substr(s.size() - n);
+}
+
+// Reject paths with characters that could break out of the quoted command when
+// it reaches the shell (same guard stage_build uses).
+bool path_has_shell_meta(const cardinal::string& s) noexcept {
+    for (char c : s)
+        if (c == '"' || c == '`' || c == '$' || c == '\n' || c == '\r') return true;
+    return false;
+}
+
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// Process capture.
+// ---------------------------------------------------------------------------
+ProcResult run_capture(const cardinal::string& command, LineFn on_line, void* user) {
+    ProcResult r;
+#if defined(_WIN32)
+    FILE* pipe = _popen(command.c_str(), "r");
+#else
+    FILE* pipe = ::popen(command.c_str(), "r");
+#endif
+    if (pipe == nullptr) return r;   // launched stays false
+    r.launched = true;
+
+    char buf[1024];
+    cardinal::string line;
+    while (std::fgets(buf, sizeof(buf), pipe) != nullptr) {
+        r.output += buf;
+        line += buf;
+        if (!line.empty() && line.back() == '\n') {
+            while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+            if (on_line) on_line(line.c_str(), user);
+            line.clear();
+        }
+    }
+    if (!line.empty() && on_line) on_line(line.c_str(), user);   // trailing partial line
+
+#if defined(_WIN32)
+    r.exit_code = _pclose(pipe);
+#else
+    r.exit_code = ::pclose(pipe);
+#endif
+    return r;
+}
+
+// ---------------------------------------------------------------------------
+// Engine-source build.
+// ---------------------------------------------------------------------------
+EngineBuildReport build_engine(const EngineBuildOptions& opts,
+                               EngineProgressFn progress, void* user) {
+    EngineBuildReport rep;
+    const cardinal::string root = fwd_slash(opts.engine_root);
+
+    cardinal::error_code ec;
+    rep.validated = !root.empty() && fs::exists(root + "/CMakeLists.txt", ec);
+    if (!rep.validated || path_has_shell_meta(root)) {
+        rep.ok = false;
+        return rep;
+    }
+
+    rep.build_dir = opts.build_dir.empty()
+        ? (root + "/build/cardinal-engine-" + build_config_name(opts.config))
+        : fwd_slash(opts.build_dir);
+    const cardinal::string target =
+        opts.target.empty() ? cardinal::string("cardinal_engine") : opts.target;
+
+    rep.configure_command =
+        cardinal::string("cmake -G Ninja -B \"") + rep.build_dir + "\" -S \"" + root +
+        "\" -DCMAKE_BUILD_TYPE=" + build_config_cmake(opts.config);
+    rep.build_command =
+        cardinal::string("cmake --build \"") + rep.build_dir + "\" --target " + target;
+
+    if (!opts.run_compile) {
+        rep.ok = true;   // compose-only success (validated + commands composed)
+        return rep;
+    }
+
+    // Live progress: parse ninja [cur/total] from each line + forward upward.
+    struct Ctx { EngineBuildReport* rep; EngineProgressFn cb; void* user; } ctx{ &rep, progress, user };
+    const LineFn on_line = [](const char* line, void* u) {
+        auto* c = static_cast<Ctx*>(u);
+        int cur = 0, total = 0;
+        if (parse_ninja_progress(line, cur, total)) {
+            c->rep->modules_built = cur;
+            c->rep->modules_total = total;
+        }
+        if (c->cb) c->cb(c->rep->modules_built, c->rep->modules_total, line, c->user);
+    };
+
+    rep.compiled = true;
+    const ProcResult cfg = run_capture(rep.configure_command, on_line, &ctx);
+    if (!cfg.launched || cfg.exit_code != 0) {
+        rep.exit_code = cfg.exit_code;
+        rep.log_tail  = tail(cfg.output);
+        rep.ok = false;
+        return rep;
+    }
+    const ProcResult bld = run_capture(rep.build_command, on_line, &ctx);
+    rep.exit_code = bld.exit_code;
+    rep.log_tail  = tail(bld.output);
+    rep.ok = bld.launched && bld.exit_code == 0;
+    return rep;
+}
 
 // ---- Build ----------------------------------------------------------------
 StageReport stage_build(const project::Project& proj, const PipelineOptions& opts,

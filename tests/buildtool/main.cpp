@@ -132,12 +132,60 @@ void test_stage_selection() {
     rm(rootp);
 }
 
+// ---- process capture ----------------------------------------------
+void test_run_capture() {
+    // `echo` exists on both cmd.exe (_popen) and /bin/sh (popen).
+    auto r = bt::run_capture("echo cardinal_capture_ok");
+    CHECK(r.launched);
+    CHECK(r.exit_code == 0);
+    CHECK(contains(r.output, "cardinal_capture_ok"));
+}
+
+// ---- engine-source build orchestration ----------------------------
+void test_build_engine() {
+    // (a) A checkout WITH a top-level CMakeLists.txt validates + composes the
+    //     configure/build commands (compose-only: pure, no spawn).
+    const fs::path eng = tmp_root("engine");
+    write_file(eng / "CMakeLists.txt", "cmake_minimum_required(VERSION 3.27)\n");
+    bt::EngineBuildOptions o;
+    o.engine_root = eng.string();
+    o.config      = bt::BuildConfig::Development;   // -> RelWithDebInfo
+    o.run_compile = false;
+    auto rep = bt::build_engine(o);
+    CHECK(rep.validated);
+    CHECK(rep.ok);                                  // compose-only success
+    CHECK(!rep.compiled);                           // did not spawn
+    CHECK(contains(rep.configure_command, "cmake"));
+    CHECK(contains(rep.configure_command, "RelWithDebInfo"));
+    CHECK(contains(rep.configure_command, eng.generic_string().c_str()));   // engine root in -S
+    CHECK(contains(rep.build_command, "--target"));
+    CHECK(contains(rep.build_command, "cardinal_engine"));          // default target
+    CHECK(!rep.build_dir.empty());
+
+    // (b) A dir WITHOUT a CMakeLists.txt fails validation.
+    const fs::path bad = tmp_root("engine_bad");
+    std::error_code ec; fs::create_directories(bad, ec);
+    bt::EngineBuildOptions o2; o2.engine_root = bad.string(); o2.run_compile = false;
+    auto rep2 = bt::build_engine(o2);
+    CHECK(!rep2.validated);
+    CHECK(!rep2.ok);
+
+    // (c) A custom target name flows into the build command.
+    bt::EngineBuildOptions o3; o3.engine_root = eng.string(); o3.target = "cardinal_core";
+    auto rep3 = bt::build_engine(o3);
+    CHECK(contains(rep3.build_command, "cardinal_core"));
+
+    rm(eng); rm(bad);
+}
+
 }  // namespace
 
 int main() {
     test_tables();
     test_full_pipeline();
     test_stage_selection();
+    test_run_capture();
+    test_build_engine();
     if (g_fail == 0) {
         cardinal::log::infof("bttest", "OK  %d checks passed", g_checks);
         return 0;
