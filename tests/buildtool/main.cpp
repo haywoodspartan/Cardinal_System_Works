@@ -178,6 +178,34 @@ void test_build_engine() {
     rm(eng); rm(bad);
 }
 
+// ---- pipeline with the optional engine-build stage ----------------
+void test_pipeline_build_engine() {
+    // A temp "engine checkout" (has a top-level CMakeLists.txt) so validation
+    // passes on any machine (CI-safe — no dependence on the dev checkout path).
+    const fs::path eng = tmp_root("pipe_engine");
+    write_file(eng / "CMakeLists.txt", "cmake_minimum_required(VERSION 3.27)\n");
+
+    const fs::path rootp = tmp_root("pipe_be");
+    pj::InstantiateOptions o;
+    o.root = rootp.string(); o.info.name = "BE"; o.info.engine_root = eng.string();
+    auto p = pj::instantiate_template(o, nullptr);
+    CHECK(p != nullptr);
+    if (p) {
+        bt::PipelineOptions opt;
+        opt.do_build_engine = true;
+        opt.do_build = false; opt.do_cook = false; opt.do_pack = false; opt.do_archive = false;
+        opt.run_compile = false;                       // compose-only
+        auto res = bt::run_pipeline(*p, opt);
+        CHECK(res.ok);
+        CHECK(res.stages.size() == 1u);                // only BuildEngine ran
+        bool be_ok = false;
+        for (const auto& s : res.stages)
+            if (s.name == "BuildEngine" && s.status == bt::StageStatus::Ok) be_ok = true;
+        CHECK(be_ok);
+    }
+    rm(eng); rm(rootp);
+}
+
 }  // namespace
 
 int main() {
@@ -186,6 +214,7 @@ int main() {
     test_stage_selection();
     test_run_capture();
     test_build_engine();
+    test_pipeline_build_engine();
     if (g_fail == 0) {
         cardinal::log::infof("bttest", "OK  %d checks passed", g_checks);
         return 0;

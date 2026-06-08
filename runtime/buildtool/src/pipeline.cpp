@@ -318,6 +318,33 @@ StageReport stage_archive(const project::Project& proj, const PipelineOptions& o
 }
 
 // ---- Orchestrator ---------------------------------------------------------
+StageReport stage_build_engine(const project::Project& proj, const PipelineOptions& opts) {
+    StageReport r;
+    r.name = "BuildEngine";
+    EngineBuildOptions eo;
+    eo.engine_root = proj.info().engine_root;
+    eo.config      = opts.config;
+    eo.run_compile = opts.run_compile;
+
+    const EngineBuildReport rep = build_engine(eo);
+    if (!rep.validated) {
+        r.status = StageStatus::Failed;
+        r.detail = "engine_root has no CMakeLists.txt: " +
+                   nonempty(proj.info().engine_root, "(empty)");
+        return r;
+    }
+    if (!rep.ok) {
+        r.status = StageStatus::Failed;
+        r.detail = "engine build failed (exit " + cardinal::to_string(rep.exit_code) + ")";
+        return r;
+    }
+    r.status = StageStatus::Ok;
+    r.detail = rep.compiled
+        ? ("built engine target (" + cardinal::to_string(rep.modules_built) + " steps)")
+        : ("composed: " + rep.build_command);
+    return r;
+}
+
 PipelineResult run_pipeline(const project::Project& proj, const PipelineOptions& opts,
                             ProgressFn progress, void* user) {
     PipelineResult res;
@@ -330,6 +357,9 @@ PipelineResult run_pipeline(const project::Project& proj, const PipelineOptions&
         return !failed;   // false => short-circuit
     };
 
+    if (opts.do_build_engine) {
+        if (!report(stage_build_engine(proj, opts))) return res;
+    }
     if (opts.do_build) {
         if (!report(stage_build(proj, opts, res.build_command))) return res;
     }

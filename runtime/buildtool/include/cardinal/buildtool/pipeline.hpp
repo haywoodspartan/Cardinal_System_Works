@@ -47,6 +47,7 @@ struct PipelineOptions {
     BuildConfig config {BuildConfig::Development};
     BuildTarget target {BuildTarget::Game};
 
+    bool do_build_engine{false}; // build the ENGINE first (build_engine) — UBT-style
     bool do_build   {true};    // generate build files + compose the build command
     bool run_compile{false};   // also SPAWN cmake configure+build (env-gated)
     bool do_cook    {true};
@@ -145,6 +146,9 @@ EngineBuildReport build_engine(const EngineBuildOptions& opts,
                                EngineProgressFn progress = nullptr, void* user = nullptr);
 
 // Composable individual stages (run_pipeline calls these).
+// Optional engine-source build (runs first when opts.do_build_engine) — drives
+// build_engine() off the project's engine_root + config.
+StageReport stage_build_engine(const project::Project& proj, const PipelineOptions& opts);
 StageReport stage_build  (const project::Project& proj, const PipelineOptions& opts,
                           cardinal::string& build_command_out);
 StageReport stage_cook   (const project::Project& proj, const PipelineOptions& opts,
