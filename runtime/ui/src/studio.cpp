@@ -2448,8 +2448,11 @@ public:
         ImGui::TextDisabled("%zu entit%s | %zu selected",
                             ents.size(), ents.size() == 1 ? "y" : "ies",
                             sel.size());
+        hier_filter_.Draw("Filter", -1.0f);
         ImGui::Separator();
         for (auto& e : ents) {
+            if (hier_filter_.IsActive() && !hier_filter_.PassFilter(
+                    e.name.empty() ? "(entity)" : e.name.c_str())) continue;
             ImGui::PushID(static_cast<int>(e.id));
             // Per-row visibility toggle (honoured by the renderer via
             // is_entity_visible) — like UE5's outliner eye.
@@ -4316,6 +4319,7 @@ private:
     u32                            rename_id_    {0};
     bool                           rename_focus_ {false};
     char                           rename_buf_[128] {};
+    ImGuiTextFilter                hier_filter_;   // Outliner name search
 
     // Console / REPL state — actual panel rendering lives in
     // panels/console.cpp. We hold the scrollback + input + focus/submit
