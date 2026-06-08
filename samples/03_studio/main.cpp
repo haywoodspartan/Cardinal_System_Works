@@ -2622,6 +2622,32 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Editor selection/action accelerators (the chords shown in the Edit /
+        // Select menus). Gated only on text input so they fire from the Outliner
+        // and viewport, UE5-style. They feed the same menu-request flags +
+        // selection set the menus do, so there's one action path.
+        {
+            const ImGuiIO& io = ImGui::GetIO();
+            if (!io.WantTextInput) {
+                const bool ctrl = io.KeyCtrl || io.KeySuper;
+                if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D, false) && selected_id != 0)
+                    menu_duplicate = true;                                  // Ctrl+D
+                if (ctrl && ImGui::IsKeyPressed(ImGuiKey_A, false)) {       // Ctrl+A
+                    selection.clear();
+                    for (const auto& e : scene.entities()) selection.push_back(e.id);
+                    selected_id = selection.empty() ? 0u : selection.back();
+                }
+                if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Delete, false) && selected_id != 0)
+                    menu_delete = true;                                     // Del
+                if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_F, false) && selected_id != 0)
+                    menu_focus = true;                                      // F (focus)
+                if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !selection.empty()) {
+                    selection.clear();                                      // Esc (deselect)
+                    selected_id = 0;
+                }
+            }
+        }
+
         // ---- Command palette (Ctrl+P) — the unified command bus surfaced as
         // a searchable list. EVERY registered command is reachable + callable
         // here through the one registry, with a host-built CommandContext
