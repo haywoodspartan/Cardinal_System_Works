@@ -638,6 +638,8 @@ int main(int argc, char** argv) {
     bool want_quit      = false;
     u32  selected_id    = 0;
     bool open_terrain_modal = false;
+    bool open_save_as_modal = false;
+    char save_as_path[1024] = "";
     // Menu-bar editor commands (Edit / Actor menus). Set by the menu items and
     // OR'd into the viewport context-action handler below so they run the same
     // undo-integrated duplicate / delete / focus paths.
@@ -1819,6 +1821,14 @@ int main(int argc, char** argv) {
                 const bool have_proj = static_cast<bool>(current_project);
                 if (ImGui::MenuItem("Save World", "Ctrl+S", false, have_proj))
                     save_world_now();
+                if (ImGui::MenuItem("Save World As…")) {
+                    const std::string def = current_project
+                        ? (current_project->dirs().root + "/" +
+                           current_project->info().startup_world)
+                        : std::string("world.cardinalworld");
+                    std::snprintf(save_as_path, sizeof(save_as_path), "%s", def.c_str());
+                    open_save_as_modal = true;
+                }
                 if (ImGui::MenuItem("Open World", nullptr, false, have_proj)) {
                     const std::string wp = current_project->dirs().root + "/" +
                                            current_project->info().startup_world;
@@ -2193,6 +2203,23 @@ int main(int argc, char** argv) {
             ImGui::EndMenuBar();
         }
         ImGui::End();   // ##dockhost
+
+        // Save World As… modal — write the world to an arbitrary path.
+        if (open_save_as_modal) { ImGui::OpenPopup("Save World As"); open_save_as_modal = false; }
+        if (ImGui::BeginPopupModal("Save World As", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextUnformatted("Write the current world to a .cardinalworld file:");
+            ImGui::SetNextItemWidth(440.0f);
+            ImGui::InputText("Path", save_as_path, sizeof(save_as_path));
+            if (ImGui::Button("Save", ImVec2(120, 0))) {
+                cardinal::string serr;
+                cardinal::serial::save_world(game.world(), save_as_path, &serr);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
 
         // ---- Fly camera input ---------------------------------------------
         //
