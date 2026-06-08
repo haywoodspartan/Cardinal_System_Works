@@ -82,6 +82,9 @@ namespace cardinal::input {
 #include <cardinal/script/engine.hpp>
 #include <cardinal/ui/studio.hpp>
 #include <cardinal/ui/options_panel.hpp>   // Options / Settings panel (cvar editor)
+#include <cardinal/ui/cui_render.hpp>       // Cardinal Slate -> ImGui draw bridge
+#include <cardinal/cui/context.hpp>         // Cardinal Slate (our own UI framework)
+#include <cardinal/cui/widgets.hpp>
 #include <cardinal/window/window.hpp>
 
 #include <imgui.h>
@@ -654,6 +657,30 @@ int main(int argc, char** argv) {
         cardinal::scene::Vec3                       tint{1, 1, 1};
         cardinal::scene::Material                   material;
     } entity_clip;
+
+    // ---- Cardinal Slate (cui) live preview ---------------------------------
+    // Our own retained-mode UI framework, rendered INSIDE this ImGui-hosted
+    // editor through the cui->ImGui bridge (the coexist-and-migrate path). Bound
+    // state lives out here so it outlives the widget tree built once below.
+    bool   show_slate_preview = false;
+    bool   slate_check        = true;
+    float  slate_val          = 0.5f;
+    int    slate_clicks       = 0;
+    cardinal::cui::Ui     slate_ui;
+    cardinal::cui::Label* slate_clicks_lbl = nullptr;
+    {
+        using namespace cardinal::cui;
+        auto panel = cardinal::make_unique<Panel>(slate_ui.theme().panel_bg, Edges::all(10.0f));
+        auto stack = cardinal::make_unique<Stack>(Axis::Vertical, 8.0f);
+        stack->add(cardinal::make_unique<Label>("Cardinal Slate - live (our own UI framework)"));
+        stack->add(cardinal::make_unique<Button>("Click me", [&slate_clicks]() { ++slate_clicks; }));
+        slate_clicks_lbl = static_cast<Label*>(
+            stack->add(cardinal::make_unique<Label>("clicks: 0")));
+        stack->add(cardinal::make_unique<Checkbox>("Enabled", &slate_check));
+        stack->add(cardinal::make_unique<Slider>(&slate_val, 0.0f, 1.0f));
+        panel->add(cardinal::move(stack));
+        slate_ui.set_root(cardinal::move(panel));
+    }
 
     // Fly camera replaces the demo orbit. It only takes input when the
     // Viewport panel is hovered (gated below).
@@ -1938,6 +1965,7 @@ int main(int argc, char** argv) {
                 ImGui::MenuItem("Log",                 nullptr, &show_log);
                 ImGui::MenuItem("Console",             nullptr, &show_console);
                 ImGui::MenuItem("Options / Settings",  nullptr, &show_options);
+                ImGui::MenuItem("Cardinal Slate (preview)", nullptr, &show_slate_preview);
                 ImGui::MenuItem("Code Sandbox",        nullptr, &show_cppscript);
                 ImGui::Separator();
                 ImGui::MenuItem("Render Pipeline",     nullptr, &show_pipeline);
@@ -2951,6 +2979,37 @@ int main(int argc, char** argv) {
         if (!any_maximized && show_stats)    studio->draw_stats_panel("Stats", &show_stats);
         if (!any_maximized && show_options)
             cardinal::ui::panels::options_panel::draw("Options / Settings", &show_options);
+
+        // Cardinal Slate (cui) live preview — our own retained-mode UI framework
+        // rendered inside this ImGui window via the cui->ImGui bridge. Proves the
+        // framework end-to-end (layout + input + paint) ahead of the native RHI
+        // renderer + the Studio-panel migration.
+        if (!any_maximized && show_slate_preview) {
+            if (ImGui::Begin("Cardinal Slate (preview)", &show_slate_preview)) {
+                if (slate_clicks_lbl)
+                    slate_clicks_lbl->set_text("clicks: " + std::to_string(slate_clicks));
+
+                const ImVec2 origin = ImGui::GetCursorScreenPos();
+                const ImVec2 avail  = ImGui::GetContentRegionAvail();
+                const cardinal::cui::Vec2 size{ avail.x, avail.y > 1.0f ? avail.y : 1.0f };
+
+                slate_ui.layout(size);
+
+                const ImVec2 m = ImGui::GetMousePos();
+                cardinal::cui::InputState in;
+                in.mouse      = { m.x - origin.x, m.y - origin.y };
+                in.mouse_down = ImGui::IsWindowHovered() &&
+                                ImGui::IsMouseDown(ImGuiMouseButton_Left);
+                slate_ui.update_input(in);
+
+                cardinal::cui::DrawList dl;
+                slate_ui.paint(dl);
+                cardinal::ui::cui_render(dl, ImGui::GetWindowDrawList(),
+                                         { origin.x, origin.y });
+                ImGui::Dummy(avail);   // reserve the painted region for sizing
+            }
+            ImGui::End();
+        }
         if (!any_maximized && show_pipeline) studio->draw_render_pipeline_panel(*pipelines, "Render Pipeline", &show_pipeline);
         if (!any_maximized && show_memory)   studio->draw_memory_panel(&budget_broker, "Memory & Budgets", &show_memory);
         if (!any_maximized && show_profiler) studio->draw_profiler_panel(last_frame_ms_for_profiler, "Profiler", &show_profiler);

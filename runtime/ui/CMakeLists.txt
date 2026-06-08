@@ -15,6 +15,9 @@ set(CARDINAL_UI_HEADERS
     # Free-function Options / Settings panel — categorised editor over the
     # console CVar registry + Save/Load to a settings file. Same shape.
     include/cardinal/ui/options_panel.hpp
+    # Cardinal Slate (cui) -> ImGui draw-list bridge — renders a cui widget
+    # tree inside the ImGui-hosted Studio during the migration.
+    include/cardinal/ui/cui_render.hpp
 )
 
 set(CARDINAL_UI_SOURCES
@@ -79,6 +82,8 @@ set(CARDINAL_UI_SOURCES
     src/panels/diagnostics/profiler.cpp
     src/panels/diagnostics/simd.cpp
     src/panels/diagnostics/options.cpp
+    # Cardinal Slate (cui) -> ImGui draw-list bridge.
+    src/cui_render.cpp
     # We compile our own copy of imgui_impl_vulkan.cpp so it links against
     # volk's function pointers instead of the vcpkg `imgui[vulkan-binding]`
     # binary path — the latter crashed inside ImGui_ImplVulkan_Init under
@@ -122,6 +127,7 @@ target_link_libraries(cardinal_ui
     # find yourself adding a direct link here, the dependency probably
     # belongs in cardinal::engine first.
     PUBLIC  cardinal::engine
+            cardinal::cui            # Cardinal Slate (retained-mode UI framework)
             cardinal::compile_flags
     PRIVATE imgui::imgui imguizmo::imguizmo Vulkan::Headers volk::volk
 )
