@@ -1799,6 +1799,27 @@ int main(int argc, char** argv) {
                     cardinal::serial::load_world(game, wp, true, &serr);
                 }
                 ImGui::Separator();
+                // Recent Projects — open one (and load its startup world, the same
+                // as the Project panel does) straight from the File menu.
+                if (ImGui::BeginMenu("Recent Projects", !recent_projects.entries().empty())) {
+                    for (const auto& rp : recent_projects.entries()) {
+                        if (ImGui::MenuItem(rp.c_str())) {
+                            cardinal::string oerr;
+                            auto p = cardinal::project::Project::open(rp, &oerr);
+                            if (p) {
+                                current_project = p;
+                                recent_projects.add(rp);
+                                recent_projects.save();
+                                const std::string wp = p->dirs().root + "/" +
+                                                       p->info().startup_world;
+                                cardinal::string werr;
+                                cardinal::serial::load_world(game, wp, true, &werr);
+                            }
+                        }
+                    }
+                    ImGui::EndMenu();
+                }
+                ImGui::Separator();
                 if (ImGui::MenuItem("Quit")) want_quit = true;
                 ImGui::EndMenu();
             }
