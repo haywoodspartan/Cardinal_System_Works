@@ -2450,6 +2450,14 @@ public:
                             sel.size());
         ImGui::Separator();
         for (auto& e : ents) {
+            ImGui::PushID(static_cast<int>(e.id));
+            // Per-row visibility toggle (honoured by the renderer via
+            // is_entity_visible) — like UE5's outliner eye.
+            bool vis = e.visible;
+            if (ImGui::Checkbox("##vis", &vis)) e.visible = vis;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Toggle visibility in viewport");
+            ImGui::SameLine();
             char label[176];
             cardinal::snprintf(label, sizeof(label), "%s##he_%u",
                           e.name.empty() ? "(entity)" : e.name.c_str(),
@@ -2489,6 +2497,7 @@ public:
                     sel.push_back(e.id);
                 }
             }
+            ImGui::PopID();
         }
         ImGui::End();
         if (selection_inout != nullptr && &sel != &selection_)
