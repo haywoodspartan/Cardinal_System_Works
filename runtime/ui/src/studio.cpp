@@ -2555,6 +2555,14 @@ public:
                 ImGui::PopStyleColor();
                 ImGui::SameLine();
                 ImGui::Selectable(f.name.c_str(), false, ImGuiSelectableFlags_None);
+                // Right-click a file -> content-browser actions.
+                if (ImGui::BeginPopupContextItem()) {
+                    ImGui::TextDisabled("%s", f.name.c_str());
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Copy path")) ImGui::SetClipboardText(f.path.c_str());
+                    if (ImGui::MenuItem("Copy name")) ImGui::SetClipboardText(f.name.c_str());
+                    ImGui::EndPopup();
+                }
                 ImGui::PopID();
             }
             if (asset_files_.empty()) {
