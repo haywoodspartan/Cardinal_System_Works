@@ -472,35 +472,44 @@ void RhiBackend::execute(Graph& g) noexcept {
 
     const auto& order = g.execution_order();
 
-    // GAP 2: (re)build the ResourceHandle.id -> rhi::Buffer map — but ONLY when
-    // some compute pass actually carries a kernel. The Studio runs this backend
-    // every frame for telemetry; with no kernels wired yet the map would be
-    // pure per-frame GPU-allocation churn for zero benefit, so gate it. Sizes
-    // come from the BufferDescs; imported/initialised bytes are uploaded so a
-    // kernel reads real data. (Persistent-id caching is the perf follow-up.)
     buffers_.clear();
-    bool any_kernel = false;
-    for (u32 pid : order) {
-        const PassDesc& p = g.pass(pid);
-        if (p.kind == PassKind::Compute && p.compute_hlsl) { any_kernel = true; break; }
-    }
-    if (any_kernel) {
-        const usize rcount = g.resource_count() + 1;
-        buffers_.resize(rcount);
-        for (u32 rid = 1; rid < rcount; ++rid) {
-            const ResourceHandle h{rid};
-            const usize sz = g.buffer(h).size_bytes;
-            if (sz == 0) continue;
-            cardinal::rhi::BufferDesc bd{};
-            bd.size  = sz;
-            bd.usage = static_cast<u32>(cardinal::rhi::BufferUsage::Storage)
-                     | static_cast<u32>(cardinal::rhi::BufferUsage::ShaderDeviceAddress);
-            bd.cpu_writable = true;
-            auto buf = dev_->create_buffer(bd);
-            if (buf) {
-                const void* src = g.buffer_imported(h);    // host-supplied initial data
-                if (src) buf->upload(src, sz, 0);
-                buffers_[rid] = cardinal::move(buf);
+
+    // GPU compute execution is OPT-IN (set_gpu_execute), default OFF. The Studio
+    // runs this backend every frame purely for telemetry while the on-screen
+    // image is drawn by the ForwardRenderer, so building the buffer map +
+    // dispatching the AEGIS compute graph here is pure overhead. Worse, until
+    // the path is GPU-validated it (a) recreated every AEGIS resource buffer
+    // EVERY frame — an alloc/free storm that bled FPS on Vulkan and hard-crashed
+    // D3D12's allocator — and (b) could dispatch with partially-bound
+    // descriptors. So unless explicitly enabled, fall through to recording-only
+    // telemetry (NullBackend-equivalent cost) below.
+    if (gpu_execute_) {
+        // GAP 2: (re)build the ResourceHandle.id -> rhi::Buffer map when a pass
+        // carries a kernel. (Persistent-id caching across frames is the perf
+        // follow-up before this is enabled for real workloads.)
+        bool any_kernel = false;
+        for (u32 pid : order) {
+            const PassDesc& p = g.pass(pid);
+            if (p.kind == PassKind::Compute && p.compute_hlsl) { any_kernel = true; break; }
+        }
+        if (any_kernel) {
+            const usize rcount = g.resource_count() + 1;
+            buffers_.resize(rcount);
+            for (u32 rid = 1; rid < rcount; ++rid) {
+                const ResourceHandle h{rid};
+                const usize sz = g.buffer(h).size_bytes;
+                if (sz == 0) continue;
+                cardinal::rhi::BufferDesc bd{};
+                bd.size  = sz;
+                bd.usage = static_cast<u32>(cardinal::rhi::BufferUsage::Storage)
+                         | static_cast<u32>(cardinal::rhi::BufferUsage::ShaderDeviceAddress);
+                bd.cpu_writable = true;
+                auto buf = dev_->create_buffer(bd);
+                if (buf) {
+                    const void* src = g.buffer_imported(h);   // host-supplied initial data
+                    if (src) buf->upload(src, sz, 0);
+                    buffers_[rid] = cardinal::move(buf);
+                }
             }
         }
     }
@@ -519,7 +528,7 @@ void RhiBackend::execute(Graph& g) noexcept {
         // Write/ReadWrite -> read-write UAV). When the pass carries no HLSL (or
         // it fails to compile), create_compute_pipeline returns null and we
         // fall through to the recording-only telemetry path — same as before.
-        if (pd.kind == PassKind::Compute && !pipeline_cache_[pid] && pd.compute_hlsl) {
+        if (gpu_execute_ && pd.kind == PassKind::Compute && !pipeline_cache_[pid] && pd.compute_hlsl) {
             u32 srv = 0, uav = 0;
             for (const auto& a : pd.accesses) {
                 if (a.mode == AccessMode::Read) ++srv; else ++uav;
@@ -535,7 +544,21 @@ void RhiBackend::execute(Graph& g) noexcept {
             if (pipeline_cache_[pid]) ++stats_.pipelines_compiled;
         }
 
-        const bool has_real_pipe = (pd.kind == PassKind::Compute && pipeline_cache_[pid]);
+        // Only dispatch when EVERY declared resource has a live backing buffer.
+        // Dispatching a compute pipeline with unbound root SRV/UAV descriptors
+        // is a device-removed hard-crash on D3D12 (and undefined on Vulkan), so
+        // a pass whose buffers aren't all present falls back to recording-only.
+        bool all_bound = gpu_execute_;
+        if (all_bound) {
+            for (const auto& a : pd.accesses) {
+                if (a.handle.id >= buffers_.size() || !buffers_[a.handle.id]) {
+                    all_bound = false; break;
+                }
+            }
+        }
+
+        const bool has_real_pipe =
+            (gpu_execute_ && all_bound && pd.kind == PassKind::Compute && pipeline_cache_[pid]);
         if (has_real_pipe) {
             sw_->bind_pipeline(pipeline_cache_[pid].get());
             // GAP 3: upload the per-dispatch push block (the pass packed its

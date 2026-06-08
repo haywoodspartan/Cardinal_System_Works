@@ -380,6 +380,16 @@ public:
     Stats stats() const noexcept { return stats_; }
     void reset() noexcept;
 
+    // Opt-in GPU compute execution. OFF by default: the Studio runs this backend
+    // every frame for telemetry while the ForwardRenderer draws the screen, so
+    // building the AEGIS buffer map + dispatching compute here is pure overhead
+    // — and until the path is validated on real hardware it regressed FPS on
+    // Vulkan and hard-crashed D3D12 (per-frame buffer churn + dispatching with
+    // partially-bound descriptors). When false, execute() does recording-only
+    // telemetry (NullBackend-equivalent cost). Flip on to drive the real GPU path.
+    void set_gpu_execute(bool e) noexcept { gpu_execute_ = e; }
+    bool gpu_execute() const noexcept { return gpu_execute_; }
+
 private:
     RhiBackend() = default;
 
@@ -392,6 +402,7 @@ private:
     cardinal::vector<cardinal::unique_ptr<cardinal::rhi::Buffer>> buffers_;
     cardinal::vector<PassEvent> events_;
     Stats stats_;
+    bool  gpu_execute_ {false};   // opt-in; see set_gpu_execute (default safe)
 };
 
 // ---------------------------------------------------------------------------

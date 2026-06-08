@@ -184,20 +184,28 @@ void D3D12Device::populate_capabilities() {
     D3D12_FEATURE_DATA_D3D12_OPTIONS5 o5{};
     D3D12_FEATURE_DATA_D3D12_OPTIONS6 o6{};
     D3D12_FEATURE_DATA_D3D12_OPTIONS7 o7{};
-    // Request the highest SM the SDK knows about so HighestShaderModel can come
-    // back as 6.9 (FP8) on capable hardware. CheckFeatureSupport clamps to the
-    // requested ceiling, so requesting only 6.8 would mask 6.9 support.
-#if defined(D3D_SHADER_MODEL_6_9)
-    D3D12_FEATURE_DATA_SHADER_MODEL   sm{D3D_SHADER_MODEL_6_9};
-#else
+    // Shader model: probed robustly below. A 6.9 request returns E_INVALIDARG on
+    // runtimes that predate it — if we ignored the HRESULT, HighestShaderModel
+    // would be left at the requested 6.9 (garbage) and mis-light FP8/FP4 caps.
     D3D12_FEATURE_DATA_SHADER_MODEL   sm{D3D_SHADER_MODEL_6_8};
-#endif
 
     device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS,  &o,  sizeof(o));
     device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &o5, sizeof(o5));
     device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS6, &o6, sizeof(o6));
     device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &o7, sizeof(o7));
-    device_->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL,   &sm, sizeof(sm));
+    // Request the highest SM the SDK knows; on failure, step down so the field
+    // is always a value the runtime actually returned.
+#if defined(D3D_SHADER_MODEL_6_9)
+    {
+        D3D12_FEATURE_DATA_SHADER_MODEL sm_hi{D3D_SHADER_MODEL_6_9};
+        if (SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &sm_hi, sizeof(sm_hi))))
+            sm = sm_hi;
+        else
+            device_->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &sm, sizeof(sm));
+    }
+#else
+    device_->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &sm, sizeof(sm));
+#endif
 
     caps_.dynamic_rendering        = true;   // D3D12 has always had OMSetRenderTargets
     caps_.synchronization2         = true;
