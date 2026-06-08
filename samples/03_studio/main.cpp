@@ -51,6 +51,7 @@
 #include <cardinal/nav/nav.hpp>
 #include <cardinal/hud/hud.hpp>
 #include <cardinal/project/project.hpp>
+#include <cardinal/buildtool/pipeline.hpp>
 #include <cardinal/cook/cook.hpp>
 #include <cardinal/pack/pack.hpp>
 #include <cardinal/shader/shader.hpp>
@@ -1972,6 +1973,49 @@ int main(int argc, char** argv) {
                 ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f), "(%s)",
                     placement_asset_id.empty() ? "pick from palette"
                                                : placement_asset_id.c_str());
+            }
+            // ---- Build — UE5-style BuildCookRun dropdown (cardinal::buildtool).
+            if (ImGui::BeginMenu("Build")) {
+                static std::string build_status;
+                const bool have = static_cast<bool>(current_project);
+                if (!have) ImGui::TextDisabled("Open a project first (Project panel).");
+                auto run_pkg = [&](cardinal::buildtool::BuildConfig cfg, bool archive) {
+                    cardinal::buildtool::PipelineOptions opt;
+                    opt.config     = cfg;
+                    opt.target     = cardinal::buildtool::BuildTarget::Game;
+                    opt.do_build   = true;  opt.run_compile = false;   // generate; compile via build.bat
+                    opt.do_cook    = true;  opt.do_pack     = true;     opt.do_archive = archive;
+                    auto res = cardinal::buildtool::run_pipeline(*current_project, opt);
+                    build_status = res.ok ? ("Packaged \xE2\x86\x92 " + res.artifact_dir)
+                                          : "Package FAILED (see Log)";
+                };
+                if (ImGui::MenuItem("Cook Content", nullptr, false, have)) {
+                    cardinal::buildtool::PipelineOptions opt;
+                    opt.do_build = false; opt.do_cook = true; opt.do_pack = false; opt.do_archive = false;
+                    auto res = cardinal::buildtool::run_pipeline(*current_project, opt);
+                    build_status = res.ok ? "Cook OK" : "Cook FAILED (see Log)";
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Package: Development", nullptr, false, have))
+                    run_pkg(cardinal::buildtool::BuildConfig::Development, false);
+                if (ImGui::MenuItem("Package: Shipping (+archive)", nullptr, false, have))
+                    run_pkg(cardinal::buildtool::BuildConfig::Shipping, true);
+                ImGui::Separator();
+                ImGui::MenuItem("Package panel", nullptr, &show_project);
+                if (!build_status.empty()) {
+                    ImGui::Separator();
+                    ImGui::TextDisabled("%s", build_status.c_str());
+                }
+                ImGui::EndMenu();
+            }
+            // ---- Help — about + quick references.
+            if (ImGui::BeginMenu("Help")) {
+                ImGui::TextDisabled("Cardinal Engine");
+                ImGui::TextDisabled("Vulkan + D3D12 \xE2\x80\xA2 AEGIS Render Pipeline 2.0");
+                ImGui::Separator();
+                ImGui::MenuItem("Documentation: see README.md", nullptr, false, false);
+                ImGui::MenuItem("ImGui Demo", nullptr, &show_demo);
+                ImGui::EndMenu();
             }
             ImGui::EndMenuBar();
         }

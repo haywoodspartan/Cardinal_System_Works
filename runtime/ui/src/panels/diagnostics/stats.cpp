@@ -6,6 +6,7 @@
 #include <cardinal/rhi/rhi.hpp>
 
 #include <cardinal/ui/imgui.hpp>
+#include <cardinal/core/std/cstdio.hpp>   // cardinal::snprintf (Copy summary)
 
 namespace cardinal::ui::panels::stats_panel {
 
@@ -97,6 +98,26 @@ void draw(const char* title, bool* p_open, const Inputs& in) {
                 in.swapchain->viewport_width(), in.swapchain->viewport_height(),
                 (in.swapchain->viewport_width() == 0) ? " (off)" : "");
         }
+    }
+
+    // Right-click anywhere in Stats → copy a GPU + perf summary to the
+    // clipboard (one-click detail for bug reports / perf threads).
+    if (ImGui::BeginPopupContextWindow("##stats_ctx")) {
+        if (ImGui::MenuItem("Copy GPU + perf summary")) {
+            char buf[512];
+            cardinal::snprintf(buf, sizeof(buf),
+                "Cardinal GPU: %s (%s, %s) | Backend: %s | VRAM: %llu MB\n"
+                "FPS: %.1f (%.3f ms) | Mesh shaders: %s | Ray tracing: %s | FP16: %s",
+                in.device->adapter_name(), caps.vendor_name, caps.gpu_arch,
+                in.device->backend() == cardinal::rhi::Backend::Vulkan ? "Vulkan" : "D3D12",
+                static_cast<unsigned long long>(caps.vram_bytes / (1024ull * 1024ull)),
+                in.ema_fps, in.ema_fps > 0.0f ? 1000.0f / in.ema_fps : 0.0f,
+                caps.mesh_shader ? "yes" : "no",
+                caps.ray_tracing_pipeline ? "yes" : "no",
+                caps.shader_float16 ? "yes" : "no");
+            ImGui::SetClipboardText(buf);
+        }
+        ImGui::EndPopup();
     }
 
     ImGui::End();
