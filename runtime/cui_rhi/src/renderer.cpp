@@ -17,7 +17,10 @@ namespace {
 // One pipeline, one shader: pixel-space position -> NDC, flat vertex color.
 // (Color arrives as a normalized float4 from the R8G8B8A8_UNORM attribute.)
 constexpr const char* kShader = R"HLSL(
-[[vk::push_constant]] cbuffer PC { float2 uScreen; };
+// Push constant: the screen size, for pixel-space -> NDC. DXC requires
+// [[vk::push_constant]] on a global of STRUCT type (not a cbuffer).
+struct PushData { float2 uScreen; };
+[[vk::push_constant]] PushData g_push;
 
 struct VSIn  { float2 pos : POSITION0; float4 col : COLOR0; };
 struct VSOut { float4 pos : SV_POSITION; float4 col : COLOR0; };
@@ -25,8 +28,8 @@ struct VSOut { float4 pos : SV_POSITION; float4 col : COLOR0; };
 VSOut VSMain(VSIn i) {
     VSOut o;
     float2 ndc;
-    ndc.x = (i.pos.x / uScreen.x) * 2.0 - 1.0;
-    ndc.y = 1.0 - (i.pos.y / uScreen.y) * 2.0;   // top-left origin
+    ndc.x = (i.pos.x / g_push.uScreen.x) * 2.0 - 1.0;
+    ndc.y = 1.0 - (i.pos.y / g_push.uScreen.y) * 2.0;   // top-left origin
     o.pos = float4(ndc, 0.0, 1.0);
     o.col = i.col;
     return o;
