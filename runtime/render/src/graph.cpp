@@ -283,6 +283,12 @@ const TextureDesc& Graph::texture(ResourceHandle h) const noexcept {
     return resources_[h.id].tdesc;
 }
 
+const void* Graph::buffer_imported(ResourceHandle h) const noexcept {
+    if (h.id == 0 || h.id >= resources_.size() || resources_[h.id].kind != ResourceKind::Buffer)
+        return nullptr;
+    return resources_[h.id].imported_bytes;
+}
+
 // =============================================================================
 // CpuBackend
 // =============================================================================
@@ -452,6 +458,7 @@ cardinal::shared_ptr<RhiBackend> RhiBackend::create(cardinal::rhi::Device& dev,
 void RhiBackend::reset() noexcept {
     events_.clear();
     pipeline_cache_.clear();
+    buffers_.clear();
     stats_ = Stats{};
 }
 
@@ -464,6 +471,40 @@ void RhiBackend::execute(Graph& g) noexcept {
     if (pipeline_cache_.size() < need) pipeline_cache_.resize(need);
 
     const auto& order = g.execution_order();
+
+    // GAP 2: (re)build the ResourceHandle.id -> rhi::Buffer map — but ONLY when
+    // some compute pass actually carries a kernel. The Studio runs this backend
+    // every frame for telemetry; with no kernels wired yet the map would be
+    // pure per-frame GPU-allocation churn for zero benefit, so gate it. Sizes
+    // come from the BufferDescs; imported/initialised bytes are uploaded so a
+    // kernel reads real data. (Persistent-id caching is the perf follow-up.)
+    buffers_.clear();
+    bool any_kernel = false;
+    for (u32 pid : order) {
+        const PassDesc& p = g.pass(pid);
+        if (p.kind == PassKind::Compute && p.compute_hlsl) { any_kernel = true; break; }
+    }
+    if (any_kernel) {
+        const usize rcount = g.resource_count() + 1;
+        buffers_.resize(rcount);
+        for (u32 rid = 1; rid < rcount; ++rid) {
+            const ResourceHandle h{rid};
+            const usize sz = g.buffer(h).size_bytes;
+            if (sz == 0) continue;
+            cardinal::rhi::BufferDesc bd{};
+            bd.size  = sz;
+            bd.usage = static_cast<u32>(cardinal::rhi::BufferUsage::Storage)
+                     | static_cast<u32>(cardinal::rhi::BufferUsage::ShaderDeviceAddress);
+            bd.cpu_writable = true;
+            auto buf = dev_->create_buffer(bd);
+            if (buf) {
+                const void* src = g.buffer_imported(h);    // host-supplied initial data
+                if (src) buf->upload(src, sz, 0);
+                buffers_[rid] = cardinal::move(buf);
+            }
+        }
+    }
+
     for (u32 pid : order) {
         const PassDesc& pd = g.pass(pid);
         PassEvent ev;
@@ -473,42 +514,50 @@ void RhiBackend::execute(Graph& g) noexcept {
         ev.dispatch_y = pd.dispatch_y;
         ev.dispatch_z = pd.dispatch_z;
 
-        // Lazy-compile this pass's compute pipeline (one-time cost; cached
-        // across executes). When the device doesn't yet implement
-        // create_compute_pipeline, the call returns nullptr and we fall
-        // through to the recording-only path that NullBackend uses.
-        if (pd.kind == PassKind::Compute && !pipeline_cache_[pid]) {
+        // GAP 1: lazily compile this pass's compute kernel into a pipeline.
+        // The slot counts derive from the access modes (Read -> read-only SRV,
+        // Write/ReadWrite -> read-write UAV). When the pass carries no HLSL (or
+        // it fails to compile), create_compute_pipeline returns null and we
+        // fall through to the recording-only telemetry path — same as before.
+        if (pd.kind == PassKind::Compute && !pipeline_cache_[pid] && pd.compute_hlsl) {
+            u32 srv = 0, uav = 0;
+            for (const auto& a : pd.accesses) {
+                if (a.mode == AccessMode::Read) ++srv; else ++uav;
+            }
             cardinal::rhi::ComputePipelineDesc cpd;
-            // HLSL source is captured in pd's metadata via the pass's
-            // hlsl_source() function — but PassDesc doesn't currently
-            // carry it through; future Graph::compile pass-info hook
-            // can populate cpd.compute_shader from pd.user_ctx.
-            // Today: empty ShaderBlob → device decides.
+            cpd.compute_shader       = dev_->compile_shader(
+                cardinal::rhi::ShaderStage::Compute, pd.compute_hlsl, pd.compute_entry);
+            cpd.compute_entry        = pd.compute_entry;
+            cpd.push_constant_size   = pd.push_constant_size;
+            cpd.storage_buffer_slots = srv;
+            cpd.uav_slots            = uav;
             pipeline_cache_[pid] = dev_->create_compute_pipeline(cpd);
             if (pipeline_cache_[pid]) ++stats_.pipelines_compiled;
         }
 
-        // Bind + dispatch. When create_compute_pipeline returned null,
-        // bind_pipeline is a no-op AND dispatch defaults to a no-op
-        // (rhi.hpp default impls), so this loop is safe to run on any
-        // backend — it just records the intent for telemetry.
         const bool has_real_pipe = (pd.kind == PassKind::Compute && pipeline_cache_[pid]);
         if (has_real_pipe) {
             sw_->bind_pipeline(pipeline_cache_[pid].get());
-
-            // Bind declared accesses as storage buffers / UAVs.
-            // (Per-slot Buffer* lookup needs a graph-resource → rhi::Buffer
-            // mapping the host supplies; deferred until the mapping
-            // protocol is wired. Today the binds are skipped.)
-
+            // GAP 3: upload the per-dispatch push block (the pass packed its
+            // scalars — width/height/params — into pd.push_constants).
+            if (!pd.push_constants.empty())
+                sw_->set_push_constants(0, pd.push_constants.data(),
+                                        static_cast<u32>(pd.push_constants.size()));
+            // Bind accesses in order: Read -> SRV t0.., Write/RW -> UAV u0..
+            // (matches the kernel's StructuredBuffer/RWStructuredBuffer order).
+            u32 t = 0, u = 0;
+            for (const auto& a : pd.accesses) {
+                cardinal::rhi::Buffer* buf = (a.handle.id < buffers_.size())
+                    ? buffers_[a.handle.id].get() : nullptr;
+                if (a.mode == AccessMode::Read) { if (buf) sw_->bind_storage_buffer(t, buf);     ++t; }
+                else                            { if (buf) sw_->bind_storage_buffer_uav(u, buf); ++u; }
+            }
             sw_->dispatch(pd.dispatch_x, pd.dispatch_y, pd.dispatch_z);
             ev.real_dispatch = true;
             ++stats_.passes_dispatched_real;
         } else {
-            // Recording-only: same semantics as NullBackend for now, so
-            // hosts targeting RhiBackend mode get telemetry today and
-            // GPU dispatch automatically when the backend implements
-            // create_compute_pipeline + dispatch.
+            // Recording-only: same semantics as NullBackend; GPU dispatch lights
+            // up automatically once a pass carries a compilable kernel.
             ++stats_.passes_dispatched_stub;
         }
         events_.push_back(cardinal::move(ev));

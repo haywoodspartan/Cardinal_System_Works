@@ -152,6 +152,20 @@ struct PassDesc {
     u32 dispatch_x{1};
     u32 dispatch_y{1};
     u32 dispatch_z{1};
+
+    // GPU compute shader (graph::RhiBackend). When compute_hlsl is non-null the
+    // RhiBackend compiles it (ShaderStage::Compute) into a real compute pipeline
+    // and dispatches it; when null (or it fails to compile) it falls back to the
+    // recording-only telemetry path. The kernel's bindings follow the access
+    // ORDER: read-only ByteAddressBuffers at t0.. (Read accesses), read-write
+    // RWByteAddressBuffers at u0.. (Write/ReadWrite accesses). push_constant_size
+    // is the size of the b0 push block declared at pipeline-creation time;
+    // push_constants holds the per-dispatch bytes the RhiBackend uploads (GAP 3
+    // param threading — the pass packs its scalars here, e.g. width/height).
+    const char*                      compute_hlsl   {nullptr};
+    const char*                      compute_entry  {"CSMain"};
+    u32                              push_constant_size{0};
+    cardinal::vector<cardinal::u8>   push_constants;
 };
 
 // ---------------------------------------------------------------------------
@@ -207,6 +221,10 @@ public:
     const PassDesc&   pass(u32 id) const noexcept;
     const BufferDesc& buffer (ResourceHandle h) const noexcept;
     const TextureDesc&texture(ResourceHandle h) const noexcept;
+    // Imported (host-supplied) bytes for a buffer resource, or nullptr for a
+    // transient one. Lets a GPU backend (RhiBackend) upload initial data
+    // without running the CpuBackend. Size is buffer(h).size_bytes.
+    const void*       buffer_imported(ResourceHandle h) const noexcept;
     bool              has_output() const noexcept { return output_.is_valid(); }
     ResourceHandle    output() const noexcept { return output_; }
 
@@ -335,7 +353,7 @@ private:
 // ---------------------------------------------------------------------------
 }  // namespace cardinal::render::graph
 
-namespace cardinal::rhi { class Device; class Swapchain; class Pipeline; }
+namespace cardinal::rhi { class Device; class Swapchain; class Pipeline; class Buffer; }
 
 namespace cardinal::render::graph {
 
@@ -369,6 +387,9 @@ private:
     cardinal::rhi::Swapchain* sw_  {nullptr};
     // Pass id → compiled compute pipeline (lazy, cached across executes).
     cardinal::vector<cardinal::unique_ptr<cardinal::rhi::Pipeline>> pipeline_cache_;
+    // ResourceHandle.id → backing rhi::Buffer (lazy, built on first execute from
+    // the graph's BufferDescs; imported bytes uploaded). GAP-2 of the GPU path.
+    cardinal::vector<cardinal::unique_ptr<cardinal::rhi::Buffer>> buffers_;
     cardinal::vector<PassEvent> events_;
     Stats stats_;
 };

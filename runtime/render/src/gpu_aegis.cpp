@@ -24,6 +24,22 @@ inline float sat(float v) noexcept {
     return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
 }
 
+// Pack a b0 push block as little-endian bytes for the RhiBackend GPU path
+// (PassDesc::push_constants). Scalars map 1:1 to the kernel's cbuffer fields.
+inline void put_u32(cardinal::vector<cardinal::u8>& v, cardinal::u32 x) {
+    v.push_back(static_cast<cardinal::u8>( x        & 0xFF));
+    v.push_back(static_cast<cardinal::u8>((x >>  8) & 0xFF));
+    v.push_back(static_cast<cardinal::u8>((x >> 16) & 0xFF));
+    v.push_back(static_cast<cardinal::u8>((x >> 24) & 0xFF));
+}
+inline cardinal::u32 f32_bits(float f) noexcept {
+    union { float f; cardinal::u32 u; } x; x.f = f; return x.u;
+}
+inline void pack_push(cardinal::vector<cardinal::u8>& v,
+                      cardinal::u32 a, cardinal::u32 b, float c, cardinal::u32 d) {
+    v.clear(); put_u32(v, a); put_u32(v, b); put_u32(v, f32_bits(c)); put_u32(v, d);
+}
+
 }  // namespace
 
 // ============================================================================
@@ -678,12 +694,35 @@ cardinal::shared_ptr<TonemapPass::State> TonemapPass::add_to_graph(
     pd.accesses.push_back(rg::ResourceAccess{st->out_rgba,  rg::AccessMode::Write, 1});
     pd.record = tonemap_record; pd.user_ctx = st.get();
     pd.dispatch_x = (W + 7) / 8; pd.dispatch_y = (H + 7) / 8;
+    // GPU path: thread the kernel + pack the b0 push block {W, H, exposure, pad}.
+    pd.compute_hlsl = TonemapPass::hlsl_source();
+    pd.push_constant_size = 16;
+    pack_push(pd.push_constants, W, H, exposure, 0u);
     g.add_pass(cardinal::move(pd));
     return st;
 }
 
 const char* TonemapPass::hlsl_source() noexcept {
-    return "// Cardinal — TonemapPass.hlsl\n// ACES filmic + sRGB encode per pixel.\n";
+    return
+    "// Cardinal - TonemapPass.hlsl - ACES filmic + sRGB encode per pixel.\n"
+    "ByteAddressBuffer   InRadiance : register(t0);   // float3 per pixel (12B)\n"
+    "RWByteAddressBuffer OutRGBA    : register(u0);   // RGBA8 per pixel (4B)\n"
+    "cbuffer Push : register(b0) { uint gW; uint gH; float gExposure; uint _pad; };\n"
+    "float aces(float x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14;\n"
+    "  return saturate((x*(a*x+b))/(x*(c*x+d)+e)); }\n"
+    "float srgb(float c){ return c<=0.0031308 ? 12.92*c : 1.055*pow(c,1.0/2.4)-0.055; }\n"
+    "[numthreads(8,8,1)]\n"
+    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
+    "  if (tid.x>=gW || tid.y>=gH) return;\n"
+    "  uint i = tid.y*gW + tid.x;\n"
+    "  float r = aces(asfloat(InRadiance.Load(i*12+0))*gExposure);\n"
+    "  float g = aces(asfloat(InRadiance.Load(i*12+4))*gExposure);\n"
+    "  float b = aces(asfloat(InRadiance.Load(i*12+8))*gExposure);\n"
+    "  uint R=(uint)(saturate(srgb(r))*255.0+0.5);\n"
+    "  uint G=(uint)(saturate(srgb(g))*255.0+0.5);\n"
+    "  uint B=(uint)(saturate(srgb(b))*255.0+0.5);\n"
+    "  OutRGBA.Store(i*4, R | (G<<8) | (B<<16) | (255u<<24));\n"
+    "}\n";
 }
 
 // ============================================================================
