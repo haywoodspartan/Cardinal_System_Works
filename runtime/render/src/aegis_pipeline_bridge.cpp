@@ -74,6 +74,7 @@ public:
         const auto desired = static_cast<AegisBackendMode>(k->e);
         if (desired == current_mode_) return;
         current_mode_ = desired;
+        rhi_backend_ = nullptr;   // only set for the Rhi backend below
         switch (desired) {
             case AegisBackendMode::Null:
                 runner_->set_backend(graph::NullBackend::create());
@@ -86,7 +87,10 @@ public:
                 break;
             case AegisBackendMode::Rhi:
                 if (dev_ && sw_) {
-                    runner_->set_backend(graph::RhiBackend::create(*dev_, *sw_));
+                    // Keep our own handle so the gpu_execute knob can drive the
+                    // backend's opt-in GPU dispatch (default off — recording-only).
+                    rhi_backend_ = graph::RhiBackend::create(*dev_, *sw_);
+                    runner_->set_backend(rhi_backend_);
                 } else {
                     runner_->set_backend(graph::NullBackend::create());
                 }
@@ -207,6 +211,17 @@ public:
         // Push knob/caps changes (precision tier + GPU features) into the
         // runner config — diff-gated, so it only reconfigures on a real change.
         apply_config();
+
+        // Honour the experimental GPU-compute-execute toggle: when on, the
+        // RhiBackend actually dispatches the AEGIS compute graph on the GPU;
+        // when off (default) it stays recording-only telemetry while the
+        // ForwardRenderer draws the screen (the stable path).
+        if (rhi_backend_) {
+            bool want = false;
+            for (const auto& k : knobs_)
+                if (k.id == "gpu_execute" && k.kind == KnobKind::Bool) { want = k.b; break; }
+            rhi_backend_->set_gpu_execute(want);
+        }
 
         // Run the AEGIS graph for telemetry. The runner manages its own
         // graph + backend; we just hand it minimal inputs each frame.
@@ -349,6 +364,11 @@ private:
         add_bool_("hiz_occlusion", "Hi-Z Occlusion Culling", "AEGIS",
             "Two-pass hierarchical-Z occlusion test against last frame's depth so "
             "hidden clusters never reach the rasterizer.", true);
+        add_bool_("gpu_execute", "GPU Compute Execute (experimental)", "AEGIS",
+            "Run the AEGIS compute graph on the GPU through RhiBackend instead of "
+            "recording-only telemetry. EXPERIMENTAL + unvalidated on real hardware: "
+            "enable to test GPU dispatch (buffers are now cached across frames). "
+            "Leave OFF for the stable ForwardRenderer path.", false);
 
         // ---- Quality / Resolution -------------------------------------
         add_float_("resolution_scale", "Resolution Scale", "Quality",
@@ -599,6 +619,7 @@ private:
     cardinal::vector<Knob>                             knobs_;
     AegisBackendMode                                   current_mode_ {AegisBackendMode::Null};
     AegisDeviceSupport                                 dev_caps_ {};   // from on_caps
+    cardinal::shared_ptr<graph::RhiBackend>            rhi_backend_;   // when mode==Rhi
 };
 
 }  // namespace

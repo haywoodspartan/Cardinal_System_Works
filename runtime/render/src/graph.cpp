@@ -459,6 +459,7 @@ void RhiBackend::reset() noexcept {
     events_.clear();
     pipeline_cache_.clear();
     buffers_.clear();
+    buffer_cache_.clear();
     stats_ = Stats{};
 }
 
@@ -494,21 +495,30 @@ void RhiBackend::execute(Graph& g) noexcept {
         }
         if (any_kernel) {
             const usize rcount = g.resource_count() + 1;
-            buffers_.resize(rcount);
+            buffers_.assign(rcount, nullptr);   // per-frame id -> Buffer* view
             for (u32 rid = 1; rid < rcount; ++rid) {
                 const ResourceHandle h{rid};
-                const usize sz = g.buffer(h).size_bytes;
+                const BufferDesc&    bdesc = g.buffer(h);
+                const usize          sz    = bdesc.size_bytes;
                 if (sz == 0) continue;
-                cardinal::rhi::BufferDesc bd{};
-                bd.size  = sz;
-                bd.usage = static_cast<u32>(cardinal::rhi::BufferUsage::Storage)
-                         | static_cast<u32>(cardinal::rhi::BufferUsage::ShaderDeviceAddress);
-                bd.cpu_writable = true;
-                auto buf = dev_->create_buffer(bd);
-                if (buf) {
-                    const void* src = g.buffer_imported(h);   // host-supplied initial data
-                    if (src) buf->upload(src, sz, 0);
-                    buffers_[rid] = cardinal::move(buf);
+                // Reuse the cached buffer for this resource unless it is new or
+                // its size changed (e.g. a swapchain resize). Only then create.
+                CachedBuffer& slot = buffer_cache_[bdesc.name];
+                if (!slot.buf || slot.size != sz) {
+                    cardinal::rhi::BufferDesc bd{};
+                    bd.size  = sz;
+                    bd.usage = static_cast<u32>(cardinal::rhi::BufferUsage::Storage)
+                             | static_cast<u32>(cardinal::rhi::BufferUsage::ShaderDeviceAddress);
+                    bd.cpu_writable = true;
+                    slot.buf  = dev_->create_buffer(bd);
+                    slot.size = sz;
+                }
+                if (slot.buf) {
+                    // Imported (host) data can change every frame — re-upload it;
+                    // transient buffers (no import) just persist.
+                    const void* src = g.buffer_imported(h);
+                    if (src) slot.buf->upload(src, sz, 0);
+                    buffers_[rid] = slot.buf.get();
                 }
             }
         }
@@ -571,7 +581,7 @@ void RhiBackend::execute(Graph& g) noexcept {
             u32 t = 0, u = 0;
             for (const auto& a : pd.accesses) {
                 cardinal::rhi::Buffer* buf = (a.handle.id < buffers_.size())
-                    ? buffers_[a.handle.id].get() : nullptr;
+                    ? buffers_[a.handle.id] : nullptr;
                 if (a.mode == AccessMode::Read) { if (buf) sw_->bind_storage_buffer(t, buf);     ++t; }
                 else                            { if (buf) sw_->bind_storage_buffer_uav(u, buf); ++u; }
             }

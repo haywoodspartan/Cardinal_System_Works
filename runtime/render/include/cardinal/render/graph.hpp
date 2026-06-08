@@ -397,9 +397,17 @@ private:
     cardinal::rhi::Swapchain* sw_  {nullptr};
     // Pass id → compiled compute pipeline (lazy, cached across executes).
     cardinal::vector<cardinal::unique_ptr<cardinal::rhi::Pipeline>> pipeline_cache_;
-    // ResourceHandle.id → backing rhi::Buffer (lazy, built on first execute from
-    // the graph's BufferDescs; imported bytes uploaded). GAP-2 of the GPU path.
-    cardinal::vector<cardinal::unique_ptr<cardinal::rhi::Buffer>> buffers_;
+    // GAP-2 buffer storage. buffer_cache_ OWNS the rhi::Buffers and PERSISTS them
+    // across frames, keyed by resource name + size — so a stable graph reuses its
+    // buffers instead of recreating every one every execute (the per-frame churn
+    // that bled FPS / crashed allocators). buffers_ is a per-frame non-owning
+    // ResourceHandle.id → Buffer* view rebuilt from the cache each execute.
+    struct CachedBuffer {
+        cardinal::unique_ptr<cardinal::rhi::Buffer> buf;
+        usize                                       size {0};
+    };
+    cardinal::unordered_map<cardinal::string, CachedBuffer> buffer_cache_;
+    cardinal::vector<cardinal::rhi::Buffer*>                buffers_;
     cardinal::vector<PassEvent> events_;
     Stats stats_;
     bool  gpu_execute_ {false};   // opt-in; see set_gpu_execute (default safe)
