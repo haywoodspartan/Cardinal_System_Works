@@ -90,6 +90,21 @@ StageReport stage_build(const project::Project& proj, const PipelineOptions& opt
     const cardinal::string root   = fwd_slash(proj.dirs().root);
     const cardinal::string engine = fwd_slash(proj.info().engine_root);
     const cardinal::string bdir   = root + "/build/" + build_config_name(opts.config);
+
+    // The project manifest is untrusted + engine_root reaches std::system below.
+    // Refuse paths with characters that could break out of the quoted cmake
+    // command (quote / backtick / $ / newline) in cmd.exe or bash.
+    auto path_unsafe = [](const cardinal::string& s) {
+        for (char c : s)
+            if (c == '"' || c == '`' || c == '$' || c == '\n' || c == '\r') return true;
+        return false;
+    };
+    if (path_unsafe(root) || path_unsafe(engine)) {
+        r.status = StageStatus::Failed;
+        r.detail = "project/engine path contains unsafe shell characters";
+        return r;
+    }
+
     cmd_out =
         "cmake -G Ninja -B \"" + bdir + "\" -S \"" + root +
         "\" -DCARDINAL_ENGINE_ROOT=\"" + engine +

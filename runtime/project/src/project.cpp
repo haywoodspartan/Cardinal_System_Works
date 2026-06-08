@@ -49,9 +49,21 @@ cardinal::string trim(cardinal::string s) {
 
 // Generic text writer (truncating, binary so line endings are exact).
 bool write_text(const cardinal::string& path, const cardinal::string& text, cardinal::string* err) {
+    cardinal::error_code ec;
+    fs::create_directories(fs::path(path).parent_path(), ec);   // ensure parent dirs exist
     cardinal::ofstream f(path, cardinal::ios::binary | cardinal::ios::trunc);
     if (!f) { if (err) *err = "could not write " + path; return false; }
     f.write(text.data(), static_cast<cardinal::streamsize>(text.size()));
+    return true;
+}
+
+// Reject manifest-supplied relative paths that escape the project root (path
+// traversal) or are absolute — the manifest is treated as untrusted data.
+bool is_safe_relpath(const cardinal::string& p) {
+    if (p.empty()) return false;
+    if (p.find("..") != cardinal::string::npos) return false;        // no traversal
+    if (p.front() == '/' || p.front() == '\\') return false;         // no unix-absolute
+    if (p.size() >= 2 && p[1] == ':') return false;                  // no drive-absolute
     return true;
 }
 
@@ -149,7 +161,12 @@ cardinal::shared_ptr<Project> Project::open(const cardinal::string& root, cardin
         else if (key == "default_pack_name") p->info_.default_pack_name = val;
         else if (key == "cook_on_save") p->info_.cook_on_save = (val == "true");
         else if (key == "pack_on_cook") p->info_.pack_on_cook = (val == "true");
-        else if (key == "startup_world") p->info_.startup_world = val;
+        else if (key == "startup_world") {
+            if (is_safe_relpath(val)) p->info_.startup_world = val;
+            else cardinal::log::warnf("project",
+                "ignoring unsafe startup_world '%s' (path traversal/absolute) — keeping default",
+                val.c_str());
+        }
         else if (key == "engine_root")  p->info_.engine_root = val;
     }
     cardinal::log::infof("project", "opened project '%s'", p->info_.name.c_str());

@@ -71,6 +71,7 @@ public:
             if (kn.id == "backend_mode") { k = &kn; break; }
         }
         if (!k || k->kind != KnobKind::Enum) return;
+        if (k->e < 0 || k->e > 3) return;   // guard the int -> enum cast (4 backends)
         const auto desired = static_cast<AegisBackendMode>(k->e);
         if (desired == current_mode_) return;
         current_mode_ = desired;
@@ -349,7 +350,7 @@ private:
             "Cpu / ThreadedCpu = full virtual-GPU simulation. "
             "Rhi = real GPU compute dispatch (default; degrades to recording-"
             "only telemetry until the device implements compute pipelines).",
-            3, {"Null (topology)", "CpuBackend", "ThreadedCpuBackend", "RhiBackend"});
+            3, {"CpuBackend", "Null (topology)", "ThreadedCpuBackend", "RhiBackend"});
         add_enum_("max_tier", "Max Geometry Tier", "AEGIS",
             "Maximum precision tier the math-division engine is allowed to "
             "escalate to. FP4 (Blackwell) = 8 micro-tris per source triangle; "
