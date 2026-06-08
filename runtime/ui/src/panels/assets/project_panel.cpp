@@ -76,21 +76,31 @@ Action draw(cardinal::shared_ptr<cardinal::project::Project>* current_project,
     if (recents && ImGui::CollapsingHeader("Recent projects", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (recents->entries().empty()) {
             ImGui::TextDisabled("(no recent projects)");
-        } else for (const auto& r : recents->entries()) {
-            ImGui::PushID(r.c_str());
-            if (ImGui::SmallButton("Open")) {
-                cardinal::string err;
-                auto p = cardinal::project::Project::open(r, &err);
-                if (p) {
-                    if (current_project) *current_project = p;
-                    recents->add(r); recents->save();
-                    act.opened_project = p;
-                    last_error.clear();
-                } else last_error = err;
+        } else {
+            cardinal::string to_remove;
+            for (const auto& r : recents->entries()) {
+                ImGui::PushID(r.c_str());
+                if (ImGui::SmallButton("Open")) {
+                    cardinal::string err;
+                    auto p = cardinal::project::Project::open(r, &err);
+                    if (p) {
+                        if (current_project) *current_project = p;
+                        recents->add(r); recents->save();
+                        act.opened_project = p;
+                        last_error.clear();
+                    } else last_error = err;
+                }
+                ImGui::SameLine();
+                ImGui::Selectable(r.c_str());
+                // Right-click a recent → copy its path or drop it from the list.
+                if (ImGui::BeginPopupContextItem("##recent_ctx")) {
+                    if (ImGui::MenuItem("Copy path")) ImGui::SetClipboardText(r.c_str());
+                    if (ImGui::MenuItem("Remove from list")) to_remove = r;
+                    ImGui::EndPopup();
+                }
+                ImGui::PopID();
             }
-            ImGui::SameLine();
-            ImGui::TextUnformatted(r.c_str());
-            ImGui::PopID();
+            if (!to_remove.empty()) { recents->remove(to_remove); recents->save(); }
         }
     }
 
@@ -126,12 +136,32 @@ Action draw(cardinal::shared_ptr<cardinal::project::Project>* current_project,
         if (ImGui::Button("Cook & Pack"))   act.cook_and_pack_clicked = true;
 
         ImGui::Separator();
-        ImGui::TextDisabled("Source assets:");
+        static ImGuiTextFilter asset_filter;
+        asset_filter.Draw("Filter assets", 180.0f);
         const auto srcs = (*current_project)->list_source_assets();
-        for (const auto& s : srcs) ImGui::Text("  %s", s.c_str());
-        ImGui::TextDisabled("Cooked assets:");
+        ImGui::TextDisabled("Source assets (%d):", static_cast<int>(srcs.size()));
+        for (const auto& s : srcs) {
+            if (asset_filter.IsActive() && !asset_filter.PassFilter(s.c_str())) continue;
+            ImGui::PushID(s.c_str());
+            ImGui::Selectable(s.c_str());
+            if (ImGui::BeginPopupContextItem("##src_ctx")) {
+                if (ImGui::MenuItem("Copy path")) ImGui::SetClipboardText(s.c_str());
+                ImGui::EndPopup();
+            }
+            ImGui::PopID();
+        }
         const auto cooks = (*current_project)->list_cooked_assets();
-        for (const auto& s : cooks) ImGui::Text("  %s", s.c_str());
+        ImGui::TextDisabled("Cooked assets (%d):", static_cast<int>(cooks.size()));
+        for (const auto& s : cooks) {
+            if (asset_filter.IsActive() && !asset_filter.PassFilter(s.c_str())) continue;
+            ImGui::PushID(s.c_str());
+            ImGui::Selectable(s.c_str());
+            if (ImGui::BeginPopupContextItem("##cook_ctx")) {
+                if (ImGui::MenuItem("Copy path")) ImGui::SetClipboardText(s.c_str());
+                ImGui::EndPopup();
+            }
+            ImGui::PopID();
+        }
     }
 
     if (!last_error.empty()) {

@@ -99,6 +99,24 @@ void draw(const char* title, bool* p_open, State& state) {
         }
         if (state.auto_scroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
             ImGui::SetScrollHereY(1.0f);
+
+        // Right-click anywhere in the log → copy the visible (filtered) lines
+        // to the clipboard, or clear. Honours the active level + text filter.
+        if (ImGui::BeginPopupContextWindow("##log_ctx")) {
+            if (ImGui::MenuItem("Copy visible lines")) {
+                cardinal::string all;
+                for (size_t idx : state.scratch_filtered) {
+                    const auto& e = state.scratch_entries[idx];
+                    all += level_style(e.lvl).tag; all += "  ";
+                    all += e.category; all += "  ";
+                    all += e.message; all += '\n';
+                }
+                ImGui::SetClipboardText(all.c_str());
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Clear")) state.cstore.clear();
+            ImGui::EndPopup();
+        }
     }
     ImGui::EndChild();
     ImGui::End();

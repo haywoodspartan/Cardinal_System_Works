@@ -51,6 +51,16 @@ void draw(const ConsoleEvalFn& eval,
             ImGui::SetScrollHereY(1.0f);
             state.scroll_to_bottom = false;
         }
+        // Right-click the console output → copy it all or clear the scrollback.
+        if (ImGui::BeginPopupContextWindow("##console_ctx")) {
+            if (ImGui::MenuItem("Copy all")) {
+                cardinal::string all;
+                for (const auto& line : state.log) { all += line; all += '\n'; }
+                ImGui::SetClipboardText(all.c_str());
+            }
+            if (ImGui::MenuItem("Clear")) state.log.clear();
+            ImGui::EndPopup();
+        }
     }
     ImGui::EndChild();
 
