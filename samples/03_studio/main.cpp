@@ -1733,6 +1733,36 @@ int main(int argc, char** argv) {
             initial_viewport_titles.reserve(viewports.size());
             for (const auto& vps : viewports) initial_viewport_titles.push_back(vps.title);
         }
+
+        // ---- Status bar — a UE5-style bar pinned to the bottom of the main
+        // viewport. Drawn BEFORE the dockspace so BeginViewportSideBar reserves
+        // its row out of the work area and the dock host fits above it.
+        {
+            ImGuiViewport* sbvp = ImGui::GetMainViewport();
+            const float    sbh  = ImGui::GetFrameHeight();
+            if (ImGui::BeginViewportSideBar("##cardinal_statusbar", sbvp, ImGuiDir_Down,
+                    sbh, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_MenuBar)) {
+                if (ImGui::BeginMenuBar()) {
+                    const ImGuiIO& sbio = ImGui::GetIO();
+                    ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "%s",
+                        device->backend() == rhi::Backend::Vulkan ? "Vulkan" : "D3D12");
+                    ImGui::Separator();
+                    ImGui::Text("%.0f FPS  %.2f ms", sbio.Framerate,
+                        sbio.Framerate > 0.0f ? 1000.0f / sbio.Framerate : 0.0f);
+                    ImGui::Separator();
+                    ImGui::Text("Tool: %s", tool == Tool::Select ? "Select" : "Place");
+                    ImGui::Separator();
+                    ImGui::Text("Selected: %d", static_cast<int>(selection.size()));
+                    if (current_project) {
+                        ImGui::Separator();
+                        ImGui::Text("Project: %s", current_project->info().name.c_str());
+                    }
+                    ImGui::EndMenuBar();
+                }
+                ImGui::End();
+            }
+        }
+
         draw_dockspace(first_layout, initial_viewport_titles);
 
         if (ImGui::BeginMenuBar()) {
