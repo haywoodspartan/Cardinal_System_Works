@@ -12,6 +12,7 @@ target_include_directories(cardinal_buildtool PUBLIC
 
 target_link_libraries(cardinal_buildtool
     PUBLIC  cardinal::core cardinal::project cardinal::cook cardinal::pack
-            cardinal::compile_flags)
+            cardinal::compile_flags
+    PRIVATE cardinal::assetdb cardinal::asset)   # build the asset DB during cook
 
 set_target_properties(cardinal_buildtool PROPERTIES FOLDER runtime)

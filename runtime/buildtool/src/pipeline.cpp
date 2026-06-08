@@ -5,6 +5,8 @@
 #include <cardinal/buildtool/pipeline.hpp>
 
 #include <cardinal/project/project.hpp>
+#include <cardinal/assetdb/assetdb.hpp>      // asset DB built during cook
+#include <cardinal/asset/asset.hpp>          // Registry (mount cooked dir for deps)
 #include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/std/filesystem.hpp>   // cardinal::fs, error_code
 #include <cardinal/core/std/cstdlib.hpp>      // cardinal::system
@@ -261,6 +263,17 @@ StageReport stage_cook(const project::Project& proj, const PipelineOptions& opts
 
     cardinal::vector<cook::CookResult> results;
     out = cook::cook_all(proj, reg, results, opts.force_cook);
+
+    // Build the asset database (index + dependency graph) from this cook pass and
+    // write it beside the cooked output, so the editor/runtime can browse by type
+    // and resolve references. (Material -> texture deps populate once materials
+    // cook; texture/mesh/shader records index regardless.)
+    {
+        auto areg = cardinal::asset::Registry::create();
+        areg->mount_directory(proj.dirs().cooked);
+        const assetdb::AssetDatabase db = assetdb::build_database(results, *areg);
+        assetdb::save_database(db, proj.dirs().cooked + "/assets.db");
+    }
 
     char buf[160];
     cardinal::snprintf(buf, sizeof(buf), "cooked %u, skipped %u, failed %u",

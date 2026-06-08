@@ -33,6 +33,7 @@ add_subdirectory(pack)
 add_subdirectory(buildtool)   # BuildCookRun pipeline (above project/cook/pack)
 add_subdirectory(asset)
 add_subdirectory(import)
+add_subdirectory(assetdb)     # Asset Database — pipeline index + dependency graph
 # hal + io + geom were merged into cardinal::core — no separate libs.
 add_subdirectory(partition)
 add_subdirectory(level)
