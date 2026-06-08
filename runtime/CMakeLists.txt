@@ -28,6 +28,7 @@ add_subdirectory(project)
 add_subdirectory(shader)
 add_subdirectory(cook)
 add_subdirectory(pack)
+add_subdirectory(buildtool)   # BuildCookRun pipeline (above project/cook/pack)
 add_subdirectory(asset)
 add_subdirectory(import)
 # hal + io + geom were merged into cardinal::core — no separate libs.

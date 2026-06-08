@@ -4,6 +4,7 @@
 #include "project_panel.hpp"
 
 #include <cardinal/project/project.hpp>
+#include <cardinal/buildtool/pipeline.hpp>   // BuildCookRun pipeline (Package)
 
 #include <cardinal/ui/imgui.hpp>
 
@@ -155,6 +156,44 @@ Action draw(cardinal::shared_ptr<cardinal::project::Project>* current_project,
         }
         ImGui::SameLine();
         ImGui::TextDisabled("Writes CMakeLists.txt + build.bat/.sh + src/main.cpp");
+
+        // ---- Package (BuildCookRun pipeline) -----------------------------
+        ImGui::Separator();
+        ImGui::TextDisabled("Package (Build \xE2\x86\x92 Cook \xE2\x86\x92 Pack \xE2\x86\x92 Archive)");
+        static int  pkg_config  = 1;   // 0 Debug / 1 Development / 2 Shipping
+        static bool pkg_archive = false;
+        static cardinal::string pkg_status;
+        const char* configs[] = { "Debug", "Development", "Shipping" };
+        ImGui::SetNextItemWidth(160.0f);
+        ImGui::Combo("Configuration", &pkg_config, configs, IM_ARRAYSIZE(configs));
+        ImGui::SameLine();
+        ImGui::Checkbox("Archive copy", &pkg_archive);
+        if (ImGui::Button("Build, Cook, Run", ImVec2(170.0f, 0.0f))) {
+            (*current_project)->save();
+            cardinal::buildtool::PipelineOptions opt;
+            opt.config      = static_cast<cardinal::buildtool::BuildConfig>(pkg_config);
+            opt.target      = cardinal::buildtool::BuildTarget::Game;
+            opt.do_build    = true;   opt.run_compile = false;   // generate; compile via build.bat
+            opt.do_cook     = true;   opt.do_pack     = true;
+            opt.do_archive  = pkg_archive;
+            auto res = cardinal::buildtool::run_pipeline(**current_project, opt);
+            if (res.ok)
+                pkg_status = "Packaged \xE2\x86\x92 " + res.artifact_dir;
+            else {
+                pkg_status = "Package FAILED";
+                for (const auto& s : res.stages)
+                    if (s.status == cardinal::buildtool::StageStatus::Failed)
+                        pkg_status = "Package FAILED at " + s.name + ": " + s.detail;
+            }
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("Cooks assets + builds a shippable .cpk bundle");
+        if (!pkg_status.empty()) {
+            const bool failed = pkg_status.find("FAILED") != cardinal::string::npos;
+            ImGui::TextColored(failed ? ImVec4(0.95f, 0.4f, 0.4f, 1.0f)
+                                      : ImVec4(0.4f, 0.85f, 0.4f, 1.0f),
+                               "%s", pkg_status.c_str());
+        }
 
         ImGui::Separator();
         static ImGuiTextFilter asset_filter;

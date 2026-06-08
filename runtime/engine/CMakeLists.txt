@@ -45,6 +45,7 @@ target_link_libraries(cardinal_engine
             cardinal::nav      cardinal::hud
             cardinal::project  cardinal::shader
             cardinal::cook     cardinal::pack
+            cardinal::buildtool
             cardinal::asset    cardinal::vt
             cardinal::edit     cardinal::console
             cardinal::cppscript cardinal::sandbox
