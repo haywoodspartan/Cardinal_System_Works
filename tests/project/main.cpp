@@ -28,6 +28,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -71,6 +72,14 @@ bool write_file(const fs::path& p, const std::string& text) {
     if (!f) return false;
     f.write(text.data(), static_cast<std::streamsize>(text.size()));
     return true;
+}
+std::string read_file(const fs::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    if (!f) return {};
+    std::stringstream ss; ss << f.rdbuf(); return ss.str();
+}
+bool contains(const std::string& hay, const char* needle) {
+    return hay.find(needle) != std::string::npos;
 }
 
 // ---- template kind tables -----------------------------------------
@@ -263,6 +272,91 @@ void test_instantiate_template() {
     }
 }
 
+// ---- per-template specialization: distinct game code + world ------
+void test_template_specialization() {
+    struct Case { pj::TemplateKind k; const char* cls; };
+    const Case cases[] = {
+        { pj::TemplateKind::Blank,       "SpinnerActor" },
+        { pj::TemplateKind::FirstPerson, "FirstPersonController" },
+        { pj::TemplateKind::TopDown,     "TopDownPawn" },
+        { pj::TemplateKind::Cinematic,   "CameraDirector" },
+    };
+    for (const auto& c : cases) {
+        const fs::path rootp = tmp_root(c.cls);
+        pj::InstantiateOptions o;
+        o.root             = rootp.string();
+        o.info.name        = c.cls;
+        o.info.engine_root = "G:/Cardinal_System_Works";
+        o.kind             = c.k;
+        std::string err;
+        auto p = pj::instantiate_template(o, &err);
+        CHECK(p != nullptr);
+        if (p) {
+            // src/game.cpp holds THIS template's class, registered as a GameActor.
+            const std::string game = read_file(rootp / "src" / "game.cpp");
+            CHECK(contains(game, c.cls));
+            CHECK(contains(game, "CARDINAL_REGISTER_GAME_CLASS"));
+            CHECK(contains(game, "GameActor"));
+            // The startup world references that class so it spawns on load.
+            const std::string world = read_file(rootp / "save" / "main.cardinalworld");
+            CHECK(contains(world, c.cls));
+            CHECK(contains(world, "PlayerStart"));
+            // The runner entry is present + loads the world.
+            const std::string entry = read_file(rootp / "src" / "main.cpp");
+            CHECK(contains(entry, "int main"));
+            CHECK(contains(entry, "load_world"));
+            CHECK(contains(entry, "start_play"));
+        }
+        rm(rootp);
+    }
+}
+
+// ---- per-project build system generation --------------------------
+void test_build_files() {
+    const fs::path rootp = tmp_root("buildfiles");
+    pj::InstantiateOptions o;
+    o.root             = rootp.string();
+    o.info.name        = "My Cool Game";   // spaces → target must be sanitized
+    o.info.engine_root = "G:/Cardinal_System_Works";
+    o.kind             = pj::TemplateKind::Blank;
+    std::string err;
+    auto p = pj::instantiate_template(o, &err);
+    CHECK(p != nullptr);
+    if (p) {
+        std::error_code ec;
+        CHECK(fs::exists(rootp / "CMakeLists.txt", ec));
+        CHECK(fs::exists(rootp / "build.bat", ec));
+        CHECK(fs::exists(rootp / "build.sh", ec));
+        CHECK(fs::exists(rootp / ".gitignore", ec));
+        CHECK(fs::exists(rootp / "README.md", ec));
+
+        const std::string cm = read_file(rootp / "CMakeLists.txt");
+        CHECK(contains(cm, "My_Cool_Game"));               // sanitized target
+        CHECK(contains(cm, "cardinal::engine"));           // links the engine
+        CHECK(contains(cm, "add_subdirectory"));           // builds engine from source
+        CHECK(contains(cm, "CARDINAL_ENGINE_ROOT"));
+        CHECK(contains(cm, "G:/Cardinal_System_Works"));   // engine root baked in
+        CHECK(contains(cm, "add_executable"));
+
+        const std::string bat = read_file(rootp / "build.bat");
+        CHECK(contains(bat, "cmake"));
+        CHECK(contains(bat, "CARDINAL_ENGINE_ROOT"));
+
+        const std::string gi = read_file(rootp / ".gitignore");
+        CHECK(contains(gi, "build/"));
+
+        // engine_root round-trips through the manifest.
+        auto q = pj::Project::open(rootp.string(), nullptr);
+        CHECK(q != nullptr);
+        if (q) {
+            CHECK(q->info().engine_root == "G:/Cardinal_System_Works");
+            // Build files regenerate standalone (idempotent).
+            CHECK(pj::generate_build_files(*q, nullptr));
+        }
+    }
+    rm(rootp);
+}
+
 // ---- RecentProjects: most-recent / dedupe / cap-16 / round-trip ---
 void test_recent_projects() {
     const fs::path store = tmp_root("recent");      // a dir path; use a file
@@ -343,6 +437,8 @@ int main() {
     test_save_mutate_reopen();
     test_list_assets();
     test_instantiate_template();
+    test_template_specialization();
+    test_build_files();
     test_recent_projects();
 
     if (g_fail == 0) {

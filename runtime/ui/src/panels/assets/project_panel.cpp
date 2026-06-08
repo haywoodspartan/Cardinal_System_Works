@@ -23,6 +23,7 @@ Action draw(cardinal::shared_ptr<cardinal::project::Project>* current_project,
     static char         new_root[1024]   = "G:/CardinalProjects/MyGame";
     static char         new_name[256]    = "MyGame";
     static char         new_author[256]  = "";
+    static char         new_engine[1024] = "G:/Cardinal_System_Works";
     static int          template_idx     = 0;
     static char         open_root[1024]  = "G:/CardinalProjects/MyGame";
     static cardinal::string  last_error;
@@ -37,6 +38,8 @@ Action draw(cardinal::shared_ptr<cardinal::project::Project>* current_project,
         ImGui::InputText("Path",   new_root,   sizeof(new_root));
         ImGui::InputText("Name",   new_name,   sizeof(new_name));
         ImGui::InputText("Author", new_author, sizeof(new_author));
+        ImGui::InputText("Engine root", new_engine, sizeof(new_engine));
+        ImGui::TextDisabled("Path to your Cardinal checkout — baked into the project's build files.");
         if (ImGui::Button("Create project", ImVec2(160.0f, 0.0f))) {
             cardinal::project::InstantiateOptions opts{};
             opts.root = new_root;
@@ -44,6 +47,7 @@ Action draw(cardinal::shared_ptr<cardinal::project::Project>* current_project,
             opts.info.name           = new_name;
             opts.info.author         = new_author;
             opts.info.engine_version = "0.1.0";
+            opts.info.engine_root    = new_engine;
             cardinal::string err;
             auto p = cardinal::project::instantiate_template(opts, &err);
             if (p) {
@@ -134,6 +138,23 @@ Action draw(cardinal::shared_ptr<cardinal::project::Project>* current_project,
         if (ImGui::Button("Pack"))          act.pack_clicked = true;
         ImGui::SameLine();
         if (ImGui::Button("Cook & Pack"))   act.cook_and_pack_clicked = true;
+
+        // ---- Build system ------------------------------------------------
+        ImGui::Separator();
+        ImGui::TextDisabled("Build system");
+        char ebuf[1024];
+        cardinal::snprintf(ebuf, sizeof(ebuf), "%s", info.engine_root.c_str());
+        if (ImGui::InputText("Engine root##c", ebuf, sizeof(ebuf))) info.engine_root = ebuf;
+        if (ImGui::Button("Generate build files", ImVec2(170.0f, 0.0f))) {
+            (*current_project)->save();   // persist engine_root first
+            cardinal::string gerr;
+            if (cardinal::project::generate_build_files(**current_project, &gerr))
+                last_error.clear();
+            else
+                last_error = gerr;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("Writes CMakeLists.txt + build.bat/.sh + src/main.cpp");
 
         ImGui::Separator();
         static ImGuiTextFilter asset_filter;
