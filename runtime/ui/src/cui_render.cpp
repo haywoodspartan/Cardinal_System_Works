@@ -24,6 +24,14 @@ void cui_render(const cardinal::cui::DrawList& dl,
 
     namespace cui = cardinal::cui;
     for (const auto& cmd : dl.cmds()) {
+        // Honor the command's clip rect (scroll containers etc.) as an ImGui
+        // scissor, intersected with the current window clip.
+        const bool clipped = cmd.clip.size.x < 1.0e8f || cmd.clip.size.y < 1.0e8f;
+        if (clipped) {
+            dr->PushClipRect(ImVec2(cmd.clip.left() + origin.x, cmd.clip.top() + origin.y),
+                             ImVec2(cmd.clip.right() + origin.x, cmd.clip.bottom() + origin.y),
+                             true);
+        }
         const ImVec2 a = to_pt(cmd.rect.pos, origin);
         switch (cmd.kind) {
         case cui::DrawKind::RectFilled: {
@@ -46,6 +54,7 @@ void cui_render(const cardinal::cui::DrawList& dl,
             break;
         }
         }
+        if (clipped) dr->PopClipRect();
     }
 }
 

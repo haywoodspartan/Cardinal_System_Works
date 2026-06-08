@@ -107,6 +107,17 @@ inline constexpr int anchor_row(Anchor a) noexcept { return static_cast<int>(a) 
 // size text with a fixed advance ratio so layout stays deterministic + testable
 // on the CPU. A real renderer can override these once fonts exist.
 // -----------------------------------------------------------------------------
+// Intersection of two rects (clamped non-negative). Used for nested clipping.
+inline Rect rect_intersect(const Rect& a, const Rect& b) noexcept {
+    const float x0 = a.left()  > b.left()  ? a.left()  : b.left();
+    const float y0 = a.top()   > b.top()   ? a.top()   : b.top();
+    float       x1 = a.right()  < b.right()  ? a.right()  : b.right();
+    float       y1 = a.bottom() < b.bottom() ? a.bottom() : b.bottom();
+    if (x1 < x0) x1 = x0;
+    if (y1 < y0) y1 = y0;
+    return { { x0, y0 }, { x1 - x0, y1 - y0 } };
+}
+
 inline float text_advance(const cardinal::string& s, float font_size) noexcept {
     // 0.75 = the 8x8 bitmap font's advance (6 of 8 columns per glyph); the
     // native cui_rhi renderer draws square pixels at this advance, so layout

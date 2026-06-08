@@ -158,12 +158,14 @@ void test_paint_emits_commands() {
     CHECK(found);
 }
 
-// A fixed-size leaf for exact layout assertions.
+// A fixed-size leaf that paints a red rect — for exact layout + clip assertions.
 struct FixedBox : ui::Widget {
     ui::Vec2 sz;
     explicit FixedBox(ui::Vec2 s) : sz(s) {}
     ui::Vec2 measure(const ui::Constraints& c) override { return { c.clamp_w(sz.x), c.clamp_h(sz.y) }; }
-    void     paint(ui::PaintContext&) override {}
+    void     paint(ui::PaintContext& ctx) override {
+        ctx.dl->rect_filled(rect_, ctx.apply(ui::Color{255, 0, 0, 255}));
+    }
 };
 
 // ---- Canvas: 9-point anchor placement (PA ComputePos model) ---------------
@@ -232,6 +234,36 @@ void test_alpha_cascade() {
     CHECK(dim_text);
 }
 
+// ---- ScrollPanel: wheel scroll + child clipping ---------------------------
+void test_scroll_clip() {
+    ui::Ui u;
+    auto* sp = static_cast<ui::ScrollPanel*>(
+        u.set_root(cardinal::make_unique<ui::ScrollPanel>(0.0f)));
+    FixedBox* first = nullptr;
+    for (int i = 0; i < 5; ++i) {
+        auto* b = static_cast<FixedBox*>(
+            sp->add(cardinal::make_unique<FixedBox>(ui::Vec2{100, 20})));
+        if (i == 0) first = b;
+    }
+    u.layout({ 100, 50 });                     // viewport 50 tall; content = 5*20 = 100
+    CHECK(ap(first->rect().pos.y, 0.0f));      // first child starts at the top
+
+    // Wheel down -> content scrolls up.
+    u.update_input({ { 50, 25 }, false, -2.0f });
+    u.layout({ 100, 50 });                     // re-layout applies the new scroll
+    CHECK(sp->scroll() > 0.0f);
+    CHECK(first->rect().pos.y < 0.0f);         // first child pushed above the top
+
+    // Painted child rects carry the panel's clip (height 50).
+    ui::DrawList dl;
+    u.paint(dl);
+    bool clipped = false;
+    for (const auto& c : dl.cmds())
+        if (c.kind == ui::DrawKind::RectFilled && c.color.r == 255 && c.color.g == 0
+            && ap(c.clip.size.y, 50.0f)) clipped = true;
+    CHECK(clipped);
+}
+
 }  // namespace
 
 int main() {
@@ -245,6 +277,7 @@ int main() {
     test_find_by_id();
     test_state_hit_test();
     test_alpha_cascade();
+    test_scroll_clip();
 
     if (g_fail == 0) {
         cardinal::log::infof("cuitest", "OK  %d checks passed", g_checks);

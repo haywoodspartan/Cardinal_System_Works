@@ -14,6 +14,11 @@ void Ui::layout(Vec2 screen_size) {
 void Ui::update_input(const InputState& in) {
     hovered_ = root_ ? root_->hit_test(in.mouse) : nullptr;
 
+    // Route the mouse wheel to the deepest scroll container under the cursor.
+    if (in.scroll != 0.0f && root_ != nullptr) {
+        if (Widget* s = root_->hit_scroll(in.mouse)) s->on_scroll(in.scroll);
+    }
+
     if (prev_valid_) {
         const bool pressed  =  in.mouse_down && !prev_.mouse_down;
         const bool released = !in.mouse_down &&  prev_.mouse_down;

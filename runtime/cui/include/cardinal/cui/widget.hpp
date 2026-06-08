@@ -62,6 +62,8 @@ public:
     virtual bool interactive() const noexcept { return false; }
     virtual void on_click() {}
     virtual void on_drag(Vec2 /*mouse*/) {}
+    virtual bool scrollable() const noexcept { return false; }
+    virtual void on_scroll(float /*delta*/) {}
 
     // --- Tree ---------------------------------------------------------
     Widget* add(cardinal::unique_ptr<Widget> child) {
@@ -92,6 +94,8 @@ public:
 
     // Deepest interactive, enabled, non-ignored widget containing pt.
     Widget* hit_test(Vec2 pt) noexcept;
+    // Deepest scrollable widget containing pt (for routing the mouse wheel).
+    Widget* hit_scroll(Vec2 pt) noexcept;
 
     // Paint this widget + subtree, cascading alpha down the context. Hosts call
     // this (not paint()) on the root; paint_children calls it on each child.

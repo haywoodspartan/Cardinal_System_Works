@@ -20,6 +20,15 @@ Widget* Widget::hit_test(Vec2 pt) noexcept {
     return (interactive() && enabled_ && !ignore_input_) ? this : nullptr;
 }
 
+Widget* Widget::hit_scroll(Vec2 pt) noexcept {
+    if (!visible_ || !rect_.contains(pt)) return nullptr;
+    for (auto it = children_.rbegin(); it != children_.rend(); ++it) {
+        if (!*it) continue;
+        if (Widget* w = (*it)->hit_scroll(pt)) return w;
+    }
+    return scrollable() ? this : nullptr;
+}
+
 Widget* Widget::find(const cardinal::string& id) noexcept {
     if (!id_.empty() && id_ == id) return this;
     for (auto& c : children_) {

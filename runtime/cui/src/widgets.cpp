@@ -230,4 +230,67 @@ void Canvas::arrange(const Rect& r) {
     }
 }
 
+// -----------------------------------------------------------------------------
+// ScrollPanel
+// -----------------------------------------------------------------------------
+Vec2 ScrollPanel::measure(const Constraints& c) {
+    // A viewport fills the space it's offered; content scrolls within.
+    Vec2 sz{ c.clamp_w(c.max_w < 1e8f ? c.max_w : 0.0f),
+             c.clamp_h(c.max_h < 1e8f ? c.max_h : 0.0f) };
+    measured_ = sz;
+    return sz;
+}
+
+void ScrollPanel::arrange(const Rect& r) {
+    rect_ = r;
+
+    // Content height = stacked children + spacing.
+    float total = 0.0f;
+    int n = 0;
+    for (auto& ch : children_) {
+        if (!ch || !ch->visible()) continue;
+        total += ch->measure(Constraints::loose(r.width(), 1.0e9f)).y + spacing_;
+        ++n;
+    }
+    if (n > 0) total -= spacing_;
+    content_h_ = total;
+
+    // Clamp scroll to [0, content - viewport].
+    float maxs = content_h_ - r.height();
+    if (maxs < 0.0f) maxs = 0.0f;
+    if (scroll_ > maxs) scroll_ = maxs;
+    if (scroll_ < 0.0f) scroll_ = 0.0f;
+
+    // Place children top-to-bottom, shifted up by the scroll offset.
+    float y = r.top() - scroll_;
+    for (auto& ch : children_) {
+        if (!ch || !ch->visible()) continue;
+        const Vec2 s = ch->measure(Constraints::loose(r.width(), 1.0e9f));
+        ch->arrange(Rect{ { r.left(), y }, { r.width(), s.y } });
+        y += s.y + spacing_;
+    }
+}
+
+void ScrollPanel::on_scroll(float delta) {
+    scroll_ -= delta * 30.0f;      // wheel up -> toward the top; clamped in arrange
+    if (scroll_ < 0.0f) scroll_ = 0.0f;
+}
+
+void ScrollPanel::paint(PaintContext& ctx) {
+    ctx.dl->push_clip(rect_);
+    paint_children(ctx);
+    ctx.dl->pop_clip();
+
+    // A thin scrollbar when the content overflows.
+    if (content_h_ > rect_.height() && rect_.height() > 0.0f) {
+        const float frac  = rect_.height() / content_h_;
+        const float bar_h = rect_.height() * frac;
+        const float maxs  = content_h_ - rect_.height();
+        const float t     = maxs > 0.0f ? scroll_ / maxs : 0.0f;
+        const float bar_y = rect_.top() + t * (rect_.height() - bar_h);
+        const Rect  bar{ { rect_.right() - 4.0f, bar_y }, { 3.0f, bar_h } };
+        ctx.dl->rect_filled(bar, ctx.apply(ctx.theme->control_hot), 1.5f);
+    }
+}
+
 }  // namespace cardinal::cui

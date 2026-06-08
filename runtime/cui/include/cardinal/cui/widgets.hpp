@@ -121,4 +121,23 @@ private:
     cardinal::vector<Slot> slots_;   // parallel to children_
 };
 
+// ScrollPanel — vertical scroll viewport. Stacks children top-to-bottom, clips
+// them to its rect, and offsets by a scroll position the mouse wheel drives.
+// The editor's most-needed container (panels are long lists). Clipping rides
+// the DrawList clip stack -> the ImGui bridge applies it as a scissor.
+class ScrollPanel : public Widget {
+public:
+    explicit ScrollPanel(float spacing = 4.0f) : spacing_(spacing) {}
+    Vec2 measure(const Constraints& c) override;
+    void arrange(const Rect& r) override;
+    void paint(PaintContext& ctx) override;
+    bool scrollable() const noexcept override { return true; }
+    void on_scroll(float delta) override;
+    float scroll() const noexcept { return scroll_; }
+private:
+    float spacing_;
+    float scroll_{0.0f};      // how far down the content is scrolled (>= 0)
+    float content_h_{0.0f};   // total content height (for clamping + scrollbar)
+};
+
 }  // namespace cardinal::cui
