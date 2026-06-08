@@ -107,7 +107,7 @@ public:
                 if (k.id == id && k.kind == KnobKind::Enum) return k.e;
             return dflt;
         };
-        r.max_tier_want          = kenum("max_tier", 1);   // 0..3 = FP32/16/8/4
+        r.max_tier_want          = kenum("max_tier", 0);   // 0..3 = FP32/16/8/4
         r.allow_fp8              = kbool("max_tier_fp8");
         r.allow_fp4              = kbool("max_tier_fp4");
         r.async_compute         = kbool("async_compute");
@@ -177,6 +177,12 @@ public:
              "Device lacks bindless descriptor heaps");
         gate("ray_tracing",           caps.ray_tracing_pipeline,
              "Device has no ray-tracing pipeline");
+        gate("ray_traced_shadows",    caps.ray_tracing_pipeline,
+             "Ray-traced shadows need a ray-tracing GPU");
+        gate("rt_reflections",        caps.ray_tracing_pipeline,
+             "Ray-traced reflections need a ray-tracing GPU");
+        gate("restir_di",             caps.ray_tracing_pipeline,
+             "ReSTIR DI needs a ray-tracing GPU");
         gate("dlss_upscaler",         caps.nvidia_dlss_capable,
              "DLSS requires an NVIDIA RTX 20-series or newer GPU");
         gate("fsr_upscaler",          caps.amd_fsr3_capable,
@@ -334,6 +340,15 @@ private:
             "escalate to. FP4 (Blackwell) = 8 micro-tris per source triangle; "
             "FP32 = no subdivision.",
             1, {"FP32", "FP16", "FP8", "FP4"});
+        add_bool_("virtual_geometry", "Virtual Geometry", "AEGIS",
+            "GPU-driven cluster-LOD geometry pipeline (Nanite-style): classify -> "
+            "meshlet -> screen-space-error LOD select per cluster.", true);
+        add_bool_("meshlet_culling", "Meshlet Culling", "AEGIS",
+            "Per-cluster frustum + backface-cone + small-feature culling before "
+            "the V-Buffer rasterizer.", true);
+        add_bool_("hiz_occlusion", "Hi-Z Occlusion Culling", "AEGIS",
+            "Two-pass hierarchical-Z occlusion test against last frame's depth so "
+            "hidden clusters never reach the rasterizer.", true);
 
         // ---- Quality / Resolution -------------------------------------
         add_float_("resolution_scale", "Resolution Scale", "Quality",
@@ -347,12 +362,26 @@ private:
         add_enum_("anisotropic_filter", "Anisotropic Filter", "Quality",
             "Texture filtering for sampled material textures.",
             3, {"Bilinear", "Trilinear", "Aniso 2x", "Aniso 4x", "Aniso 8x", "Aniso 16x"});
-        add_enum_("shadow_resolution", "Shadow Atlas", "Quality",
+        // ---- Shadows --------------------------------------------------
+        add_enum_("shadow_resolution", "Shadow Atlas", "Shadows",
             "Per-light shadow-map dimensions. 8k is for cinematic captures.",
             2, {"512", "1024", "2048", "4096", "8192"});
-        add_int_("shadow_cascades", "Shadow Cascades", "Quality",
+        add_int_("shadow_cascades", "Shadow Cascades", "Shadows",
             "Number of cascaded shadow-map slices for the sun directional.",
             3, 1, 4);
+        add_enum_("shadow_filter", "Shadow Filtering", "Shadows",
+            "Hard = aliased edges (cheapest). PCF = percentage-closer soft edges. "
+            "PCSS = contact-hardening soft shadows (penumbra grows with distance).",
+            1, {"Hard", "PCF", "PCSS (soft)"});
+        add_float_("shadow_distance", "Shadow Distance (m)", "Shadows",
+            "Max world distance the sun cascades cover; beyond it geometry is unshadowed.",
+            150.0f, 10.0f, 2000.0f, 10.0f);
+        add_bool_("contact_shadows", "Contact Shadows", "Shadows",
+            "Screen-space short-range ray-march that fills the gaps small geometry "
+            "leaves in cascaded shadow maps.", true);
+        add_bool_("ray_traced_shadows", "Ray-Traced Shadows", "Shadows",
+            "Hardware-RT shadow rays for pixel-accurate penumbra. Needs an RT GPU.",
+            false);
 
         // ---- Frame pacing ---------------------------------------------
         add_enum_("vsync_mode", "VSync", "Frame Pacing",
@@ -394,6 +423,24 @@ private:
         add_float_("vignette", "Vignette", "Post-FX",
             "Edge-darkening intensity.",
             0.0f, 0.0f, 1.0f, 0.05f);
+        add_bool_("motion_blur", "Motion Blur", "Post-FX",
+            "Per-object + camera velocity blur reconstructed from the motion-vector "
+            "buffer.", false);
+        add_float_("motion_blur_amount", "Motion Blur Amount", "Post-FX",
+            "Shutter-angle scale on the velocity blur.",
+            0.5f, 0.0f, 1.0f, 0.05f);
+        add_bool_("depth_of_field", "Depth of Field", "Post-FX",
+            "Physically-based bokeh DoF (circle-of-confusion from focus + aperture).",
+            false);
+        add_float_("dof_focus_distance", "DoF Focus (m)", "Post-FX",
+            "World distance the lens is focused at.",
+            10.0f, 0.1f, 1000.0f, 0.5f);
+        add_float_("dof_aperture", "DoF Aperture (f-stop)", "Post-FX",
+            "Lens f-number — smaller = shallower depth of field + larger bokeh.",
+            5.6f, 1.0f, 22.0f, 0.1f);
+        add_float_("film_grain", "Film Grain", "Post-FX",
+            "Animated luminance noise overlaid for a filmic feel.",
+            0.0f, 0.0f, 1.0f, 0.05f);
 
         // ---- Lighting -------------------------------------------------
         add_bool_("ibl_diffuse",  "IBL Diffuse", "Lighting",
@@ -405,11 +452,33 @@ private:
         add_enum_("ssao_quality", "SSAO Quality", "Lighting",
             "Sample count + radius per AO probe.",
             1, {"Low (4 taps)", "Med (8 taps)", "High (16 taps)", "Ultra (32 taps)"});
-        add_bool_("ssr_enabled", "SSR", "Lighting",
+        // ---- Reflections ----------------------------------------------
+        add_bool_("ssr_enabled", "Screen-Space Reflections", "Reflections",
             "Screen-space reflections (linear ray-march + Hi-Z accelerator).", false);
-        add_enum_("ssr_quality", "SSR Quality", "Lighting",
+        add_enum_("ssr_quality", "SSR Quality", "Reflections",
             "Reflection ray step count + roughness importance sampling.",
             1, {"Low", "Med", "High"});
+        add_bool_("rt_reflections", "Ray-Traced Reflections", "Reflections",
+            "Hardware-RT reflections for off-screen + rough surfaces SSR can't reach. "
+            "Needs an RT GPU.", false);
+        add_enum_("reflection_quality", "RT Reflection Quality", "Reflections",
+            "Ray count + denoiser strength for ray-traced reflections.",
+            1, {"Low", "Med", "High", "Ultra"});
+
+        // ---- Global Illumination --------------------------------------
+        add_enum_("gi_mode", "Global Illumination", "Global Illumination",
+            "Indirect-light technique. SSGI is screen-space (no HW RT). RTGI + "
+            "ReSTIR GI trace real rays (need an RT GPU) for off-screen bounce light.",
+            1, {"Off", "SSGI", "RTGI", "ReSTIR GI"});
+        add_int_("gi_bounces", "GI Bounces", "Global Illumination",
+            "Indirect light bounces traced per frame (RT modes).",
+            1, 1, 4);
+        add_float_("gi_intensity", "GI Intensity", "Global Illumination",
+            "Scale on the gathered indirect irradiance.",
+            1.0f, 0.0f, 4.0f, 0.05f);
+        add_bool_("restir_di", "ReSTIR DI", "Global Illumination",
+            "Reservoir spatiotemporal importance resampling for many-light direct "
+            "lighting (the AEGIS DI pass). Needs an RT GPU.", false);
 
         // ---- Upscaler -------------------------------------------------
         add_enum_("dlss_upscaler", "DLSS", "Upscaler",
@@ -450,6 +519,65 @@ private:
         add_bool_("max_tier_fp4", "Allow FP4 Tier", "GPU Features",
             "Permit the math-division engine to escalate to FP4 (Blackwell / RDNA5).",
             false);
+
+        // ---- Anti-Aliasing --------------------------------------------
+        add_enum_("aa_mode", "Anti-Aliasing", "Anti-Aliasing",
+            "Edge AA technique. FXAA = cheap post blur. SMAA = sharper morphological. "
+            "TAA = temporal accumulation (best, but needs motion vectors + jitter).",
+            3, {"Off", "FXAA", "SMAA", "TAA"});
+        add_float_("taa_sharpness", "TAA Sharpness", "Anti-Aliasing",
+            "Post-resolve sharpening to counter TAA's inherent softness.",
+            0.5f, 0.0f, 1.0f, 0.05f);
+        add_bool_("taa_upsampling", "TAA Upsampling", "Anti-Aliasing",
+            "Let TAA also upscale from the internal resolution scale (TAAU).",
+            false);
+
+        // ---- Color Grading --------------------------------------------
+        add_float_("cg_temperature", "Temperature", "Color Grading",
+            "White-balance Kelvin shift: negative = cooler/blue, positive = warmer/orange.",
+            0.0f, -1.0f, 1.0f, 0.05f);
+        add_float_("cg_tint", "Tint", "Color Grading",
+            "White-balance green<->magenta axis.",
+            0.0f, -1.0f, 1.0f, 0.05f);
+        add_float_("cg_saturation", "Saturation", "Color Grading",
+            "Chroma scale: 0 = greyscale, 1 = unchanged, 2 = vivid.",
+            1.0f, 0.0f, 2.0f, 0.05f);
+        add_float_("cg_contrast", "Contrast", "Color Grading",
+            "Tonal contrast about middle grey.",
+            1.0f, 0.0f, 2.0f, 0.05f);
+        add_bool_("cg_lut_enabled", "Apply Color LUT", "Color Grading",
+            "Apply the project's 3D colour lookup table after grading.", false);
+
+        // ---- Atmosphere -----------------------------------------------
+        add_bool_("fog_enabled", "Fog", "Atmosphere",
+            "Exponential height + distance fog.", false);
+        add_float_("fog_density", "Fog Density", "Atmosphere",
+            "Extinction coefficient for the distance fog.",
+            0.02f, 0.0f, 1.0f, 0.005f);
+        add_bool_("volumetric_fog", "Volumetric Fog", "Atmosphere",
+            "Froxel-based volumetric fog that scatters light through participating media.",
+            false);
+        add_bool_("volumetric_lighting", "Volumetric Lighting", "Atmosphere",
+            "Light-shaft / god-ray scattering from shadowed light sources.", false);
+
+        // ---- Detail & Streaming ---------------------------------------
+        add_int_("lod_bias", "LOD Bias", "Detail & Streaming",
+            "Shifts mesh LOD selection: negative = hold higher detail longer "
+            "(costlier), positive = drop sooner (faster).",
+            0, -3, 3);
+        add_enum_("texture_quality", "Texture Quality", "Detail & Streaming",
+            "Highest resident mip level for streamed textures.",
+            3, {"Low", "Medium", "High", "Ultra"});
+        add_float_("mip_bias", "Mip Bias", "Detail & Streaming",
+            "Global sampler mip LOD bias; negative sharpens (more aliasing), "
+            "positive softens.",
+            0.0f, -2.0f, 2.0f, 0.1f);
+        add_int_("texture_streaming_budget", "Texture Pool (MB)", "Detail & Streaming",
+            "VRAM budget for the streamed-texture pool.",
+            2048, 256, 16384);
+        add_bool_("virtual_texturing", "Virtual Texturing", "Detail & Streaming",
+            "Stream only the texture tiles visible this frame (cardinal::vt) — "
+            "decouples texture memory from texture resolution.", true);
 
         // ---- Debug (pipeline-global only) -----------------------------
         // The per-viewport visualisation CHOICE is made in the VIEWPORT
