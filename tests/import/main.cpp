@@ -991,8 +991,76 @@ void test_usdz(const std::filesystem::path& dir) {
 }
 
 // ---- Heightmap: graceful failure on a not-yet-supported format ------
+// --- PNG fixture builders (zlib-STORED IDAT so no compressor; CRCs zeroed,
+//     which the decoder skips). ---------------------------------------------
+static std::vector<unsigned char> zlib_stored(const std::vector<unsigned char>& raw) {
+    std::vector<unsigned char> z = {0x78, 0x01, 0x01};   // zlib hdr + BFINAL|STORED
+    const unsigned n = static_cast<unsigned>(raw.size());
+    z.push_back((unsigned char)( n        & 0xFF)); z.push_back((unsigned char)((n  >> 8) & 0xFF));   // LEN  LE
+    z.push_back((unsigned char)((~n)      & 0xFF)); z.push_back((unsigned char)((~n >> 8) & 0xFF));   // NLEN LE
+    z.insert(z.end(), raw.begin(), raw.end());
+    z.insert(z.end(), {0, 0, 0, 1});                     // adler32 (decoder ignores)
+    return z;
+}
+static std::vector<unsigned char> build_png(unsigned w, unsigned h,
+        unsigned char depth, unsigned char color,
+        const std::vector<unsigned char>& idat) {
+    std::vector<unsigned char> png = {0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A};
+    auto be32  = [](std::vector<unsigned char>& v, unsigned x){
+        v.push_back((unsigned char)((x>>24)&0xFF)); v.push_back((unsigned char)((x>>16)&0xFF));
+        v.push_back((unsigned char)((x>> 8)&0xFF)); v.push_back((unsigned char)( x     &0xFF)); };
+    auto chunk = [&](const char* t, const std::vector<unsigned char>& d){
+        be32(png, (unsigned)d.size());
+        png.insert(png.end(), t, t + 4);
+        png.insert(png.end(), d.begin(), d.end());
+        be32(png, 0); };                                 // CRC — skipped by decode_png
+    std::vector<unsigned char> ihdr;
+    be32(ihdr, w); be32(ihdr, h);
+    ihdr.insert(ihdr.end(), {depth, color, 0, 0, 0});    // bit depth, colour, comp, filter, interlace
+    chunk("IHDR", ihdr);
+    chunk("IDAT", idat);
+    chunk("IEND", {});
+    return png;
+}
+
+void test_heightmap_png(const std::filesystem::path& dir) {
+    // 8-bit grayscale 2x2: pixels [10,20 / 30,40]; each row = filter(0) + data.
+    const auto p8 = dir / "h8.png";
+    write_bytes(p8, build_png(2, 2, 8, 0,
+        zlib_stored({0, 10, 20,   0, 30, 40})));
+    cardinal::string err;
+    imp::HeightField hf = imp::decode_heightmap(str_of(p8), &err);
+    CHECK(hf.ok);
+    CHECK(hf.source_format == "png");
+    CHECK(hf.width == 2u && hf.height == 2u);
+    CHECK(hf.heights.size() == sz(4));
+    CHECK(approx(hf.min, 10.0f, 1e-3f));
+    CHECK(approx(hf.max, 40.0f, 1e-3f));
+    if (hf.heights.size() == sz(4)) {
+        CHECK(approx(hf.heights[0], 10.0f/255.0f, 1e-4f));
+        CHECK(approx(hf.heights[1], 20.0f/255.0f, 1e-4f));
+        CHECK(approx(hf.heights[3], 40.0f/255.0f, 1e-4f));
+    }
+
+    // 16-bit grayscale 1x2 (the canonical heightmap export): values 10, 20
+    // stored big-endian; each row = filter(0) + 2 bytes.
+    const auto p16 = dir / "h16.png";
+    write_bytes(p16, build_png(1, 2, 16, 0,
+        zlib_stored({0, 0x00, 0x0A,   0, 0x00, 0x14})));
+    imp::HeightField hf16 = imp::decode_heightmap(str_of(p16), nullptr);
+    CHECK(hf16.ok);
+    CHECK(hf16.width == 1u && hf16.height == 2u);
+    CHECK(approx(hf16.min, 10.0f, 1e-3f));
+    CHECK(approx(hf16.max, 20.0f, 1e-3f));
+    if (hf16.heights.size() == sz(2)) {
+        CHECK(approx(hf16.heights[0], 10.0f/65535.0f, 1e-6f));
+        CHECK(approx(hf16.heights[1], 20.0f/65535.0f, 1e-6f));
+    }
+}
+
 void test_heightmap_unsupported(const std::filesystem::path& dir) {
-    // A .png is recognised but needs DEFLATE (not yet) — must fail cleanly.
+    // A malformed .png (bad signature tail) must fail cleanly — PNG itself is
+    // now supported (see test_heightmap_png), but corrupt input can't crash.
     const auto p = dir / "fake.png";
     write_bytes(p, std::vector<unsigned char>{0x89,'P','N','G',0,0,0,0});
     cardinal::string err;
@@ -1032,6 +1100,7 @@ int main() {
     test_heightmap_raw16(dir);
     test_heightmap_bmp(dir);
     test_heightmap_tga(dir);
+    test_heightmap_png(dir);
     test_heightmap_unsupported(dir);
     test_fbx_triangle(dir);
     test_fbx_compressed(dir);

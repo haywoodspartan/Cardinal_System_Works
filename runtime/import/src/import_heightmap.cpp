@@ -13,12 +13,16 @@
 //   * TGA    (.tga) — uncompressed true-color (type 2) / grayscale (type 3).
 // 8-bit sources use the red / luminance channel. Heights normalise to [0,1]
 // by the format's full range (u16/65535, u8/255) so absolute elevation is
-// preserved; vertical scale is applied later at mesh build. PNG (needs
-// DEFLATE) and EXR (float) land once cardinal::core::compress::inflate exists.
+// preserved; vertical scale is applied later at mesh build.
+//   * PNG (.png) — 8/16-bit grayscale / RGB(A) via cardinal::core::compress
+//     (zlib IDAT through the DEFLATE keystone). 16-bit grayscale is THE common
+//     heightmap export (World Machine / Gaea / QGIS), now first-class.
+// EXR (float) is still pending a mini OpenEXR reader.
 // =============================================================================
 
 #include <cardinal/import/import.hpp>
 #include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/compress/png.hpp>   // PNG (zlib IDAT via the inflate keystone)
 
 #include <cardinal/core/std/algorithm.hpp>   // cardinal::min / max
 #include <cardinal/core/std/cctype.hpp>      // cardinal::tolower
@@ -196,6 +200,39 @@ HeightField decode_tga(const cardinal::vector<u8>& b) {
     return hf;
 }
 
+// ---- PNG: 8/16-bit grayscale or RGB(A) via the DEFLATE keystone --------
+HeightField decode_png_height(const cardinal::vector<u8>& b) {
+    HeightField hf; hf.source_format = "png";
+    cardinal::vector<u8> px;
+    u32 w = 0, h = 0, ch = 0, depth = 0;
+    if (!cardinal::core::compress::decode_png(b.data(), b.size(), px, w, h, ch, depth)) {
+        hf.diagnostics = "png: decode failed (palette / interlaced / sub-byte "
+                         "depth unsupported, or corrupt)";
+        return hf;
+    }
+    hf.width = w; hf.height = h;
+    hf.heights.resize(static_cast<cardinal::size_t>(w) * h);
+    const u32   bps    = (depth == 16) ? 2u : 1u;        // bytes per sample
+    const u32   stride = w * ch * bps;
+    const float maxv   = (depth == 16) ? 65535.0f : 255.0f;
+    float rmin = 1e30f, rmax = -1e30f;
+    for (u32 y = 0; y < h; ++y) {
+        for (u32 x = 0; x < w; ++x) {
+            // Height = channel 0 (grayscale) or the red channel (RGB/RGBA);
+            // 16-bit samples are big-endian in decode_png's output.
+            const u8* p = px.data() + static_cast<cardinal::size_t>(y) * stride
+                                    + static_cast<cardinal::size_t>(x) * ch * bps;
+            const float v = (depth == 16)
+                ? static_cast<float>((static_cast<u32>(p[0]) << 8) | p[1])
+                : static_cast<float>(p[0]);
+            rmin = cardinal::min(rmin, v); rmax = cardinal::max(rmax, v);
+            hf.heights[static_cast<cardinal::size_t>(y) * w + x] = v / maxv;
+        }
+    }
+    finalize(hf, rmin, rmax);
+    return hf;
+}
+
 }  // namespace
 
 HeightField decode_heightmap(const cardinal::string& path,
@@ -212,8 +249,7 @@ HeightField decode_heightmap(const cardinal::string& path,
     if      (e == ".r16" || e == ".raw") hf = decode_raw16(bytes, raw_dim);
     else if (e == ".bmp")                hf = decode_bmp(bytes);
     else if (e == ".tga")                hf = decode_tga(bytes);
-    else if (e == ".png")
-        hf.diagnostics = "heightmap: PNG needs DEFLATE (lands with cardinal::core::compress)";
+    else if (e == ".png")                hf = decode_png_height(bytes);
     else if (e == ".exr")
         hf.diagnostics = "heightmap: EXR float heightmaps not yet supported";
     else {
