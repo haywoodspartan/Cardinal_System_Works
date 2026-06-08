@@ -1958,6 +1958,33 @@ int main(int argc, char** argv) {
                 ImGui::SliderFloat("Mouse sensitivity", &fly_cam.look_sensitivity,
                                    0.0005f, 0.02f, "%.4f rad/px");
                 ImGui::TextDisabled("  WASD move / Q E down up / RMB look / Shift sprint / wheel speed");
+
+                // ---- Editor / UI ------------------------------------------
+                ImGui::SeparatorText("Editor / UI");
+                static int theme_idx = 0;   // 0 Dark / 1 Light / 2 Classic
+                const char* themes[] = { "Dark", "Light", "Classic" };
+                ImGui::SetNextItemWidth(180.0f);
+                if (ImGui::Combo("Theme", &theme_idx, themes, IM_ARRAYSIZE(themes))) {
+                    if      (theme_idx == 1) ImGui::StyleColorsLight();
+                    else if (theme_idx == 2) ImGui::StyleColorsClassic();
+                    else                     ImGui::StyleColorsDark();
+                }
+                ImGui::SetNextItemWidth(180.0f);
+                ImGui::SliderFloat("UI font scale", &ImGui::GetIO().FontGlobalScale,
+                                   0.75f, 2.0f, "%.2f");
+
+                ImGui::SeparatorText("Viewport");
+                ImGui::Checkbox("Grid overlay", &wpanel.show_grid_overlay);
+                ImGui::Checkbox("Grid snap", &snap_enabled);
+                if (snap_enabled) {
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(90.0f);
+                    ImGui::SliderFloat("##snapstep", &snap_step, 0.1f, 10.0f, "step %.2f");
+                }
+
+                ImGui::SeparatorText("Layout");
+                if (ImGui::MenuItem("Reset window layout"))         first_layout = true;
+                if (ImGui::MenuItem("Editor Preferences (CVars)…")) show_options = true;
                 ImGui::EndMenu();
             }
 
@@ -1986,6 +2013,7 @@ int main(int argc, char** argv) {
                 const bool has_sel = (selected_id != 0);
                 if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, has_sel)) menu_duplicate = true;
                 if (ImGui::MenuItem("Delete",    "Del",    false, has_sel)) menu_delete = true;
+                if (ImGui::MenuItem("Focus in Viewport", "F", false, has_sel)) menu_focus = true;
                 ImGui::Separator();
                 if (ImGui::MenuItem("Editor Preferences…")) show_options = true;
                 if (ImGui::MenuItem("Project Settings…"))   show_project = true;
@@ -2014,31 +2042,9 @@ int main(int argc, char** argv) {
                 }
                 ImGui::EndMenu();
             }
-            // ---- Actor — operations on the selected actor(s).
-            if (ImGui::BeginMenu("Actor")) {
-                const bool has_sel = (selected_id != 0);
-                if (ImGui::MenuItem("Focus in Viewport", "F", false, has_sel)) menu_focus = true;
-                if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, has_sel)) menu_duplicate = true;
-                if (ImGui::MenuItem("Delete",    "Del",    false, has_sel)) menu_delete = true;
-                ImGui::Separator();
-                ImGui::MenuItem("Prefabs panel", nullptr, &show_prefabs);
-                ImGui::MenuItem("Actors panel",  nullptr, &show_actors);
-                ImGui::EndMenu();
-            }
-            // ---- Tools — editor tool panels.
-            if (ImGui::BeginMenu("Tools")) {
-                ImGui::MenuItem("Editor Modes",  nullptr, &show_modes);
-                ImGui::MenuItem("Brush",         nullptr, &show_brush);
-                ImGui::MenuItem("Mesh Tools",    nullptr, &show_mesh_tools);
-                ImGui::MenuItem("Texture Tools", nullptr, &show_tex_tools);
-                ImGui::MenuItem("World Systems", nullptr, &show_world_sys);
-                ImGui::Separator();
-                ImGui::MenuItem("Shader Compiler", nullptr, &show_shader_cc);
-                ImGui::MenuItem("Code Sandbox",    nullptr, &show_cppscript);
-                ImGui::Separator();
-                ImGui::MenuItem("Options / Settings (CVars)", nullptr, &show_options);
-                ImGui::EndMenu();
-            }
+            // (Actor + Tools menus removed — their actions live in Edit, and
+            // every tool panel is toggled from the View menu, so they were
+            // redundant. Actor's unique "Focus" moved into Edit.)
             // ---- Build — UE5-style BuildCookRun dropdown (cardinal::buildtool).
             if (ImGui::BeginMenu("Build")) {
                 static std::string build_status;
