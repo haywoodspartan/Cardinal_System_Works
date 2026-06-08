@@ -17,20 +17,29 @@ namespace {
 // One pipeline, one shader: pixel-space position -> NDC, flat vertex color.
 // (Color arrives as a normalized float4 from the R8G8B8A8_UNORM attribute.)
 constexpr const char* kShader = R"HLSL(
-// Push constant: the screen size, for pixel-space -> NDC. DXC requires
-// [[vk::push_constant]] on a global of STRUCT type (not a cbuffer).
+// Screen size for pixel-space -> NDC, delivered as a push/root constant.
+// Cross-backend: DXC requires [[vk::push_constant]] on a STRUCT global for
+// SPIR-V (Vulkan), while D3D12 binds set_push_constants to root 32-bit
+// constants at b0 (an HLSL `cbuffer ... : register(b0)`). DXC predefines
+// __spirv__ when generating SPIR-V, so branch on it.
+#ifdef __spirv__
 struct PushData { float2 uScreen; };
 [[vk::push_constant]] PushData g_push;
+#define U_SCREEN g_push.uScreen
+#else
+cbuffer Push : register(b0) { float2 g_uScreen; };
+#define U_SCREEN g_uScreen
+#endif
 
 struct VSIn  { float2 pos : POSITION0; float4 col : COLOR0; };
 struct VSOut { float4 pos : SV_POSITION; float4 col : COLOR0; };
 
 VSOut VSMain(VSIn i) {
     VSOut o;
-    float2 ndc;
-    ndc.x = (i.pos.x / g_push.uScreen.x) * 2.0 - 1.0;
-    ndc.y = 1.0 - (i.pos.y / g_push.uScreen.y) * 2.0;   // top-left origin
-    o.pos = float4(ndc, 0.0, 1.0);
+    float2 s = U_SCREEN;
+    o.pos = float4((i.pos.x / s.x) * 2.0 - 1.0,
+                   1.0 - (i.pos.y / s.y) * 2.0,   // top-left origin
+                   0.0, 1.0);
     o.col = i.col;
     return o;
 }

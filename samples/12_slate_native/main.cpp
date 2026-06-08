@@ -19,12 +19,22 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>   // std::getenv
 
 using cardinal::u32;
 namespace cui = cardinal::cui;
 
-int main() {
+int main(int argc, char** argv) {
     std::setbuf(stdout, nullptr);
+
+    // Backend select: "d3d12" / "vulkan" arg (or CARDINAL_RHI env), else Auto.
+    cardinal::rhi::Backend backend = cardinal::rhi::Backend::Auto;
+    const char* want = (argc > 1) ? argv[1] : nullptr;
+    if (want == nullptr) want = std::getenv("CARDINAL_RHI");
+    if (want != nullptr) {
+        if (want[0] == 'd' || want[0] == 'D') backend = cardinal::rhi::Backend::D3D12;
+        else if (want[0] == 'v' || want[0] == 'V') backend = cardinal::rhi::Backend::Vulkan;
+    }
 
     cardinal::window::WindowDesc wd{};
     wd.title     = "Cardinal Slate - native UI (no ImGui)";
@@ -38,6 +48,7 @@ int main() {
     input->attach_to_window(window.get());
 
     cardinal::rhi::DeviceDesc dd{};
+    dd.backend = backend;
     auto device = cardinal::rhi::create_device(dd);
     if (device == nullptr) { std::fprintf(stderr, "device creation failed\n"); return 1; }
     std::printf("RHI device: %s [%s]\n", device->adapter_name(),
