@@ -98,6 +98,15 @@ build.sh
 `runtime/core` is the foundation every other module depends on; it is the
 single place base C++ headers are referenced.
 
+## Documentation
+
+Developer docs live in [`docs/`](docs/README.md):
+
+- [docs/engine.md](docs/engine.md) — engine architecture: module stack, RHI,
+  the AEGIS render pipeline, gameplay/sim, and the asset/build pipeline.
+- [docs/studio.md](docs/studio.md) — the Cardinal Studio editor guide.
+- [docs/core.md](docs/core.md) — the `cardinal::core` foundation reference.
+
 ## Third-party SDKs
 
 Optional NVIDIA SDKs (RTXMU, NRD, RTXDI, RTXGI, NTC, Reflex, Streamline,
