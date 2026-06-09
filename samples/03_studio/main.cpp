@@ -3929,19 +3929,34 @@ int main(int argc, char** argv) {
 
             if (giz.active && !gizmo_drag_snaps.empty()) {
                 if (giz.mode == ui::Studio::GizmoMode::Translate) {
-                    const scn::Vec3 d{
+                    scn::Vec3 d{
                         giz.target_world.x - gizmo_prim_p0.x,
                         giz.target_world.y - gizmo_prim_p0.y,
                         giz.target_world.z - gizmo_prim_p0.z };
+                    // Toolbar grid snap applies to gizmo drags too: snap the
+                    // DELTA (not each entity) so multi-select relative offsets
+                    // are preserved — UE-style.
+                    if (snap_enabled && snap_step > 0.0f) {
+                        auto sn = [&](float v) {
+                            return std::round(v / snap_step) * snap_step; };
+                        d = { sn(d.x), sn(d.y), sn(d.z) };
+                    }
                     for (auto& s : gizmo_drag_snaps)
                         if (auto* e = scene.find_by_id(s.id))
                             e->transform.translation =
                                 { s.p.x+d.x, s.p.y+d.y, s.p.z+d.z };
                 } else if (giz.mode == ui::Studio::GizmoMode::Rotate) {
-                    const scn::Vec3 dr{
+                    scn::Vec3 dr{
                         giz.target_rotation_euler.x - gizmo_prim_r0.x,
                         giz.target_rotation_euler.y - gizmo_prim_r0.y,
                         giz.target_rotation_euler.z - gizmo_prim_r0.z };
+                    // Angle snap (15°) when grid snap is on.
+                    if (snap_enabled) {
+                        constexpr float kAngleStep = 3.14159265f / 12.0f;
+                        auto sn = [&](float v) {
+                            return std::round(v / kAngleStep) * kAngleStep; };
+                        dr = { sn(dr.x), sn(dr.y), sn(dr.z) };
+                    }
                     for (auto& s : gizmo_drag_snaps)
                         if (auto* e = scene.find_by_id(s.id))
                             e->transform.rotation_euler =
