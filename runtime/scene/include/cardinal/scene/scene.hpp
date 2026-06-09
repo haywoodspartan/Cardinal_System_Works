@@ -21,7 +21,7 @@
 #include <cardinal/core/std/utility.hpp>
 #include <cardinal/scene/math.hpp>
 
-namespace cardinal::rhi { class Device; class Buffer; }
+namespace cardinal::rhi { class Device; class Buffer; class Texture; }
 
 namespace cardinal::scene {
 
@@ -142,6 +142,10 @@ struct Material {
     // only). The forward renderer loads + uploads + binds it per draw, and the
     // PS samples it at the vertex UV. Not part of the GPU GpuMaterial struct.
     cardinal::string base_color_texture;
+    // GPU handle for the above, created + owned by the host (editor decodes the
+    // asset, uploads via rhi::Texture::upload, and parks it here). The forward
+    // renderer binds it to sampled slot 1 per draw; null => the white default.
+    cardinal::shared_ptr<rhi::Texture> base_color_gpu;
 };
 
 class Scene;

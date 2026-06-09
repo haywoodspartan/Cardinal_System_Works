@@ -1461,6 +1461,10 @@ public:
 
         const Entity* last_entity = nullptr;
         int           mat_index   = -1;   // ++ per entity change → slot 1 idx
+        // Tracks the texture currently in sampled slot 1 (white default bound
+        // above) so we rebind only when an entity's base-color map differs —
+        // one bind per material change, not per draw.
+        rhi::Texture* last_albedo = white_tex_.get();
         PushBlock pc{};
         // Light-space VP from pass 1 + shadow-valid flag (material_pad.z).
         const float shadow_z = shadow_ready_ ? 1.0f : 0.0f;
@@ -1487,6 +1491,15 @@ public:
                 swapchain_->set_push_constants(0, &pc, sizeof(pc));
                 ++stats_.pc_pushes;
                 last_entity = w.entity;
+                // Per-entity base-color map: the entity's own texture, else the
+                // white default. Rebind slot 1 only on change.
+                rhi::Texture* albedo = w.entity->material.base_color_gpu
+                                         ? w.entity->material.base_color_gpu.get()
+                                         : white_tex_.get();
+                if (albedo != nullptr && albedo != last_albedo) {
+                    swapchain_->bind_sampled_texture(1, albedo);
+                    last_albedo = albedo;
+                }
             }
             swapchain_->draw(w.tri_count * verts_per_tri,
                              1, static_cast<u32>(w.out_offset), 0);
