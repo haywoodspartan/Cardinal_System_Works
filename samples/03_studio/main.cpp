@@ -1934,9 +1934,13 @@ int main(int argc, char** argv) {
                     ImGui::Text("Tool: %s", tool == Tool::Select ? "Select" : "Place");
                     ImGui::Separator();
                     ImGui::Text("Selected: %d", static_cast<int>(selection.size()));
+                    ImGui::Separator();
+                    ImGui::Text("Entities: %d", static_cast<int>(scene.entities().size()));
                     if (current_project) {
                         ImGui::Separator();
                         ImGui::Text("Project: %s", current_project->info().name.c_str());
+                        ImGui::Separator();
+                        ImGui::Text("Level: %s", current_project->info().startup_world.c_str());
                     }
                     ImGui::EndMenuBar();
                 }
