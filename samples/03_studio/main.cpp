@@ -56,6 +56,7 @@
 #include <cardinal/pack/pack.hpp>
 #include <cardinal/shader/shader.hpp>
 #include <cardinal/asset/asset.hpp>
+#include <cardinal/core/compress/png.hpp>   // decode imported albedo textures
 #include <cardinal/import/import.hpp>      // DCC / Megascans import (File>Import)
 #include <cardinal/import/to_asset.hpp>    // ImportScene -> engine asset structs
 #include <cardinal/core/os/hal.hpp>
@@ -1143,6 +1144,9 @@ int main(int argc, char** argv) {
     // an in-memory pointer that dies with the session).
     auto imported_mesh_cache =
         std::make_shared<std::unordered_map<std::string, cardinal::shared_ptr<scn::Mesh>>>();
+    // key -> GPU albedo texture, shared across spawns + the reload-safe factory.
+    auto imported_tex_cache =
+        std::make_shared<std::unordered_map<std::string, cardinal::shared_ptr<rhi::Texture>>>();
     // source-id ("<path>::<mesh>") -> asset key, so re-importing the same file
     // reuses the key (updates the asset in place) rather than duplicating it.
     std::unordered_map<std::string, std::string> imported_by_source;
@@ -1163,8 +1167,9 @@ int main(int argc, char** argv) {
         d.kind     = scn::AssetKind::Primitive;
         auto reg   = asset_registry;          // shared ownership (reload-safe)
         auto cache = imported_mesh_cache;
+        auto texcache = imported_tex_cache;
         std::string kc = key, lc = label, mk = matkey;
-        d.factory = [reg, cache, kc, lc, mk](const scn::AssetSpawnContext& ctx)
+        d.factory = [reg, cache, texcache, kc, lc, mk](const scn::AssetSpawnContext& ctx)
                         -> scn::AssetSpawnResult {
             if (ctx.scene == nullptr || ctx.device == nullptr) return {};
             cardinal::shared_ptr<scn::Mesh> mesh;
@@ -1202,6 +1207,28 @@ int main(int argc, char** argv) {
                     e.material.roughness = mat->roughness;
                     e.material.metalness = mat->metallic;
                     e.material.base_color_texture = mat->base_color_texture;
+                    // Load + upload the base-color (albedo) GPU texture (cached
+                    // by key) so the forward renderer samples it on this entity.
+                    if (!mat->base_color_texture.empty()) {
+                        const std::string tk(mat->base_color_texture.c_str());
+                        auto tit = texcache->find(tk);
+                        if (tit != texcache->end()) {
+                            e.material.base_color_gpu = tit->second;
+                        } else if (auto ta = reg->load_texture(mat->base_color_texture);
+                                   ta && !ta->rgba.empty() && ta->width && ta->height) {
+                            rhi::TextureDesc td{};
+                            td.width  = ta->width;
+                            td.height = ta->height;
+                            td.format = rhi::Format::R8G8B8A8_UNORM;
+                            td.usage  = static_cast<cardinal::u32>(rhi::TextureUsage::Sampled);
+                            if (auto gt = ctx.device->create_texture(td)) {
+                                gt->upload(ta->rgba.data(), ta->rgba.size());
+                                cardinal::shared_ptr<rhi::Texture> sh(cardinal::move(gt));
+                                (*texcache)[tk]         = sh;
+                                e.material.base_color_gpu = sh;
+                            }
+                        }
+                    }
                 }
             }
             return scn::AssetSpawnResult{ { e.id }, e.id };
@@ -1226,6 +1253,66 @@ int main(int argc, char** argv) {
         f.write(reinterpret_cast<const char*>(bytes.data()),
                 static_cast<std::streamsize>(bytes.size()));
         return static_cast<bool>(f);
+    };
+
+    // Decode + cook an imported EXTERNAL texture into the project (PNG only —
+    // the engine's image decoder). model_path = the imported file; rel = the
+    // material's relative texture path. Returns the cooked asset key (empty on
+    // failure / embedded textures, which the importer doesn't surface yet).
+    auto cook_imported_texture = [&](const std::string& model_path,
+                                     const std::string& rel,
+                                     const std::string& name) -> std::string {
+        if (!current_project || rel.empty()) return std::string();
+        const std::string abs =
+            (std::filesystem::path(model_path).parent_path() / rel).string();
+        std::ifstream in(abs, std::ios::binary);
+        if (!in) return std::string();
+        in.seekg(0, std::ios::end);
+        const std::streamoff sz = in.tellg();
+        if (sz <= 0) return std::string();
+        in.seekg(0, std::ios::beg);
+        cardinal::vector<cardinal::u8> file(static_cast<cardinal::usize>(sz));
+        in.read(reinterpret_cast<char*>(file.data()), sz);
+
+        cardinal::vector<cardinal::u8> px;
+        cardinal::u32 w = 0, h = 0, ch = 0, bd = 0;
+        if (!cardinal::core::compress::decode_png(file.data(), file.size(), px, w, h, ch, bd)
+            || w == 0 || h == 0) {
+            return std::string();
+        }
+        // Expand to 8-bit RGBA (the GPU upload format). 16-bit -> high byte.
+        const cardinal::usize stride = (bd == 16) ? 2u : 1u;
+        const cardinal::usize npx    = static_cast<cardinal::usize>(w) * h;
+        cardinal::asset::TextureAsset ta;
+        ta.width = w; ta.height = h; ta.channels = 4;
+        ta.rgba.assign(npx * 4u, 255u);
+        for (cardinal::usize i = 0; i < npx; ++i) {
+            auto samp = [&](cardinal::u32 c) -> cardinal::u8 {
+                if (c >= ch) return (c == 3u) ? 255u : 0u;
+                return px[(i * ch + c) * stride];
+            };
+            if (ch == 1u) {
+                const cardinal::u8 g = samp(0);
+                ta.rgba[i*4+0] = g; ta.rgba[i*4+1] = g; ta.rgba[i*4+2] = g; ta.rgba[i*4+3] = 255u;
+            } else {
+                ta.rgba[i*4+0] = samp(0); ta.rgba[i*4+1] = samp(1);
+                ta.rgba[i*4+2] = samp(2); ta.rgba[i*4+3] = (ch >= 4u) ? samp(3) : 255u;
+            }
+        }
+
+        const std::string key = "imported/textures/" + name;
+        cardinal::cook::CookedAsset ca;
+        ca.type    = cardinal::cook::AssetType::Texture;
+        ca.payload = cardinal::asset::codec::encode_texture(ta);
+        const cardinal::vector<cardinal::u8> bytes = ca.serialize();
+        const std::string path = current_project->dirs().cooked + "/" + key + ".cooked";
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+        std::ofstream of(path, std::ios::binary | std::ios::trunc);
+        if (!of) return std::string();
+        of.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+        return static_cast<bool>(of) ? key : std::string();
     };
 
     auto persist_imported_mesh = [&](const std::string& key,
@@ -2749,9 +2836,20 @@ int main(int argc, char** argv) {
                     const auto& imat = isc.materials[im.material];
                     if (!imat.name.empty()) {
                         matkey = "imported/materials/" + std::string(imat.name.c_str());
-                        if (current_project)
-                            persist_imported_material(matkey,
-                                cardinal::import::to_asset_material(imat));
+                        if (current_project) {
+                            auto matasset = cardinal::import::to_asset_material(imat);
+                            // Cook the (external) albedo texture into the project +
+                            // repoint the material at the cooked key, so the factory
+                            // resolves + uploads it on spawn/reopen. Empty if the
+                            // texture is embedded / non-PNG / missing (graceful).
+                            if (!matasset.base_color_texture.empty()) {
+                                const std::string tkey = cook_imported_texture(
+                                    path, std::string(matasset.base_color_texture.c_str()),
+                                    std::string(imat.name.c_str()));
+                                matasset.base_color_texture = cardinal::string(tkey.c_str());
+                            }
+                            persist_imported_material(matkey, matasset);
+                        }
                     }
                 }
 
