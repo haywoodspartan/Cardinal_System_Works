@@ -181,4 +181,91 @@ private:
     cardinal::function<void(const cardinal::string&)> on_submit_;
 };
 
+// ListView — selectable flat list of text rows. Selection follows the press
+// (and drag-through, UE-style); on_select fires on change. Not a scroller —
+// wrap in a ScrollPanel for long lists (composition).
+class ListView : public Widget {
+public:
+    ListView() = default;
+    void set_items(cardinal::vector<cardinal::string> items) {
+        items_ = cardinal::move(items);
+        if (selected_ >= static_cast<int>(items_.size())) selected_ = -1;
+    }
+    void add_item(cardinal::string item) { items_.push_back(cardinal::move(item)); }
+    void clear_items() { items_.clear(); selected_ = -1; }
+    const cardinal::vector<cardinal::string>& items() const noexcept { return items_; }
+
+    int  selected() const noexcept { return selected_; }
+    void set_selected(int i) {
+        selected_ = (i >= 0 && i < static_cast<int>(items_.size())) ? i : -1;
+    }
+    void set_on_select(cardinal::function<void(int)> f) { on_select_ = cardinal::move(f); }
+
+    Vec2 measure(const Constraints& c) override;
+    void paint(PaintContext& ctx) override;
+    bool interactive() const noexcept override { return true; }
+    void on_drag(Vec2 mouse) override;    // press + drag-through selection
+
+private:
+    int row_at(Vec2 pt) const noexcept;
+    cardinal::vector<cardinal::string> items_;
+    int   selected_{-1};
+    float font_size_{14.0f};
+    float row_h_{22.0f};
+    Edges pad_{6, 3, 6, 3};
+    cardinal::function<void(int)> on_select_;
+};
+
+// TreeView — hierarchy with expand/collapse (the Outliner's widget). Nodes
+// live in an internal pool; add_node(parent, label) returns a stable handle
+// (-1 = top level). Clicking a row's arrow region toggles expansion; clicking
+// the label selects (fires on_select with the node handle, once per click).
+class TreeView : public Widget {
+public:
+    TreeView() = default;
+    int add_node(int parent, cardinal::string label, bool expanded = true);
+    void clear() { nodes_.clear(); roots_.clear(); selected_ = -1; }
+
+    int  selected() const noexcept { return selected_; }
+    void set_selected(int h) {
+        selected_ = (h >= 0 && h < static_cast<int>(nodes_.size())) ? h : -1;
+    }
+    void set_on_select(cardinal::function<void(int)> f) { on_select_ = cardinal::move(f); }
+    bool expanded(int h) const {
+        return h >= 0 && h < static_cast<int>(nodes_.size()) && nodes_[h].expanded;
+    }
+    void set_expanded(int h, bool e) {
+        if (h >= 0 && h < static_cast<int>(nodes_.size())) nodes_[h].expanded = e;
+    }
+    const cardinal::string& label(int h) const { return nodes_[h].label; }
+
+    Vec2 measure(const Constraints& c) override;
+    void paint(PaintContext& ctx) override;
+    bool interactive() const noexcept override { return true; }
+    void on_drag(Vec2 mouse) override { press_ = mouse; press_valid_ = true; }
+    void on_click() override;             // toggle arrow / select label
+
+private:
+    struct Node {
+        cardinal::string      label;
+        int                   parent{-1};
+        cardinal::vector<int> children;
+        bool                  expanded{true};
+    };
+    struct Row { int node; int depth; };
+    void flatten(cardinal::vector<Row>& out) const;
+
+    cardinal::vector<Node> nodes_;
+    cardinal::vector<int>  roots_;
+    int   selected_{-1};
+    float font_size_{14.0f};
+    float row_h_{22.0f};
+    float indent_{16.0f};
+    float arrow_w_{14.0f};
+    Edges pad_{4, 3, 6, 3};
+    Vec2  press_{};
+    bool  press_valid_{false};
+    cardinal::function<void(int)> on_select_;
+};
+
 }  // namespace cardinal::cui

@@ -355,4 +355,131 @@ void TextField::paint(PaintContext& ctx) {
     }
 }
 
+// -----------------------------------------------------------------------------
+// ListView
+// -----------------------------------------------------------------------------
+Vec2 ListView::measure(const Constraints& c) {
+    float w = 0.0f;
+    for (const auto& it : items_) w = maxf(w, text_advance(it, font_size_));
+    Vec2 s{ w + pad_.horiz(), row_h_ * static_cast<float>(items_.size()) };
+    s.x = c.clamp_w(s.x);
+    s.y = c.clamp_h(s.y);
+    measured_ = s;
+    return s;
+}
+
+int ListView::row_at(Vec2 pt) const noexcept {
+    if (!rect_.contains(pt) || row_h_ <= 0.0f) return -1;
+    const int i = static_cast<int>((pt.y - rect_.top()) / row_h_);
+    return (i >= 0 && i < static_cast<int>(items_.size())) ? i : -1;
+}
+
+void ListView::on_drag(Vec2 mouse) {
+    const int i = row_at(mouse);
+    if (i >= 0 && i != selected_) {
+        selected_ = i;
+        if (on_select_) on_select_(i);
+    }
+}
+
+void ListView::paint(PaintContext& ctx) {
+    float y = rect_.top();
+    for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
+        const Rect row{ { rect_.left(), y }, { rect_.width(), row_h_ } };
+        if (i == selected_)
+            ctx.dl->rect_filled(row, ctx.apply(ctx.theme->control_active), 2.0f);
+        const Vec2 tp{ row.left() + pad_.l,
+                       row.top()  + (row_h_ - line_height(font_size_)) * 0.5f };
+        ctx.dl->text(tp, items_[i], ctx.apply(ctx.theme->text), font_size_);
+        y += row_h_;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// TreeView
+// -----------------------------------------------------------------------------
+int TreeView::add_node(int parent, cardinal::string label, bool expanded) {
+    const int h = static_cast<int>(nodes_.size());
+    Node n;
+    n.label    = cardinal::move(label);
+    n.parent   = (parent >= 0 && parent < h) ? parent : -1;
+    n.expanded = expanded;
+    nodes_.push_back(cardinal::move(n));
+    if (nodes_[h].parent >= 0) nodes_[nodes_[h].parent].children.push_back(h);
+    else                       roots_.push_back(h);
+    return h;
+}
+
+void TreeView::flatten(cardinal::vector<Row>& out) const {
+    // Iterative DFS over the visible (expanded) tree, in insertion order.
+    cardinal::vector<Row> stack;
+    for (usize r = roots_.size(); r > 0; --r)
+        stack.push_back({ roots_[r - 1], 0 });
+    while (!stack.empty()) {
+        const Row cur = stack.back();
+        stack.pop_back();
+        out.push_back(cur);
+        const Node& n = nodes_[cur.node];
+        if (n.expanded)
+            for (usize c = n.children.size(); c > 0; --c)
+                stack.push_back({ n.children[c - 1], cur.depth + 1 });
+    }
+}
+
+Vec2 TreeView::measure(const Constraints& c) {
+    cardinal::vector<Row> rows;
+    flatten(rows);
+    float w = 0.0f;
+    for (const auto& r : rows)
+        w = maxf(w, static_cast<float>(r.depth) * indent_ + arrow_w_ +
+                    text_advance(nodes_[r.node].label, font_size_));
+    Vec2 s{ w + pad_.horiz(), row_h_ * static_cast<float>(rows.size()) };
+    s.x = c.clamp_w(s.x);
+    s.y = c.clamp_h(s.y);
+    measured_ = s;
+    return s;
+}
+
+void TreeView::on_click() {
+    if (!press_valid_) return;
+    press_valid_ = false;
+    cardinal::vector<Row> rows;
+    flatten(rows);
+    if (!rect_.contains(press_) || row_h_ <= 0.0f) return;
+    const int i = static_cast<int>((press_.y - rect_.top()) / row_h_);
+    if (i < 0 || i >= static_cast<int>(rows.size())) return;
+    const Row&  row = rows[static_cast<usize>(i)];
+    const Node& n   = nodes_[row.node];
+    const float arrow_x0 = rect_.left() + pad_.l +
+                           static_cast<float>(row.depth) * indent_;
+    if (!n.children.empty() && press_.x < arrow_x0 + arrow_w_) {
+        nodes_[row.node].expanded = !n.expanded;   // arrow region -> toggle
+        return;
+    }
+    if (selected_ != row.node) {
+        selected_ = row.node;
+        if (on_select_) on_select_(row.node);
+    }
+}
+
+void TreeView::paint(PaintContext& ctx) {
+    cardinal::vector<Row> rows;
+    flatten(rows);
+    float y = rect_.top();
+    for (const auto& r : rows) {
+        const Node& n = nodes_[r.node];
+        const Rect row{ { rect_.left(), y }, { rect_.width(), row_h_ } };
+        if (r.node == selected_)
+            ctx.dl->rect_filled(row, ctx.apply(ctx.theme->control_active), 2.0f);
+        const float x0 = rect_.left() + pad_.l + static_cast<float>(r.depth) * indent_;
+        const float ty = row.top() + (row_h_ - line_height(font_size_)) * 0.5f;
+        if (!n.children.empty())
+            ctx.dl->text({ x0, ty }, n.expanded ? "v" : ">",
+                         ctx.apply(ctx.theme->text_dim), font_size_);
+        ctx.dl->text({ x0 + arrow_w_, ty }, n.label,
+                     ctx.apply(ctx.theme->text), font_size_);
+        y += row_h_;
+    }
+}
+
 }  // namespace cardinal::cui

@@ -322,6 +322,71 @@ void test_textfield_focus_typing() {
     in.mouse_down = false; u.update_input(in);
 }
 
+// ---- ListView: press-select + drag-through + callback ----------------------
+void test_listview_select() {
+    ui::Ui u;
+    auto root = cardinal::make_unique<ui::Stack>(ui::Axis::Vertical, 0.0f);
+    auto* lv  = static_cast<ui::ListView*>(root->add(cardinal::make_unique<ui::ListView>()));
+    lv->add_item("alpha");
+    lv->add_item("beta");
+    lv->add_item("gamma");
+    int picked = -1;
+    lv->set_on_select([&](int i) { picked = i; });
+    u.set_root(cardinal::move(root));
+    u.layout({ 300.0f, 200.0f });
+    CHECK(lv->selected() == -1);
+
+    const float row_h = lv->rect().height() / 3.0f;
+    auto press_at = [&](float ry) {
+        ui::InputState in{};
+        in.mouse = { lv->rect().left() + 20.0f, lv->rect().top() + ry };
+        u.update_input(in);
+        in.mouse_down = true;  u.update_input(in);   // press -> selects
+        in.mouse_down = false; u.update_input(in);   // release
+    };
+    press_at(row_h * 1.5f);                          // middle of row 1
+    CHECK(lv->selected() == 1 && picked == 1);
+    press_at(row_h * 2.5f);                          // row 2
+    CHECK(lv->selected() == 2 && picked == 2);
+}
+
+// ---- TreeView: expand/collapse via arrow + label select --------------------
+void test_treeview_expand_select() {
+    ui::Ui u;
+    auto root = cardinal::make_unique<ui::Stack>(ui::Axis::Vertical, 0.0f);
+    auto* tv  = static_cast<ui::TreeView*>(root->add(cardinal::make_unique<ui::TreeView>()));
+    const int n_root = tv->add_node(-1, "World");
+    const int n_a    = tv->add_node(n_root, "EntityA");
+    const int n_b    = tv->add_node(n_root, "EntityB");
+    (void)n_b;
+    int picked = -1;
+    tv->set_on_select([&](int h) { picked = h; });
+    u.set_root(cardinal::move(root));
+    u.layout({ 300.0f, 200.0f });
+
+    // 3 visible rows (root + 2 children), 22px each.
+    CHECK(ap(tv->rect().height() / 3.0f, 22.0f, 0.5f));
+
+    auto click_at = [&](float rx, float ry) {
+        ui::InputState in{};
+        in.mouse = { tv->rect().left() + rx, tv->rect().top() + ry };
+        u.update_input(in);
+        in.mouse_down = true;  u.update_input(in);
+        in.mouse_down = false; u.update_input(in);   // release -> on_click acts
+    };
+    // Click EntityA's LABEL (row 1, depth 1 -> label starts at 4+16+14=34).
+    click_at(60.0f, 22.0f * 1.5f);
+    CHECK(tv->selected() == n_a && picked == n_a);
+    // Click the root's ARROW (row 0, x within [4, 18)) -> collapse.
+    click_at(8.0f, 11.0f);
+    CHECK(!tv->expanded(n_root));
+    u.layout({ 300.0f, 200.0f });                    // re-measure: 1 visible row
+    CHECK(ap(tv->rect().height(), 22.0f, 0.5f));
+    tv->set_expanded(n_root, true);
+    u.layout({ 300.0f, 200.0f });
+    CHECK(ap(tv->rect().height(), 66.0f, 0.5f));
+}
+
 }  // namespace
 
 int main() {
@@ -337,6 +402,8 @@ int main() {
     test_alpha_cascade();
     test_scroll_clip();
     test_textfield_focus_typing();
+    test_listview_select();
+    test_treeview_expand_select();
 
     if (g_fail == 0) {
         cardinal::log::infof("cuitest", "OK  %d checks passed", g_checks);
