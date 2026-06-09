@@ -257,6 +257,20 @@ public:
 
     ID3D12Resource*       resource() const noexcept { return res_.Get(); }
     ID3D12DescriptorHeap* srv_heap() const noexcept { return srv_heap_.Get(); }
+
+    // Write this texture's SRV into an arbitrary (shader-visible) descriptor
+    // slot — lets the swapchain pack several sampled textures into one shared
+    // heap for a multi-SRV descriptor table. Same view the 1-entry srv_heap_
+    // carries (depth -> R32_FLOAT, colour -> R8G8B8A8_UNORM).
+    void create_srv_in(ID3D12Device* dev, D3D12_CPU_DESCRIPTOR_HANDLE dest) const {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.Format                  = (fmt_ == Format::D32_Float) ? DXGI_FORMAT_R32_FLOAT
+                                                                  : DXGI_FORMAT_R8G8B8A8_UNORM;
+        srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Texture2D.MipLevels     = 1;
+        dev->CreateShaderResourceView(res_.Get(), &srv, dest);
+    }
     D3D12_CPU_DESCRIPTOR_HANDLE dsv_handle() const noexcept {
         return dsv_heap_->GetCPUDescriptorHandleForHeapStart();
     }
@@ -583,6 +597,11 @@ private:
     ComPtr<IDXGISwapChain3>          swap_;
     ComPtr<ID3D12DescriptorHeap>     rtv_heap_;
     UINT                             rtv_stride_{0};
+
+    // Shared shader-visible SRV heap for sampled textures (see initialize()).
+    static constexpr u32             kMaxSampledSlots = 8;
+    ComPtr<ID3D12DescriptorHeap>     sampled_heap_;
+    UINT                             sampled_stride_{0};
     cardinal::array<ComPtr<ID3D12Resource>, kFramesInFlight> back_buffers_;
     cardinal::array<Frame, kFramesInFlight> frames_;
     UINT                             frame_index_{0};

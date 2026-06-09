@@ -91,6 +91,24 @@ bool D3D12Swapchain::initialize(HWND hwnd, u32 w, u32 h) {
     }
     rtv_stride_ = dev_.device()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
+    // Shared shader-visible SRV heap for sampled textures. The root signature
+    // declares a single descriptor TABLE of `sampled_texture_slots` contiguous
+    // SRVs (t[storage..]); bind_sampled_texture writes each texture's SRV into
+    // this heap at its slot so multiple distinct sampled textures (shadow map +
+    // material albedo + …) coexist in one draw — the previous per-texture
+    // 1-entry heaps could only bind one at a time. Sized kMaxSampledSlots per
+    // frame-in-flight so successive frames don't clobber in-flight descriptors.
+    D3D12_DESCRIPTOR_HEAP_DESC sh{};
+    sh.NumDescriptors = kMaxSampledSlots * kFramesInFlight;
+    sh.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    sh.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    if (FAILED(dev_.device()->CreateDescriptorHeap(&sh, IID_PPV_ARGS(&sampled_heap_)))) {
+        cardinal::log::errorf("rhi/d3d12", "sampled-texture heap creation failed");
+        return false;
+    }
+    sampled_stride_ = dev_.device()->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
     auto rtv_handle = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
     for (UINT i = 0; i < kFramesInFlight; ++i) {
         if (FAILED(swap_->GetBuffer(i, IID_PPV_ARGS(&back_buffers_[i])))) return false;

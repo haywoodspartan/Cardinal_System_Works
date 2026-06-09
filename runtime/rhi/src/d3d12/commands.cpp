@@ -271,28 +271,34 @@ void D3D12Swapchain::transition_buffer_state(Buffer* b, ResourceState before, Re
 void D3D12Swapchain::bind_sampled_texture(u32 slot, Texture* tex) {
     if (bound_pipeline_ == nullptr || tex == nullptr) return;
     auto* dp = static_cast<D3D12Pipeline*>(bound_pipeline_);
-    if (slot >= dp->sampled_texture_slots()) {
+    if (slot >= dp->sampled_texture_slots() || slot >= kMaxSampledSlots) {
         static bool warned = false;
         if (!warned) {
             cardinal::log::warnf("rhi/d3d12",
-                "bind_sampled_texture slot=%u >= declared=%u (dropped)",
-                slot, dp->sampled_texture_slots());
+                "bind_sampled_texture slot=%u >= declared=%u / max=%u (dropped)",
+                slot, dp->sampled_texture_slots(), kMaxSampledSlots);
             warned = true;
         }
         return;
     }
-    // Each D3D12Texture owns its own 1-entry shader-visible SRV heap.
-    // Single-sampled-texture case (the shadow map = slot 0) is exact;
-    // multiple distinct sampled textures in one pipeline would need a
-    // shared heap — deferred until a use-case needs it. The descriptor
-    // table root param (sampled_table_root) was appended after the push
-    // block + storage root SRVs in create_pipeline.
-    auto* dt   = static_cast<D3D12Texture*>(tex);
-    auto* cmd  = frames_[frame_index_].cmd.Get();
-    ID3D12DescriptorHeap* heaps[] = { dt->srv_heap() };
+    // Pack the texture's SRV into this frame's region of the shared heap at
+    // `slot`, then point the descriptor-table root at that region's base. The
+    // root sig's table covers sampled_texture_slots contiguous SRVs, so binding
+    // slots 0,1,… (shadow map, material albedo, …) all coexist in one draw —
+    // the previous per-texture 1-entry heaps could only bind one at a time.
+    auto* dt  = static_cast<D3D12Texture*>(tex);
+    auto* cmd = frames_[frame_index_].cmd.Get();
+    const SIZE_T frame_base = static_cast<SIZE_T>(frame_index_) * kMaxSampledSlots;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE dst = sampled_heap_->GetCPUDescriptorHandleForHeapStart();
+    dst.ptr += (frame_base + slot) * sampled_stride_;
+    dt->create_srv_in(dev_.device(), dst);
+
+    ID3D12DescriptorHeap* heaps[] = { sampled_heap_.Get() };
     cmd->SetDescriptorHeaps(1, heaps);
-    cmd->SetGraphicsRootDescriptorTable(dp->sampled_table_root(),
-                                        dt->srv_gpu_handle());
+    D3D12_GPU_DESCRIPTOR_HANDLE base = sampled_heap_->GetGPUDescriptorHandleForHeapStart();
+    base.ptr += static_cast<UINT64>(frame_base) * sampled_stride_;
+    cmd->SetGraphicsRootDescriptorTable(dp->sampled_table_root(), base);
 }
 
 // -----------------------------------------------------------------------------
