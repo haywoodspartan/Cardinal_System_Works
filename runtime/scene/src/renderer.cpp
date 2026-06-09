@@ -111,6 +111,15 @@ Texture2D    g_shadow     : register(t2);
 [[vk::combinedImageSampler]][[vk::binding(2, 0)]]
 SamplerState g_shadow_smp : register(s0);
 
+// Base-color (albedo) map — RHI sampled-texture slot 1 (binding 3 on Vulkan,
+// SRV register t3 + static sampler s1 on D3D12). A white 1x1 default is bound
+// for untextured draws so the sample is a no-op (white × vertex colour =
+// vertex colour); textured entities bind their own map here.
+[[vk::combinedImageSampler]][[vk::binding(3, 0)]]
+Texture2D    g_albedo     : register(t3);
+[[vk::combinedImageSampler]][[vk::binding(3, 0)]]
+SamplerState g_albedo_smp : register(s1);
+
 // Push-constant block — per-entity transform + scene-wide ambient/mode
 // + light count & camera position + material index. Light + material
 // arrays live in storage buffers, so the block stays tiny.
@@ -188,7 +197,7 @@ VSOut VSMain(VSIn i) {
     o.texcoord     = i.texcoord;
     return o;
 }
-
+)" R"(
 // ACES filmic tonemap (Narkowicz 2015 fit). PBR + the uncapped light
 // buffer routinely push radiance well past 1.0; without a curve those
 // pixels hard-clip to flat white and the chrome highlight / light-ring
@@ -229,7 +238,9 @@ float4 PSMain(VSOut i) : SV_TARGET {
     float  spec_scale      = mat.spec.x;
     float  roughness       = clamp(mat.spec.z, 0.045, 1.0);
     float  metalness       = saturate(mat.spec.w);
-    float3 albedo          = i.color;
+    // Base color = vertex/tint colour modulated by the albedo map (white when
+    // untextured -> no-op). Feeds both the PBR lighting + the unlit fallback.
+    float3 albedo          = i.color * g_albedo.Sample(g_albedo_smp, i.texcoord).rgb;
     float3 F0              = lerp(float3(0.04, 0.04, 0.04), albedo, metalness);
     const float PI         = 3.14159265;
     // Sky-derived ambient (no cubemap / IBL yet). The flat sky colour
@@ -754,7 +765,7 @@ public:
         // D3D12: root SRVs t0/t1 + SRV table t2 + static sampler s0.
         pd.push_constant_size    = 240;
         pd.storage_buffer_slots  = 2;
-        pd.sampled_texture_slots = 1;
+        pd.sampled_texture_slots = 2;   // 0 = shadow map, 1 = base-color (albedo)
 
         // Solid topology pipeline.
         pd.topology = rhi::PrimitiveTopology::TriangleList;
@@ -812,6 +823,24 @@ public:
                 "shadow resources unavailable (pso=%p tex=%p) — shadows off",
                 static_cast<void*>(pso_shadow_.get()),
                 static_cast<void*>(shadow_tex_.get()));
+        }
+
+        // 1x1 white base-color texture — the default bound to sampled slot 1 so
+        // untextured draws sample white (albedo no-op). Exercises Texture::upload.
+        {
+            rhi::TextureDesc wd{};
+            wd.width  = 1;
+            wd.height = 1;
+            wd.format = rhi::Format::R8G8B8A8_UNORM;
+            wd.usage  = static_cast<u32>(rhi::TextureUsage::Sampled);
+            white_tex_ = dev.create_texture(wd);
+            if (white_tex_ != nullptr) {
+                const u8 white[4] = { 255u, 255u, 255u, 255u };
+                white_tex_->upload(white, sizeof(white));
+            } else {
+                cardinal::log::warnf("scene/renderer",
+                    "white default texture unavailable — albedo sampling may be invalid");
+            }
         }
 
         // Per-viewport scratch buffers — sized + grown lazily inside render().
@@ -1404,6 +1433,11 @@ public:
         if (shadow_tex_ != nullptr) {
             swapchain_->bind_sampled_texture(0, shadow_tex_.get());
         }
+        // Sampled slot 1 = base-color (albedo). White default -> no-op until a
+        // textured entity binds its own map (per-entity binding lands next).
+        if (white_tex_ != nullptr) {
+            swapchain_->bind_sampled_texture(1, white_tex_.get());
+        }
 
         // Defense-in-depth: pso_solid_/pso_wire_ statically declare the
         // g_lights (t0) + g_materials (t1) root SRVs, so issuing ANY draw
@@ -1583,6 +1617,9 @@ public:
                     if (shadow_tex_ != nullptr) {
                         swapchain_->bind_sampled_texture(0, shadow_tex_.get());
                     }
+                    if (white_tex_ != nullptr) {
+                        swapchain_->bind_sampled_texture(1, white_tex_.get());
+                    }
                     // Gizmos are world-space + unlit → model = identity,
                     // mvp = vp, ambient_mode.w = 0 so the PS passes the
                     // input color straight through. light count = 0 so
@@ -1623,6 +1660,7 @@ private:
     static constexpr cardinal::u32 kShadowDim = 2048;
     cardinal::unique_ptr<rhi::Pipeline> pso_shadow_;
     cardinal::unique_ptr<rhi::Texture>  shadow_tex_;
+    cardinal::unique_ptr<rhi::Texture>  white_tex_;   // 1x1 white default albedo (slot 1)
     // Light-space view-proj used for pass 1 this frame; consumed by the
     // PCF sample in PSMain (next iteration). shadow_ready_ = pass 1
     // actually ran (triangle mode + directional + resources present).

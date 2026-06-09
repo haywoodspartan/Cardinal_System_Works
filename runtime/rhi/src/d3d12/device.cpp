@@ -460,18 +460,24 @@ cardinal::unique_ptr<Pipeline> D3D12Device::create_pipeline(const PipelineDesc& 
         rp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         root_params.push_back(rp);
     }
-    // Static sampler s0 for the sampled textures — clamp + linear, same
-    // policy as the Vulkan device default sampler. Static samplers live
-    // in the root signature and consume no root-parameter slot.
-    D3D12_STATIC_SAMPLER_DESC ss{};
-    ss.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    ss.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    ss.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    ss.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    ss.MaxLOD           = D3D12_FLOAT32_MAX;
-    ss.ShaderRegister   = 0;                               // s0
-    ss.RegisterSpace    = 0;
-    ss.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    // One static sampler per sampled-texture slot (s0, s1, …) — clamp + linear,
+    // same policy as the Vulkan device default sampler. Each combined-image-
+    // sampler texture in the HLSL needs a distinct sampler register; static
+    // samplers live in the root signature and consume no root-parameter slot.
+    cardinal::vector<D3D12_STATIC_SAMPLER_DESC> samplers;
+    samplers.reserve(desc.sampled_texture_slots);
+    for (u32 s = 0; s < desc.sampled_texture_slots; ++s) {
+        D3D12_STATIC_SAMPLER_DESC ss{};
+        ss.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        ss.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        ss.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        ss.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        ss.MaxLOD           = D3D12_FLOAT32_MAX;
+        ss.ShaderRegister   = s;                           // s0, s1, …
+        ss.RegisterSpace    = 0;
+        ss.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        samplers.push_back(ss);
+    }
 
     D3D12_ROOT_SIGNATURE_DESC rsd{};
     rsd.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
@@ -479,9 +485,9 @@ cardinal::unique_ptr<Pipeline> D3D12Device::create_pipeline(const PipelineDesc& 
         rsd.NumParameters = static_cast<UINT>(root_params.size());
         rsd.pParameters   = root_params.data();
     }
-    if (desc.sampled_texture_slots > 0) {
-        rsd.NumStaticSamplers = 1;
-        rsd.pStaticSamplers   = &ss;
+    if (!samplers.empty()) {
+        rsd.NumStaticSamplers = static_cast<UINT>(samplers.size());
+        rsd.pStaticSamplers   = samplers.data();
     }
 
     // Fail loudly *here* rather than via an opaque CreateRootSignature
