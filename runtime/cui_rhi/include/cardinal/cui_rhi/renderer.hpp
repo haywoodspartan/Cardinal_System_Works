@@ -46,15 +46,14 @@ public:
 
     cardinal::usize last_vertex_count() const noexcept { return verts_.size(); }
 
+    // Convert a draw list into the colored-quad vertex stream (the geometry the
+    // renderer uploads). Pure + device-free, so it's unit-testable headlessly.
+    static void build_geometry(const cardinal::cui::DrawList& dl,
+                               cardinal::vector<Vertex>& out);
+
 private:
     Renderer() = default;
     void ensure_capacity(u32 slot, cardinal::usize vertex_count);
-
-    // Geometry emitters (append to verts_).
-    void quad(float x, float y, float w, float h, u32 rgba);
-    void line(float x0, float y0, float x1, float y1, float thickness, u32 rgba);
-    void stroke(float x, float y, float w, float h, float t, u32 rgba);
-    void text(float x, float y, const cardinal::string& s, float font_size, u32 rgba);
 
     static constexpr u32 kFrames = 2;   // ring-buffer the VB across frames-in-flight
 

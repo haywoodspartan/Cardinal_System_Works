@@ -98,24 +98,28 @@ void Renderer::ensure_capacity(u32 slot, cardinal::usize vcount) {
     vbuf_capacity_[slot] = vbuf_[slot] ? cap : 0;
 }
 
-void Renderer::quad(float x, float y, float w, float h, u32 rgba) {
+namespace {
+
+void emit_quad(cardinal::vector<Vertex>& out, float x, float y, float w, float h, u32 rgba) {
     const Vertex a{ x,     y,     rgba };
     const Vertex b{ x + w, y,     rgba };
     const Vertex c{ x + w, y + h, rgba };
     const Vertex d{ x,     y + h, rgba };
-    verts_.push_back(a); verts_.push_back(b); verts_.push_back(c);
-    verts_.push_back(a); verts_.push_back(c); verts_.push_back(d);
+    out.push_back(a); out.push_back(b); out.push_back(c);
+    out.push_back(a); out.push_back(c); out.push_back(d);
 }
 
-void Renderer::stroke(float x, float y, float w, float h, float t, u32 rgba) {
+void emit_stroke(cardinal::vector<Vertex>& out, float x, float y, float w, float h,
+                 float t, u32 rgba) {
     if (t < 1.0f) t = 1.0f;
-    quad(x,         y,         w, t,         rgba);   // top
-    quad(x,         y + h - t, w, t,         rgba);   // bottom
-    quad(x,         y,         t, h,         rgba);   // left
-    quad(x + w - t, y,         t, h,         rgba);   // right
+    emit_quad(out, x,         y,         w, t, rgba);   // top
+    emit_quad(out, x,         y + h - t, w, t, rgba);   // bottom
+    emit_quad(out, x,         y,         t, h, rgba);   // left
+    emit_quad(out, x + w - t, y,         t, h, rgba);   // right
 }
 
-void Renderer::line(float x0, float y0, float x1, float y1, float t, u32 rgba) {
+void emit_line(cardinal::vector<Vertex>& out, float x0, float y0, float x1, float y1,
+               float t, u32 rgba) {
     if (t < 1.0f) t = 1.0f;
     float dx = x1 - x0, dy = y1 - y0;
     const float len = cardinal::sqrt(dx * dx + dy * dy);
@@ -127,11 +131,12 @@ void Renderer::line(float x0, float y0, float x1, float y1, float t, u32 rgba) {
     const Vertex b{ x1 + px, y1 + py, rgba };
     const Vertex c{ x1 - px, y1 - py, rgba };
     const Vertex d{ x0 - px, y0 - py, rgba };
-    verts_.push_back(a); verts_.push_back(b); verts_.push_back(c);
-    verts_.push_back(a); verts_.push_back(c); verts_.push_back(d);
+    out.push_back(a); out.push_back(b); out.push_back(c);
+    out.push_back(a); out.push_back(c); out.push_back(d);
 }
 
-void Renderer::text(float x, float y, const cardinal::string& s, float font_size, u32 rgba) {
+void emit_text(cardinal::vector<Vertex>& out, float x, float y, const cardinal::string& s,
+               float font_size, u32 rgba) {
     if (font_size <= 0.0f) font_size = 14.0f;
     const float px      = font_size / 8.0f;     // square cell pixel
     const float advance = px * 6.0f;            // 6 of 8 columns (matches text_advance 0.75)
@@ -141,38 +146,43 @@ void Renderer::text(float x, float y, const cardinal::string& s, float font_size
         for (int row = 0; row < 8; ++row) {
             const u8 bits = g[row];
             if (bits == 0) continue;
-            for (int col = 0; col < 8; ++col) {
-                if (bits & (1u << col)) {
-                    // +0.5 so adjacent pixels overlap slightly (no seams)
-                    quad(pen + col * px, y + row * px, px + 0.5f, px + 0.5f, rgba);
-                }
-            }
+            for (int col = 0; col < 8; ++col)
+                if (bits & (1u << col))
+                    emit_quad(out, pen + col * px, y + row * px, px + 0.5f, px + 0.5f, rgba);
         }
         pen += advance;
+    }
+}
+
+}  // namespace
+
+void Renderer::build_geometry(const cui::DrawList& dl, cardinal::vector<Vertex>& out) {
+    for (const auto& cmd : dl.cmds()) {
+        const u32 col = pack_color(cmd.color);
+        switch (cmd.kind) {
+        case cui::DrawKind::RectFilled:
+            emit_quad(out, cmd.rect.pos.x, cmd.rect.pos.y,
+                      cmd.rect.size.x, cmd.rect.size.y, col);
+            break;
+        case cui::DrawKind::RectStroke:
+            emit_stroke(out, cmd.rect.pos.x, cmd.rect.pos.y,
+                        cmd.rect.size.x, cmd.rect.size.y, cmd.thickness, col);
+            break;
+        case cui::DrawKind::Line:
+            emit_line(out, cmd.rect.pos.x, cmd.rect.pos.y, cmd.p1.x, cmd.p1.y,
+                      cmd.thickness, col);
+            break;
+        case cui::DrawKind::Text:
+            emit_text(out, cmd.rect.pos.x, cmd.rect.pos.y, cmd.text, cmd.font_size, col);
+            break;
+        }
     }
 }
 
 void Renderer::render(const cui::DrawList& dl, rhi::Swapchain& sc,
                       float screen_w, float screen_h) {
     verts_.clear();
-    for (const auto& cmd : dl.cmds()) {
-        const u32 col = pack_color(cmd.color);
-        switch (cmd.kind) {
-        case cui::DrawKind::RectFilled:
-            quad(cmd.rect.pos.x, cmd.rect.pos.y, cmd.rect.size.x, cmd.rect.size.y, col);
-            break;
-        case cui::DrawKind::RectStroke:
-            stroke(cmd.rect.pos.x, cmd.rect.pos.y, cmd.rect.size.x, cmd.rect.size.y,
-                   cmd.thickness, col);
-            break;
-        case cui::DrawKind::Line:
-            line(cmd.rect.pos.x, cmd.rect.pos.y, cmd.p1.x, cmd.p1.y, cmd.thickness, col);
-            break;
-        case cui::DrawKind::Text:
-            text(cmd.rect.pos.x, cmd.rect.pos.y, cmd.text, cmd.font_size, col);
-            break;
-        }
-    }
+    build_geometry(dl, verts_);
     if (verts_.empty()) return;
 
     const u32 slot = frame_;
