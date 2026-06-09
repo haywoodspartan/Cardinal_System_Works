@@ -36,6 +36,7 @@ struct MeshVertex {
     cardinal::scene::Vec3 position{0,0,0};
     cardinal::scene::Vec3 normal  {0,1,0};
     cardinal::scene::Vec3 color   {1,1,1};
+    cardinal::scene::Vec2 texcoord{0,0};   // UV for material-map sampling
 };
 
 struct MeshAsset {

@@ -78,13 +78,19 @@ bool decode_texture(const cardinal::vector<u8>& bytes, TextureAsset& out) {
     return true;
 }
 
+// Mesh codec. v2 adds a per-vertex UV (texcoord). To stay backward-compatible
+// with v1 cooked meshes (which begin with the vertex count), v2 is flagged by a
+// 0xFFFFFFFF sentinel + version word up front — a count no real mesh can have.
 cardinal::vector<u8> encode_mesh(const MeshAsset& m) {
     cardinal::vector<u8> o;
+    wr_u32(o, 0xFFFFFFFFu);                 // v2 marker (v1 started with the count)
+    wr_u32(o, 2u);                          // version
     wr_u32(o, static_cast<u32>(m.vertices.size()));
     for (const auto& v : m.vertices) {
         wr_f(o, v.position.x); wr_f(o, v.position.y); wr_f(o, v.position.z);
         wr_f(o, v.normal.x);   wr_f(o, v.normal.y);   wr_f(o, v.normal.z);
         wr_f(o, v.color.x);    wr_f(o, v.color.y);    wr_f(o, v.color.z);
+        wr_f(o, v.texcoord.x); wr_f(o, v.texcoord.y);
     }
     wr_u32(o, static_cast<u32>(m.indices.size()));
     for (u32 i : m.indices) wr_u32(o, i);
@@ -93,11 +99,17 @@ cardinal::vector<u8> encode_mesh(const MeshAsset& m) {
 
 bool decode_mesh(const cardinal::vector<u8>& bytes, MeshAsset& out) {
     if (bytes.size() < 4) return false;
-    const u32 vc = rd_u32(bytes.data());
-    const usize per_vert = 9 * 4;
-    if (4 + vc * per_vert + 4 > bytes.size()) return false;
+    usize off = 0;
+    bool v2 = false;
+    if (rd_u32(bytes.data()) == 0xFFFFFFFFu) {   // v2: marker + version + count
+        if (bytes.size() < 12) return false;
+        v2  = true;
+        off = 8;                                 // skip marker + version word
+    }
+    const u32   vc       = rd_u32(bytes.data() + off); off += 4;
+    const usize per_vert = v2 ? (11u * 4u) : (9u * 4u);
+    if (off + static_cast<usize>(vc) * per_vert + 4 > bytes.size()) return false;
     out.vertices.resize(vc);
-    usize off = 4;
     for (u32 i = 0; i < vc; ++i) {
         MeshVertex& v = out.vertices[i];
         v.position.x = rd_f(bytes.data() + off + 0);
@@ -109,6 +121,12 @@ bool decode_mesh(const cardinal::vector<u8>& bytes, MeshAsset& out) {
         v.color.x    = rd_f(bytes.data() + off + 24);
         v.color.y    = rd_f(bytes.data() + off + 28);
         v.color.z    = rd_f(bytes.data() + off + 32);
+        if (v2) {
+            v.texcoord.x = rd_f(bytes.data() + off + 36);
+            v.texcoord.y = rd_f(bytes.data() + off + 40);
+        } else {
+            v.texcoord = { 0.0f, 0.0f };
+        }
         off += per_vert;
     }
     const u32 ic = rd_u32(bytes.data() + off);

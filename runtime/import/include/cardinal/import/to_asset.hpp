@@ -32,6 +32,9 @@ inline cardinal::asset::MeshAsset to_asset_mesh(const ImportMesh& m) {
                        ? m.normals[i] : cardinal::scene::Vec3{0, 1, 0};
         v.color    = (i < m.colors.size())
                        ? m.colors[i]  : cardinal::scene::Vec3{1, 1, 1};
+        v.texcoord = (i < m.uvs.size())
+                       ? cardinal::scene::Vec2{m.uvs[i].u, m.uvs[i].v}
+                       : cardinal::scene::Vec2{0.0f, 0.0f};
     }
     out.indices = m.indices;
     return out;

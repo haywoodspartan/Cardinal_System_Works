@@ -17,6 +17,7 @@
 #include <cardinal/asset/asset.hpp>
 #include <cardinal/core/diag/log.hpp>
 
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -89,13 +90,14 @@ void test_texture() {
 void test_mesh() {
     as::MeshAsset m;
     as::MeshVertex v0; v0.position={1.5f,-2.25f,3.0f};
-    v0.normal={0.0f,1.0f,0.0f}; v0.color={0.1f,0.2f,0.3f};
+    v0.normal={0.0f,1.0f,0.0f}; v0.color={0.1f,0.2f,0.3f}; v0.texcoord={0.25f,0.75f};
     as::MeshVertex v1; v1.position={-4.0f,5.5f,-6.75f};
-    v1.normal={1.0f,0.0f,0.0f}; v1.color={0.9f,0.8f,0.7f};
+    v1.normal={1.0f,0.0f,0.0f}; v1.color={0.9f,0.8f,0.7f}; v1.texcoord={0.5f,0.125f};
     m.vertices = { v0, v1 };
     m.indices  = { 0u,1u,2u, 2u,1u,0u };
     B enc = as::codec::encode_mesh(m);
-    CHECK(enc.size() == sz(4 + 2*9*4 + 4 + 6*4));     // 104
+    // v2: marker(4) + version(4) + count(4) + 2*(11 floats) + idx_count(4) + 6*u32.
+    CHECK(enc.size() == sz(8 + 4 + 2*11*4 + 4 + 6*4));
 
     as::MeshAsset out;
     CHECK(as::codec::decode_mesh(enc, out));
@@ -103,22 +105,42 @@ void test_mesh() {
     CHECK(veq(out.vertices[0].position, v0.position));
     CHECK(veq(out.vertices[0].normal,   v0.normal));
     CHECK(veq(out.vertices[0].color,    v0.color));
+    CHECK(out.vertices[0].texcoord.x == 0.25f && out.vertices[0].texcoord.y == 0.75f);
     CHECK(veq(out.vertices[1].position, v1.position));
     CHECK(veq(out.vertices[1].color,    v1.color));
+    CHECK(out.vertices[1].texcoord.x == 0.5f  && out.vertices[1].texcoord.y == 0.125f);
     CHECK(out.indices == m.indices);
 
-    // Empty mesh: 4 (vc=0) + 4 (ic=0).
+    // Empty mesh: marker(4) + version(4) + vc=0(4) + ic=0(4) = 16.
     as::MeshAsset em;
     B ee = as::codec::encode_mesh(em);
-    CHECK(ee.size() == sz(8));
+    CHECK(ee.size() == sz(16));
     as::MeshAsset eo;
     CHECK(as::codec::decode_mesh(ee, eo));
     CHECK(eo.vertices.empty() && eo.indices.empty());
 
+    // Backward compat: a v1 blob (no marker; begins with vertex count, 9
+    // floats/vertex) still decodes, texcoord defaulting to 0.
+    {
+        B v1b;
+        auto pu = [&](cardinal::u32 u){ for(int k=0;k<4;++k) v1b.push_back(static_cast<cardinal::u8>((u>>(8*k))&0xFFu)); };
+        auto pf = [&](float f){ cardinal::u8 b[4]; std::memcpy(b,&f,4); for(int k=0;k<4;++k) v1b.push_back(b[k]); };
+        pu(1u);                                   // 1 vertex
+        pf(1.0f); pf(2.0f); pf(3.0f);             // position
+        pf(0.0f); pf(1.0f); pf(0.0f);             // normal
+        pf(0.5f); pf(0.6f); pf(0.7f);             // color
+        pu(0u);                                   // 0 indices
+        as::MeshAsset vo;
+        CHECK(as::codec::decode_mesh(v1b, vo));
+        CHECK(vo.vertices.size() == sz(1));
+        CHECK(veq(vo.vertices[0].position, Vec3{1.0f,2.0f,3.0f}));
+        CHECK(vo.vertices[0].texcoord.x == 0.0f && vo.vertices[0].texcoord.y == 0.0f);
+    }
+
     // Bounds.
     as::MeshAsset bo;
     CHECK(!as::codec::decode_mesh(B{1,2,3}, bo));      // < 4
-    B trunc(4, 0); trunc[0]=5;                          // claims 5 verts
+    B trunc(4, 0); trunc[0]=5;                          // v1 path: claims 5 verts
     CHECK(!as::codec::decode_mesh(trunc, bo));
 }
 

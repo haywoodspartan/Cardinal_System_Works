@@ -27,6 +27,7 @@ constexpr float kDegToRad = kPi / 180.0f;
 constexpr float kRadToDeg = 180.0f / kPi;
 
 // Canonical types — single definition lives in cardinal::core.
+using Vec2 = cardinal::core::Vec2;
 using Vec3 = cardinal::core::Vec3;
 using Vec4 = cardinal::core::Vec4;
 using Mat4 = cardinal::core::Mat4;
