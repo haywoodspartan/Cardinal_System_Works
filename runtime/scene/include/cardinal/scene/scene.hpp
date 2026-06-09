@@ -37,10 +37,13 @@ enum class ViewMode : u32 {
 const char* view_mode_name(ViewMode);
 
 // Vertex format used by the forward renderer's primitive meshes.
+// NOTE: layout must stay identical to vgeom::Vertex (reinterpret_cast at the
+// vgeom cook boundary; a static_assert in scene_vgeom.cpp enforces it).
 struct Vertex {
     Vec3 position;
     Vec3 normal;
     Vec3 color;
+    Vec2 texcoord{0.0f, 0.0f};   // UV for material-map sampling (0 when no UVs)
 };
 
 // Forward decl — vgeom is a lower-layer module; including its header

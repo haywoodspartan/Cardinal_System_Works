@@ -46,15 +46,17 @@ constexpr const char* kSceneShader = R"(
 // TEXCOORD0 instead of NORMAL0. The semantic name is cosmetic; the
 // shader treats it as a 3-float per-vertex input either way.
 struct VSIn {
-    float3 pos    : POSITION0;
-    float3 color  : COLOR0;
-    float3 normal : TEXCOORD0;
+    float3 pos      : POSITION0;
+    float3 color    : COLOR0;
+    float3 normal   : TEXCOORD0;
+    float2 texcoord : TEXCOORD1;       // UV (vertex attrib slot 3) for material maps
 };
 struct VSOut {
     float4 pos          : SV_POSITION;
     float3 color        : COLOR0;
     float3 world_pos    : TEXCOORD1;   // for upcoming GPU lighting (PS doesn't use yet)
     float3 world_normal : TEXCOORD2;   // for upcoming GPU lighting (PS doesn't use yet)
+    float2 texcoord     : TEXCOORD3;   // passed through for PS material sampling (Slice 5)
 };
 
 // Lights live in a bound StructuredBuffer (RHI storage-buffer slot 0 —
@@ -183,6 +185,7 @@ VSOut VSMain(VSIn i) {
     // documented limitation matches the CPU rot_xform() helper today.
     o.world_normal = normalize(mul((float3x3)pc.model, i.normal));
     o.color        = i.color;
+    o.texcoord     = i.texcoord;
     return o;
 }
 
@@ -378,6 +381,7 @@ struct RenderVertex {
     Vec3 model_pos;     // model-space position; VS multiplies by push-constant MVP
     Vec3 model_normal;  // model-space normal;  VS multiplies by push-constant model 3x3
     Vec3 color;         // CPU-computed base color (entity tint × per-vertex color × ViewMode shade)
+    Vec2 texcoord{0.0f, 0.0f};  // UV for material-map sampling (gizmos leave it 0)
 };
 
 // CPU mirror of the HLSL `Light` struct (kSceneShader). 3×Vec4 = 48B,
@@ -735,6 +739,7 @@ public:
             { 0, rhi::Format::R32G32B32_Float, offsetof(RenderVertex, model_pos)    },
             { 1, rhi::Format::R32G32B32_Float, offsetof(RenderVertex, color)        },
             { 2, rhi::Format::R32G32B32_Float, offsetof(RenderVertex, model_normal) },
+            { 3, rhi::Format::R32G32_Float,    offsetof(RenderVertex, texcoord)     },  // UV -> PS
         };
         // Push-constant block (matches kSceneShader Push cbuffer):
         //   mvp(64)+model(64)+ambient_mode(16)+light_count_pad(16)
@@ -1120,16 +1125,16 @@ public:
                 const Vertex& v1 = src[i + 1];
                 const Vertex& v2 = src[i + 2];
                 if (wire) {
-                    cpu_verts_[out++] = { v0.position, v0.normal, col[0] };
-                    cpu_verts_[out++] = { v1.position, v1.normal, col[1] };
-                    cpu_verts_[out++] = { v1.position, v1.normal, col[1] };
-                    cpu_verts_[out++] = { v2.position, v2.normal, col[2] };
-                    cpu_verts_[out++] = { v2.position, v2.normal, col[2] };
-                    cpu_verts_[out++] = { v0.position, v0.normal, col[0] };
+                    cpu_verts_[out++] = { v0.position, v0.normal, col[0], v0.texcoord };
+                    cpu_verts_[out++] = { v1.position, v1.normal, col[1], v1.texcoord };
+                    cpu_verts_[out++] = { v1.position, v1.normal, col[1], v1.texcoord };
+                    cpu_verts_[out++] = { v2.position, v2.normal, col[2], v2.texcoord };
+                    cpu_verts_[out++] = { v2.position, v2.normal, col[2], v2.texcoord };
+                    cpu_verts_[out++] = { v0.position, v0.normal, col[0], v0.texcoord };
                 } else {
-                    cpu_verts_[out++] = { v0.position, v0.normal, col[0] };
-                    cpu_verts_[out++] = { v1.position, v1.normal, col[1] };
-                    cpu_verts_[out++] = { v2.position, v2.normal, col[2] };
+                    cpu_verts_[out++] = { v0.position, v0.normal, col[0], v0.texcoord };
+                    cpu_verts_[out++] = { v1.position, v1.normal, col[1], v1.texcoord };
+                    cpu_verts_[out++] = { v2.position, v2.normal, col[2], v2.texcoord };
                 }
             }
         };

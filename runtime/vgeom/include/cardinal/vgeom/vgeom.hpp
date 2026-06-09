@@ -120,6 +120,7 @@ namespace cardinal::vgeom {
 // scene/scene.hpp here (would create a layering cycle: scene's renderer
 // uses vgeom, vgeom would need to use scene). The Mesh-attachment glue
 // lives in scene where Mesh is defined.
+using Vec2 = cardinal::core::Vec2;
 using Vec3 = cardinal::core::Vec3;
 using Vec4 = cardinal::core::Vec4;
 using Mat4 = cardinal::core::Mat4;
@@ -132,6 +133,7 @@ struct Vertex {
     Vec3 position;
     Vec3 normal;
     Vec3 color;
+    Vec2 texcoord{0.0f, 0.0f};   // matches scene::Vertex (layout-identical)
 };
 
 // Tunables — see comments above.

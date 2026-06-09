@@ -1180,6 +1180,7 @@ int main(int argc, char** argv) {
                         const auto& mv = ma->vertices[idx];
                         scn::Vertex v;
                         v.position = mv.position; v.normal = mv.normal; v.color = mv.color;
+                        v.texcoord = mv.texcoord;
                         verts.push_back(v);
                     }
                     if (!verts.empty()) {
