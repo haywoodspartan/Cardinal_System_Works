@@ -2043,6 +2043,9 @@ int main(int argc, char** argv) {
                                 recent_projects.save();
                                 const std::string wp = p->dirs().root + "/" +
                                                        p->info().startup_world;
+                                asset_registry->clear_mounts();   // switching projects
+                                imported_mesh_cache->clear();
+                                imported_by_source.clear();
                                 load_imported_manifest();   // re-register imported meshes first
                                 cardinal::string werr;
                                 cardinal::serial::load_world(game, wp, true, &werr);
@@ -3305,6 +3308,11 @@ int main(int argc, char** argv) {
                 const auto& pinfo = act.opened->info();
                 const std::string world_path =
                     act.opened->dirs().root + "/" + pinfo.startup_world;
+                // Switching projects: drop the prior project's mounts + imported
+                // caches so assets resolve from THIS project only.
+                asset_registry->clear_mounts();
+                imported_mesh_cache->clear();
+                imported_by_source.clear();
                 load_imported_manifest();   // re-register imported meshes so the world resolves
                 std::string werr;
                 const auto ls = cardinal::serial::load_world(

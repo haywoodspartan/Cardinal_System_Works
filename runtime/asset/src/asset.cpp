@@ -266,7 +266,10 @@ cardinal::shared_ptr<Registry> Registry::create() {
 }
 Registry::~Registry() = default;
 
-void Registry::mount_directory(const cardinal::string& dir) { dirs_.push_back(dir); }
+void Registry::mount_directory(const cardinal::string& dir) {
+    for (const auto& d : dirs_) if (d == dir) return;   // dedup — idempotent re-mounts
+    dirs_.push_back(dir);
+}
 void Registry::mount_archive  (cardinal::shared_ptr<cardinal::pack::Archive> a) {
     if (a) archives_.push_back(cardinal::move(a));
 }
