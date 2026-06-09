@@ -881,6 +881,61 @@ public:
     bool          is_depth() const noexcept { return depth_; }
     VkImageLayout layout_{VK_IMAGE_LAYOUT_UNDEFINED};
 
+    // Upload tightly-packed RGBA pixels into mip 0 via a host-visible staging
+    // buffer + a one-shot copy (current layout -> TRANSFER_DST -> SHADER_READ).
+    void upload(const void* data, usize size, u32 /*mip*/) override {
+        if (image_ == VK_NULL_HANDLE || data == nullptr || size == 0 || depth_) return;
+
+        VkBufferCreateInfo bci{};
+        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.size  = size;
+        bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO;
+        aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+                  | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VkBuffer          staging = VK_NULL_HANDLE;
+        VmaAllocation     salloc  = VK_NULL_HANDLE;
+        VmaAllocationInfo sinfo{};
+        if (vmaCreateBuffer(dev_.allocator_, &bci, &aci, &staging, &salloc, &sinfo) != VK_SUCCESS)
+            return;
+        if (sinfo.pMappedData) std::memcpy(sinfo.pMappedData, data, size);
+
+        {
+            OneShotCmd one(dev_);
+            auto barrier = [&](VkImageLayout o, VkImageLayout n,
+                               VkAccessFlags sa, VkAccessFlags da,
+                               VkPipelineStageFlags ss, VkPipelineStageFlags ds) {
+                VkImageMemoryBarrier b{};
+                b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b.oldLayout           = o;
+                b.newLayout           = n;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image               = image_;
+                b.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+                b.srcAccessMask       = sa;
+                b.dstAccessMask       = da;
+                vkCmdPipelineBarrier(one.cmd, ss, ds, 0, 0, nullptr, 0, nullptr, 1, &b);
+            };
+            barrier(layout_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            VkBufferImageCopy region{};
+            region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            region.imageExtent      = { w_, h_, 1 };
+            vkCmdCopyBufferToImage(one.cmd, staging, image_,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+            one.submit_and_wait();
+            layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        vmaDestroyBuffer(dev_.allocator_, staging, salloc);
+    }
+
 private:
     VulkanDevice&  dev_;
     VkImage        image_{VK_NULL_HANDLE};

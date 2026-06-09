@@ -305,6 +305,7 @@ cardinal::unique_ptr<Buffer> D3D12Device::create_buffer(const BufferDesc& desc) 
 cardinal::unique_ptr<Texture> D3D12Device::create_texture(const TextureDesc& desc) {
     auto t = cardinal::make_unique<D3D12Texture>();
     if (!t->initialize(device_.Get(), desc)) return nullptr;
+    t->set_upload_context(device_.Get(), gfx_queue());   // enable Texture::upload()
     return t;
 }
 

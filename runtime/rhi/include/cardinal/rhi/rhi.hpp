@@ -147,6 +147,12 @@ public:
     virtual u32    height() const noexcept = 0;
     virtual Format format() const noexcept = 0;
 
+    // Upload tightly-packed pixel data (size = width*height*bytes_per_pixel,
+    // R8G8B8A8 => 4 bpp) into mip 0. For a Sampled (non-depth) colour texture.
+    // Synchronous: stages, copies, and waits — for one-time asset/texture loads,
+    // not per-frame. Default no-op so backends without image upload are safe.
+    virtual void upload(const void* /*data*/, usize /*size*/, u32 /*mip_level*/ = 0) {}
+
 protected:
     Texture() = default;
 };

@@ -265,10 +265,98 @@ public:
     }
     D3D12_RESOURCE_STATES state_{D3D12_RESOURCE_STATE_DEPTH_WRITE};
 
+    // Set by create_texture so upload() can stage + copy on a one-shot list.
+    void set_upload_context(ID3D12Device* dev, ID3D12CommandQueue* q) noexcept {
+        device_ = dev; queue_ = q;
+    }
+
+    // Upload tightly-packed RGBA pixels into mip 0: stage in an UPLOAD-heap
+    // buffer (respecting the 256-byte aligned row pitch), CopyTextureRegion on a
+    // one-shot DIRECT list, and barrier back to PIXEL_SHADER_RESOURCE.
+    void upload(const void* data, usize size, u32 /*mip*/) override {
+        if (!res_ || !device_ || !queue_ || data == nullptr || size == 0) return;
+        const D3D12_RESOURCE_DESC rd = res_->GetDesc();
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};
+        UINT   numRows  = 0;
+        UINT64 rowBytes = 0, total = 0;
+        device_->GetCopyableFootprints(&rd, 0, 1, 0, &fp, &numRows, &rowBytes, &total);
+
+        D3D12_HEAP_PROPERTIES up{}; up.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC bd{};
+        bd.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bd.Width            = total;
+        bd.Height           = 1;
+        bd.DepthOrArraySize = 1;
+        bd.MipLevels        = 1;
+        bd.Format           = DXGI_FORMAT_UNKNOWN;
+        bd.SampleDesc.Count = 1;
+        bd.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ComPtr<ID3D12Resource> staging;
+        if (FAILED(device_->CreateCommittedResource(
+                &up, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ,
+                nullptr, IID_PPV_ARGS(&staging)))) return;
+
+        u8* mapped = nullptr;
+        if (FAILED(staging->Map(0, nullptr, reinterpret_cast<void**>(&mapped)))) return;
+        const u8*    src      = static_cast<const u8*>(data);
+        const UINT64 srcPitch = rowBytes;                            // tight source row
+        for (UINT y = 0; y < numRows; ++y)
+            std::memcpy(mapped + fp.Offset + y * fp.Footprint.RowPitch,
+                        src + y * srcPitch, static_cast<size_t>(srcPitch));
+        staging->Unmap(0, nullptr);
+
+        ComPtr<ID3D12CommandAllocator>    alloc;
+        ComPtr<ID3D12GraphicsCommandList> cl;
+        if (FAILED(device_->CreateCommandAllocator(
+                D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&alloc)))) return;
+        if (FAILED(device_->CreateCommandList(
+                0, D3D12_COMMAND_LIST_TYPE_DIRECT, alloc.Get(), nullptr,
+                IID_PPV_ARGS(&cl)))) return;
+
+        auto bar = [&](D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
+            D3D12_RESOURCE_BARRIER rb{};
+            rb.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            rb.Transition.pResource   = res_.Get();
+            rb.Transition.StateBefore = from;
+            rb.Transition.StateAfter  = to;
+            rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            cl->ResourceBarrier(1, &rb);
+        };
+        bar(state_, D3D12_RESOURCE_STATE_COPY_DEST);
+        D3D12_TEXTURE_COPY_LOCATION dst{};
+        dst.pResource        = res_.Get();
+        dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        dst.SubresourceIndex = 0;
+        D3D12_TEXTURE_COPY_LOCATION srcLoc{};
+        srcLoc.pResource       = staging.Get();
+        srcLoc.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        srcLoc.PlacedFootprint = fp;
+        cl->CopyTextureRegion(&dst, 0, 0, 0, &srcLoc, nullptr);
+        bar(D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        state_ = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        cl->Close();
+
+        ID3D12CommandList* lists[] = { cl.Get() };
+        queue_->ExecuteCommandLists(1, lists);
+        ComPtr<ID3D12Fence> fence;
+        if (FAILED(device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return;
+        queue_->Signal(fence.Get(), 1);
+        if (fence->GetCompletedValue() < 1) {
+            HANDLE ev = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            if (ev) {
+                fence->SetEventOnCompletion(1, ev);
+                WaitForSingleObject(ev, INFINITE);
+                CloseHandle(ev);
+            }
+        }
+    }
+
 private:
     ComPtr<ID3D12Resource>       res_;
     ComPtr<ID3D12DescriptorHeap> dsv_heap_;
     ComPtr<ID3D12DescriptorHeap> srv_heap_;
+    ID3D12Device*                device_{nullptr};
+    ID3D12CommandQueue*          queue_{nullptr};
     u32    w_{0}, h_{0};
     Format fmt_{Format::D32_Float};
 };
