@@ -1147,7 +1147,8 @@ int main(int argc, char** argv) {
                                : std::string();
     };
 
-    auto register_imported_factory = [&](const std::string& key, const std::string& label) {
+    auto register_imported_factory = [&](const std::string& key, const std::string& label,
+                                         const std::string& matkey) {
         if (scn::AssetCatalog::instance().find(key.c_str()) != nullptr) return;
         scn::AssetDesc d{};
         d.id       = key;
@@ -1157,8 +1158,8 @@ int main(int argc, char** argv) {
         d.kind     = scn::AssetKind::Primitive;
         auto reg   = asset_registry;          // shared ownership (reload-safe)
         auto cache = imported_mesh_cache;
-        std::string kc = key, lc = label;
-        d.factory = [reg, cache, kc, lc](const scn::AssetSpawnContext& ctx)
+        std::string kc = key, lc = label, mk = matkey;
+        d.factory = [reg, cache, kc, lc, mk](const scn::AssetSpawnContext& ctx)
                         -> scn::AssetSpawnResult {
             if (ctx.scene == nullptr || ctx.device == nullptr) return {};
             cardinal::shared_ptr<scn::Mesh> mesh;
@@ -1188,9 +1189,36 @@ int main(int argc, char** argv) {
             e.mesh  = mesh;
             e.transform.translation = ctx.position;
             e.tint  = { 0.80f, 0.80f, 0.82f };
+            // Apply the imported material's base color + PBR scalars, if linked.
+            if (!mk.empty()) {
+                if (auto mat = reg->load_material(cardinal::string(mk.c_str()))) {
+                    e.tint = mat->base_color;
+                    e.material.roughness = mat->roughness;
+                    e.material.metalness = mat->metallic;
+                }
+            }
             return scn::AssetSpawnResult{ { e.id }, e.id };
         };
         scn::AssetCatalog::instance().register_asset(std::move(d));
+    };
+
+    // Persist an imported material into the project (CookedAsset Material blob),
+    // so its base color + PBR scalars survive save + reopen.
+    auto persist_imported_material = [&](const std::string& key,
+                                         const cardinal::asset::MaterialAsset& ma) -> bool {
+        if (!current_project) return false;
+        cardinal::cook::CookedAsset ca;
+        ca.type    = cardinal::cook::AssetType::Material;
+        ca.payload = cardinal::asset::codec::encode_material(ma);
+        const cardinal::vector<cardinal::u8> bytes = ca.serialize();
+        const std::string path = current_project->dirs().cooked + "/" + key + ".cooked";
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+        if (!f) return false;
+        f.write(reinterpret_cast<const char*>(bytes.data()),
+                static_cast<std::streamsize>(bytes.size()));
+        return static_cast<bool>(f);
     };
 
     auto persist_imported_mesh = [&](const std::string& key,
@@ -1221,16 +1249,16 @@ int main(int argc, char** argv) {
         std::string line;
         while (std::getline(f, line)) {
             if (line.empty()) continue;
-            const auto tab = line.find('\t');
-            const std::string key = (tab == std::string::npos) ? line : line.substr(0, tab);
-            std::string label = key, source;
-            if (tab != std::string::npos) {
-                const auto t2 = line.find('\t', tab + 1);
-                if (t2 == std::string::npos) { label = line.substr(tab + 1); }
-                else { label = line.substr(tab + 1, t2 - tab - 1); source = line.substr(t2 + 1); }
-            }
-            if (key.empty()) continue;
-            register_imported_factory(key, label);
+            std::vector<std::string> col;
+            std::string cur;
+            for (char c : line) { if (c == '\t') { col.push_back(cur); cur.clear(); } else cur += c; }
+            col.push_back(cur);
+            if (col.empty() || col[0].empty()) continue;
+            const std::string key    = col[0];
+            const std::string label  = col.size() > 1 ? col[1] : key;
+            const std::string source = col.size() > 2 ? col[2] : std::string();
+            const std::string matkey = col.size() > 3 ? col[3] : std::string();
+            register_imported_factory(key, label, matkey);
             if (!source.empty()) imported_by_source[source] = key;
         }
     };
@@ -2678,6 +2706,18 @@ int main(int argc, char** argv) {
                 const std::string base =
                     im.name.empty() ? std::string("mesh") : std::string(im.name.c_str());
 
+                // Link + persist this mesh's material (base color + PBR scalars).
+                std::string matkey;
+                if (im.material >= 0 && im.material < static_cast<int>(isc.materials.size())) {
+                    const auto& imat = isc.materials[im.material];
+                    if (!imat.name.empty()) {
+                        matkey = "imported/materials/" + std::string(imat.name.c_str());
+                        if (current_project)
+                            persist_imported_material(matkey,
+                                cardinal::import::to_asset_material(imat));
+                    }
+                }
+
                 // Preferred: persist the mesh INTO the project (cooked) + record
                 // it in the import manifest + register a reload-safe load factory,
                 // so it survives save + reopen. Re-importing the same (file, mesh)
@@ -2695,9 +2735,10 @@ int main(int argc, char** argv) {
                         } else {
                             imported_by_source[source_id] = key;
                             std::ofstream mf(imported_manifest_path(), std::ios::app);
-                            if (mf) mf << key << "\t" << base << "\t" << source_id << "\n";
+                            if (mf) mf << key << "\t" << base << "\t" << source_id
+                                       << "\t" << matkey << "\n";
                         }
-                        register_imported_factory(key, base);
+                        register_imported_factory(key, base, matkey);
                         spawn_asset_at(key.c_str(), pos);
                         ++spawned;
                         continue;
@@ -2728,13 +2769,22 @@ int main(int argc, char** argv) {
                 d.kind     = scn::AssetKind::Primitive;
                 auto        mesh_cap  = mesh;
                 std::string label_cap = base;
-                d.factory = [mesh_cap, label_cap](const scn::AssetSpawnContext& ctx)
+                auto        reg_cap   = asset_registry;
+                std::string mk_cap    = matkey;
+                d.factory = [mesh_cap, label_cap, reg_cap, mk_cap](const scn::AssetSpawnContext& ctx)
                                 -> scn::AssetSpawnResult {
                     if (ctx.scene == nullptr) return {};
                     auto& e = ctx.scene->add_entity(label_cap);
                     e.mesh  = mesh_cap;
                     e.transform.translation = ctx.position;
                     e.tint  = { 0.80f, 0.80f, 0.82f };
+                    if (!mk_cap.empty()) {
+                        if (auto mat = reg_cap->load_material(cardinal::string(mk_cap.c_str()))) {
+                            e.tint = mat->base_color;
+                            e.material.roughness = mat->roughness;
+                            e.material.metalness = mat->metallic;
+                        }
+                    }
                     return scn::AssetSpawnResult{ { e.id }, e.id };
                 };
                 scn::AssetCatalog::instance().register_asset(std::move(d));
