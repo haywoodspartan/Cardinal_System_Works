@@ -1201,6 +1201,7 @@ int main(int argc, char** argv) {
                     e.tint = mat->base_color;
                     e.material.roughness = mat->roughness;
                     e.material.metalness = mat->metallic;
+                    e.material.base_color_texture = mat->base_color_texture;
                 }
             }
             return scn::AssetSpawnResult{ { e.id }, e.id };
@@ -2819,6 +2820,7 @@ int main(int argc, char** argv) {
                             e.tint = mat->base_color;
                             e.material.roughness = mat->roughness;
                             e.material.metalness = mat->metallic;
+                            e.material.base_color_texture = mat->base_color_texture;
                         }
                     }
                     return scn::AssetSpawnResult{ { e.id }, e.id };

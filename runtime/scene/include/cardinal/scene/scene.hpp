@@ -138,6 +138,10 @@ struct Material {
     // mirror + buffer stride stabilise before hosts depend on them.
     float roughness{0.5f};            // not yet read by the PS
     float metalness{0.0f};            // not yet read by the PS
+    // Base-color (albedo) texture asset key. Empty = untextured (vertex color
+    // only). The forward renderer loads + uploads + binds it per draw, and the
+    // PS samples it at the vertex UV. Not part of the GPU GpuMaterial struct.
+    cardinal::string base_color_texture;
 };
 
 class Scene;
