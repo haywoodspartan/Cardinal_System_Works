@@ -27,6 +27,25 @@ struct InputState {
     Vec2  mouse{};
     bool  mouse_down{false};
     float scroll{0.0f};
+
+    // Keyboard — printable characters typed this frame (ASCII subset; hosts
+    // translate from their event source) + edge-triggered edit keys. Routed by
+    // the Ui to the FOCUSED widget (focus = last pressed focusable widget;
+    // Escape clears focus and is consumed by the Ui itself).
+    cardinal::string text;
+    bool key_backspace{false};
+    bool key_delete{false};
+    bool key_left{false};
+    bool key_right{false};
+    bool key_home{false};
+    bool key_end{false};
+    bool key_enter{false};
+    bool key_escape{false};
+
+    bool has_key_input() const noexcept {
+        return !text.empty() || key_backspace || key_delete || key_left ||
+               key_right || key_home || key_end || key_enter || key_escape;
+    }
 };
 
 // Everything paint() needs: the draw list, the theme, and the Ui (for
@@ -64,6 +83,14 @@ public:
     virtual void on_drag(Vec2 /*mouse*/) {}
     virtual bool scrollable() const noexcept { return false; }
     virtual void on_scroll(float /*delta*/) {}
+
+    // --- Keyboard focus (text fields etc.) -----------------------------
+    // A focusable widget gains Ui focus when pressed; the Ui then routes
+    // keyboard input (InputState text/key_*) to it via on_key. Escape clears
+    // focus (consumed by the Ui — the widget never sees it).
+    virtual bool focusable() const noexcept { return false; }
+    virtual void on_key(const InputState& /*in*/) {}
+    virtual void on_focus_changed(bool /*focused*/) {}
 
     // --- Tree ---------------------------------------------------------
     Widget* add(cardinal::unique_ptr<Widget> child) {

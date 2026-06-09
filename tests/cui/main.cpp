@@ -264,6 +264,64 @@ void test_scroll_clip() {
     CHECK(clipped);
 }
 
+// ---- TextField: focus, typing, caret editing, submit, escape ---------------
+void test_textfield_focus_typing() {
+    ui::Ui u;
+    auto root = cardinal::make_unique<ui::Stack>(ui::Axis::Vertical, 4.0f);
+    auto* tf  = static_cast<ui::TextField*>(
+        root->add(cardinal::make_unique<ui::TextField>("ab")));
+    cardinal::string submitted;
+    tf->set_on_submit([&](const cardinal::string& s) { submitted = s; });
+    u.set_root(cardinal::move(root));
+    u.layout({ 400.0f, 300.0f });
+
+    const ui::Vec2 c = tf->rect().center();
+    ui::InputState in{};
+    in.mouse = c;
+    u.update_input(in);                            // seed prev (hover)
+    in.mouse_down = true;  u.update_input(in);     // press -> gains focus
+    CHECK(u.is_focused(tf));
+    in.mouse_down = false; u.update_input(in);     // release -> click (caret=end)
+    CHECK(tf->caret() == 2u);
+
+    auto key = [&](auto&& fill) {
+        ui::InputState k{};
+        k.mouse = c;
+        fill(k);
+        u.update_input(k);
+    };
+    key([](ui::InputState& k) { k.text = "X"; });
+    CHECK(tf->text() == cardinal::string("abX") && tf->caret() == 3u);
+    key([](ui::InputState& k) { k.key_left = true; });
+    CHECK(tf->caret() == 2u);
+    key([](ui::InputState& k) { k.key_backspace = true; });
+    CHECK(tf->text() == cardinal::string("aX") && tf->caret() == 1u);
+    key([](ui::InputState& k) { k.key_home = true; });
+    CHECK(tf->caret() == 0u);
+    key([](ui::InputState& k) { k.key_delete = true; });
+    CHECK(tf->text() == cardinal::string("X"));
+    key([](ui::InputState& k) { k.key_end = true; });
+    CHECK(tf->caret() == 1u);
+    key([](ui::InputState& k) { k.key_enter = true; });
+    CHECK(submitted == cardinal::string("X"));
+
+    // Escape clears focus (consumed by the Ui); further keys are ignored.
+    key([](ui::InputState& k) { k.key_escape = true; });
+    CHECK(!u.is_focused(tf));
+    key([](ui::InputState& k) { k.text = "z"; });
+    CHECK(tf->text() == cardinal::string("X"));
+
+    // Refocus, then press empty space -> focus clears.
+    in.mouse = c;
+    in.mouse_down = true;  u.update_input(in);
+    CHECK(u.is_focused(tf));
+    in.mouse_down = false; u.update_input(in);
+    in.mouse = { -50.0f, -50.0f };
+    in.mouse_down = true;  u.update_input(in);
+    CHECK(!u.is_focused(tf));
+    in.mouse_down = false; u.update_input(in);
+}
+
 }  // namespace
 
 int main() {
@@ -278,6 +336,7 @@ int main() {
     test_state_hit_test();
     test_alpha_cascade();
     test_scroll_clip();
+    test_textfield_focus_typing();
 
     if (g_fail == 0) {
         cardinal::log::infof("cuitest", "OK  %d checks passed", g_checks);

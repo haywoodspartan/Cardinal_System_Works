@@ -140,4 +140,45 @@ private:
     float content_h_{0.0f};   // total content height (for clamping + scrollbar)
 };
 
+// TextField — single-line text input. Click to focus (the Ui routes keyboard
+// input here while focused); supports insert-at-caret, Backspace/Delete,
+// Left/Right/Home/End, Enter -> on_submit, Escape -> unfocus (Ui-consumed).
+// The editor's gating widget: Console, search boxes, Inspector name field.
+class TextField : public Widget {
+public:
+    explicit TextField(cardinal::string text = {}, float min_width = 160.0f)
+        : text_(cardinal::move(text)), caret_(text_.size()), min_width_(min_width) {}
+
+    Vec2 measure(const Constraints& c) override;
+    void paint(PaintContext& ctx) override;
+    bool interactive() const noexcept override { return true; }
+    bool focusable()   const noexcept override { return true; }
+    void on_click() override { caret_ = text_.size(); }   // caret -> end (for now)
+    void on_key(const InputState& in) override;
+
+    const cardinal::string& text() const noexcept { return text_; }
+    void set_text(cardinal::string t) {
+        text_ = cardinal::move(t);
+        if (caret_ > text_.size()) caret_ = text_.size();
+    }
+    usize caret() const noexcept { return caret_; }
+    void set_placeholder(cardinal::string p) { placeholder_ = cardinal::move(p); }
+    void set_on_change(cardinal::function<void(const cardinal::string&)> f) {
+        on_change_ = cardinal::move(f);
+    }
+    void set_on_submit(cardinal::function<void(const cardinal::string&)> f) {
+        on_submit_ = cardinal::move(f);
+    }
+
+private:
+    cardinal::string text_;
+    cardinal::string placeholder_;
+    usize caret_{0};
+    float min_width_{160.0f};
+    float font_size_{14.0f};
+    Edges pad_{6, 4, 6, 4};
+    cardinal::function<void(const cardinal::string&)> on_change_;
+    cardinal::function<void(const cardinal::string&)> on_submit_;
+};
+
 }  // namespace cardinal::cui

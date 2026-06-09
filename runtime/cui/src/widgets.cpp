@@ -293,4 +293,66 @@ void ScrollPanel::paint(PaintContext& ctx) {
     }
 }
 
+// -----------------------------------------------------------------------------
+// TextField
+// -----------------------------------------------------------------------------
+Vec2 TextField::measure(const Constraints& c) {
+    Vec2 s{ maxf(min_width_, text_advance(text_, font_size_) + pad_.horiz()),
+            line_height(font_size_) + pad_.vert() };
+    s.x = c.clamp_w(s.x);
+    s.y = c.clamp_h(s.y);
+    measured_ = s;
+    return s;
+}
+
+void TextField::on_key(const InputState& in) {
+    const cardinal::string before = text_;
+
+    // Printable insert at the caret (ASCII subset; hosts pre-filter).
+    for (char ch : in.text) {
+        if (static_cast<unsigned char>(ch) < 32 || ch == 127) continue;
+        text_.insert(text_.begin() + static_cast<isize>(caret_), ch);
+        ++caret_;
+    }
+    if (in.key_backspace && caret_ > 0) {
+        text_.erase(text_.begin() + static_cast<isize>(caret_) - 1);
+        --caret_;
+    }
+    if (in.key_delete && caret_ < text_.size()) {
+        text_.erase(text_.begin() + static_cast<isize>(caret_));
+    }
+    if (in.key_left  && caret_ > 0)            --caret_;
+    if (in.key_right && caret_ < text_.size()) ++caret_;
+    if (in.key_home) caret_ = 0;
+    if (in.key_end)  caret_ = text_.size();
+
+    if (text_ != before && on_change_) on_change_(text_);
+    if (in.key_enter && on_submit_)    on_submit_(text_);
+}
+
+void TextField::paint(PaintContext& ctx) {
+    const bool focused = ctx.ui != nullptr && ctx.ui->is_focused(this);
+
+    ctx.dl->rect_filled(rect_, ctx.apply(ctx.theme->control), ctx.theme->rounding);
+    ctx.dl->rect_stroke(rect_,
+                        ctx.apply(focused ? ctx.theme->accent : ctx.theme->border),
+                        1.0f, ctx.theme->rounding);
+
+    const Vec2 tp{ rect_.left() + pad_.l,
+                   rect_.top()  + (rect_.height() - line_height(font_size_)) * 0.5f };
+    if (!text_.empty()) {
+        ctx.dl->text(tp, text_, ctx.apply(ctx.theme->text), font_size_);
+    } else if (!placeholder_.empty()) {
+        ctx.dl->text(tp, placeholder_, ctx.apply(ctx.theme->text_dim), font_size_);
+    }
+
+    // Caret (solid while focused) after the first `caret_` characters.
+    if (focused) {
+        const cardinal::string head = text_.substr(0, caret_);
+        const float cx = tp.x + text_advance(head, font_size_);
+        const Rect  caret{ { cx, tp.y }, { 1.0f, line_height(font_size_) } };
+        ctx.dl->rect_filled(caret, ctx.apply(ctx.theme->text), 0.0f);
+    }
+}
+
 }  // namespace cardinal::cui

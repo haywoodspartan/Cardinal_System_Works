@@ -682,6 +682,9 @@ int main(int argc, char** argv) {
             stack->add(cardinal::make_unique<Label>("clicks: 0")));
         stack->add(cardinal::make_unique<Checkbox>("Enabled", &slate_check));
         stack->add(cardinal::make_unique<Slider>(&slate_val, 0.0f, 1.0f));
+        auto field = cardinal::make_unique<TextField>();
+        field->set_placeholder("type here (click to focus)...");
+        stack->add(cardinal::move(field));
         panel->add(cardinal::move(stack));
         slate_ui.set_root(cardinal::move(panel));
     }
@@ -3433,6 +3436,22 @@ int main(int argc, char** argv) {
                 in.mouse      = { m.x - origin.x, m.y - origin.y };
                 in.mouse_down = ImGui::IsWindowHovered() &&
                                 ImGui::IsMouseDown(ImGuiMouseButton_Left);
+                // Keyboard -> cui (TextField etc.) while a cui widget has focus
+                // and this window is focused: typed chars + edit-key edges.
+                if (ImGui::IsWindowFocused() && slate_ui.focused() != nullptr) {
+                    ImGuiIO& kio = ImGui::GetIO();
+                    for (ImWchar wc : kio.InputQueueCharacters)
+                        if (wc >= 32 && wc < 127)
+                            in.text += static_cast<char>(wc);
+                    in.key_backspace = ImGui::IsKeyPressed(ImGuiKey_Backspace);
+                    in.key_delete    = ImGui::IsKeyPressed(ImGuiKey_Delete);
+                    in.key_left      = ImGui::IsKeyPressed(ImGuiKey_LeftArrow);
+                    in.key_right     = ImGui::IsKeyPressed(ImGuiKey_RightArrow);
+                    in.key_home      = ImGui::IsKeyPressed(ImGuiKey_Home);
+                    in.key_end       = ImGui::IsKeyPressed(ImGuiKey_End);
+                    in.key_enter     = ImGui::IsKeyPressed(ImGuiKey_Enter);
+                    in.key_escape    = ImGui::IsKeyPressed(ImGuiKey_Escape);
+                }
                 slate_ui.update_input(in);
 
                 cardinal::cui::DrawList dl;

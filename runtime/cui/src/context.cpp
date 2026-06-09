@@ -23,7 +23,13 @@ void Ui::update_input(const InputState& in) {
         const bool pressed  =  in.mouse_down && !prev_.mouse_down;
         const bool released = !in.mouse_down &&  prev_.mouse_down;
 
-        if (pressed) active_ = hovered_;
+        if (pressed) {
+            active_ = hovered_;
+            // Focus follows the press: a focusable widget takes keyboard focus;
+            // pressing anything else (or empty space) clears it.
+            set_focus((hovered_ != nullptr && hovered_->focusable()) ? hovered_
+                                                                     : nullptr);
+        }
 
         // Continuous drag for the held widget (sliders track the cursor).
         if (in.mouse_down && active_ != nullptr) active_->on_drag(in.mouse);
@@ -33,6 +39,13 @@ void Ui::update_input(const InputState& in) {
             if (active_ != nullptr && active_ == hovered_) active_->on_click();
             active_ = nullptr;
         }
+    }
+
+    // Keyboard: Escape clears focus (consumed here); everything else routes to
+    // the focused widget.
+    if (focused_ != nullptr && in.has_key_input()) {
+        if (in.key_escape) clear_focus();
+        else               focused_->on_key(in);
     }
 
     prev_       = in;
