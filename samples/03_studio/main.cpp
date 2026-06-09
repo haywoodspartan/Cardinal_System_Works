@@ -1128,6 +1128,11 @@ int main(int argc, char** argv) {
     cardinal::project::RecentProjects recent_projects(
         "G:/Cardinal_System_Works/build/recent_projects.txt");
     recent_projects.load();
+    // Recent worlds/levels (reuses the generic recent-path list) so multi-level
+    // projects can jump between saved .cardinalworld files quickly.
+    cardinal::project::RecentProjects recent_worlds(
+        "G:/Cardinal_System_Works/build/recent_worlds.txt");
+    recent_worlds.load();
 
     // ---- Imported-asset persistence -----------------------------------------
     // Imported meshes must live IN the project (cooked) so a saved level still
@@ -1950,6 +1955,18 @@ int main(int argc, char** argv) {
                                    current_project->info().startup_world;
             cardinal::string serr;
             cardinal::serial::save_world(game.world(), wp, &serr);
+            recent_worlds.add(cardinal::string(wp.c_str()));
+            recent_worlds.save();
+        };
+
+        // Open a world/level by path: re-register imported factories (same
+        // project), load it, and record it in Recent Worlds.
+        auto open_world_path = [&](const std::string& wpath) {
+            load_imported_manifest();
+            cardinal::string werr;
+            cardinal::serial::load_world(game, cardinal::string(wpath.c_str()), true, &werr);
+            recent_worlds.add(cardinal::string(wpath.c_str()));
+            recent_worlds.save();
         };
 
         // Entity copy / paste — shared by the Edit menu + Ctrl+C / Ctrl+V.
@@ -2027,6 +2044,15 @@ int main(int argc, char** argv) {
                                 cardinal::serial::load_world(game, wp, true, &werr);
                             }
                         }
+                    }
+                    ImGui::EndMenu();
+                }
+                // Recent worlds/levels — reopen a saved .cardinalworld by path
+                // (within the current project; imported meshes re-resolve).
+                if (ImGui::BeginMenu("Recent Worlds", !recent_worlds.entries().empty())) {
+                    for (const auto& rw : recent_worlds.entries()) {
+                        if (ImGui::MenuItem(rw.c_str()))
+                            open_world_path(std::string(rw.c_str()));
                     }
                     ImGui::EndMenu();
                 }
@@ -2402,6 +2428,8 @@ int main(int argc, char** argv) {
             if (ImGui::Button("Save", ImVec2(120, 0))) {
                 cardinal::string serr;
                 cardinal::serial::save_world(game.world(), save_as_path, &serr);
+                recent_worlds.add(cardinal::string(save_as_path));
+                recent_worlds.save();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
