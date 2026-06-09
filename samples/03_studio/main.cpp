@@ -1138,6 +1138,9 @@ int main(int argc, char** argv) {
     // an in-memory pointer that dies with the session).
     auto imported_mesh_cache =
         std::make_shared<std::unordered_map<std::string, cardinal::shared_ptr<scn::Mesh>>>();
+    // source-id ("<path>::<mesh>") -> asset key, so re-importing the same file
+    // reuses the key (updates the asset in place) rather than duplicating it.
+    std::unordered_map<std::string, std::string> imported_by_source;
 
     auto imported_manifest_path = [&]() -> std::string {
         return current_project ? (current_project->dirs().root + "/imported_assets.cardinal")
@@ -1219,9 +1222,16 @@ int main(int argc, char** argv) {
         while (std::getline(f, line)) {
             if (line.empty()) continue;
             const auto tab = line.find('\t');
-            const std::string key   = (tab == std::string::npos) ? line : line.substr(0, tab);
-            const std::string label = (tab == std::string::npos) ? key  : line.substr(tab + 1);
-            if (!key.empty()) register_imported_factory(key, label);
+            const std::string key = (tab == std::string::npos) ? line : line.substr(0, tab);
+            std::string label = key, source;
+            if (tab != std::string::npos) {
+                const auto t2 = line.find('\t', tab + 1);
+                if (t2 == std::string::npos) { label = line.substr(tab + 1); }
+                else { label = line.substr(tab + 1, t2 - tab - 1); source = line.substr(t2 + 1); }
+            }
+            if (key.empty()) continue;
+            register_imported_factory(key, label);
+            if (!source.empty()) imported_by_source[source] = key;
         }
     };
 
@@ -2667,23 +2677,36 @@ int main(int argc, char** argv) {
 
                 const std::string base =
                     im.name.empty() ? std::string("mesh") : std::string(im.name.c_str());
-                const std::string key =
-                    "imported/" + base + "." + std::to_string(import_counter++);
 
                 // Preferred: persist the mesh INTO the project (cooked) + record
                 // it in the import manifest + register a reload-safe load factory,
-                // so it survives save + reopen. spawn_asset_at goes through the
-                // same place command the viewport uses.
-                if (current_project && persist_imported_mesh(key, ma)) {
-                    std::ofstream mf(imported_manifest_path(), std::ios::app);
-                    if (mf) mf << key << "\t" << base << "\n";
-                    register_imported_factory(key, base);
-                    spawn_asset_at(key.c_str(), pos);
-                    ++spawned;
-                    continue;
+                // so it survives save + reopen. Re-importing the same (file, mesh)
+                // REUSES its key so the asset updates in place (no duplicates).
+                if (current_project) {
+                    const std::string source_id = path + "::" + base;
+                    auto sit = imported_by_source.find(source_id);
+                    const bool reused = (sit != imported_by_source.end());
+                    const std::string key = reused
+                        ? sit->second
+                        : ("imported/" + base + "." + std::to_string(import_counter++));
+                    if (persist_imported_mesh(key, ma)) {
+                        if (reused) {
+                            imported_mesh_cache->erase(key);   // drop stale GPU mesh
+                        } else {
+                            imported_by_source[source_id] = key;
+                            std::ofstream mf(imported_manifest_path(), std::ios::app);
+                            if (mf) mf << key << "\t" << base << "\t" << source_id << "\n";
+                        }
+                        register_imported_factory(key, base);
+                        spawn_asset_at(key.c_str(), pos);
+                        ++spawned;
+                        continue;
+                    }
                 }
 
-                // Fallback (no project open): session-only in-memory mesh.
+                // Fallback (no project open / persist failed): session-only mesh.
+                const std::string key =
+                    "imported/" + base + "." + std::to_string(import_counter++);
                 std::vector<scn::Vertex> verts;
                 verts.reserve(ma.indices.size());
                 for (cardinal::u32 idx : ma.indices) {
