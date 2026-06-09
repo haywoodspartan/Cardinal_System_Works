@@ -787,6 +787,19 @@ int main(int argc, char** argv) {
     std::vector<GizmoSnap> gizmo_drag_snaps;
     scn::Vec3  gizmo_prim_p0{}, gizmo_prim_r0{}, gizmo_prim_s0{1,1,1};
 
+    // Inspector undo (mirrors the gizmo pattern): while no inspector widget is
+    // mid-edit we refresh a pre-edit snapshot of the selected entity each frame
+    // (BEFORE the panel draws); when the panel reports an edit commit we push
+    // ONE undo entry restoring/reapplying the full lightweight entity state.
+    struct InspSnap {
+        u32 id{0}; bool valid{false};
+        std::string name; bool visible{true};
+        scn::Vec3 p{}, r{}, s{1,1,1}, tint{1,1,1};
+        float spec_i{0.4f}, spec_p{24.0f}, rough{0.5f}, metal{0.0f};
+    };
+    InspSnap insp_before;
+    bool     insp_edit_live = false;
+
     // Toolbar persistent state (mirrors the in-app Tool / snap / play flags).
     ui::Studio::ToolbarState tbar{};
     tbar.tool = 0;
@@ -2752,7 +2765,81 @@ int main(int argc, char** argv) {
             studio->draw_scene_hierarchy(scene, &selection, "Hierarchy", &show_hierarchy);
             selected_id = selection.empty() ? 0u : selection.back();
         }
-        if (!any_maximized && show_inspector) studio->draw_inspector(scene, selected_id, "Inspector", &show_inspector);
+        if (!any_maximized && show_inspector) {
+            // Refresh the pre-edit snapshot only while no edit is in progress —
+            // it must capture the state from BEFORE the edit began.
+            if (!insp_edit_live) {
+                if (auto* e = scene.find_by_id(selected_id)) {
+                    insp_before.id      = selected_id;
+                    insp_before.valid   = true;
+                    insp_before.name    = std::string(e->name.c_str());
+                    insp_before.visible = e->visible;
+                    insp_before.p       = e->transform.translation;
+                    insp_before.r       = e->transform.rotation_euler;
+                    insp_before.s       = e->transform.scale;
+                    insp_before.tint    = e->tint;
+                    insp_before.spec_i  = e->material.specular_intensity;
+                    insp_before.spec_p  = e->material.specular_power;
+                    insp_before.rough   = e->material.roughness;
+                    insp_before.metal   = e->material.metalness;
+                } else {
+                    insp_before.valid = false;
+                }
+            }
+            bool insp_active = false, insp_committed = false;
+            studio->draw_inspector(scene, selected_id, "Inspector", &show_inspector,
+                                   &insp_active, &insp_committed);
+            if (insp_committed && insp_before.valid && insp_before.id == selected_id) {
+                if (auto* e = scene.find_by_id(selected_id)) {
+                    InspSnap after;
+                    after.id = selected_id; after.valid = true;
+                    after.name    = std::string(e->name.c_str());
+                    after.visible = e->visible;
+                    after.p = e->transform.translation;
+                    after.r = e->transform.rotation_euler;
+                    after.s = e->transform.scale;
+                    after.tint = e->tint;
+                    after.spec_i = e->material.specular_intensity;
+                    after.spec_p = e->material.specular_power;
+                    after.rough  = e->material.roughness;
+                    after.metal  = e->material.metalness;
+                    const InspSnap before = insp_before;
+                    auto restore = [&scene](const InspSnap& st) {
+                        if (auto* x = scene.find_by_id(st.id)) {
+                            x->name    = st.name.c_str();
+                            x->visible = st.visible;
+                            x->transform.translation    = st.p;
+                            x->transform.rotation_euler = st.r;
+                            x->transform.scale          = st.s;
+                            x->tint = st.tint;
+                            x->material.specular_intensity = st.spec_i;
+                            x->material.specular_power     = st.spec_p;
+                            x->material.roughness          = st.rough;
+                            x->material.metalness          = st.metal;
+                        }
+                    };
+                    const bool changed =
+                        before.name != after.name || before.visible != after.visible ||
+                        std::memcmp(&before.p, &after.p, sizeof(scn::Vec3)) != 0 ||
+                        std::memcmp(&before.r, &after.r, sizeof(scn::Vec3)) != 0 ||
+                        std::memcmp(&before.s, &after.s, sizeof(scn::Vec3)) != 0 ||
+                        std::memcmp(&before.tint, &after.tint, sizeof(scn::Vec3)) != 0 ||
+                        before.spec_i != after.spec_i || before.spec_p != after.spec_p ||
+                        before.rough != after.rough || before.metal != after.metal;
+                    if (changed) {
+                        edit::Command cmd;
+                        cmd.label  = "Edit " + after.name;
+                        cmd.apply  = [restore, after]()  { restore(after);  };
+                        cmd.revert = [restore, before]() { restore(before); };
+                        undo.push_executed(std::move(cmd));
+                    }
+                }
+                insp_edit_live = false;
+                insp_before.valid = false;   // re-snapshot next frame
+            } else {
+                insp_edit_live = insp_active;
+            }
+        }
         if (!any_maximized && show_assets)    studio->draw_asset_browser(
                                 std::filesystem::current_path().string().c_str(), "Assets", &show_assets);
 

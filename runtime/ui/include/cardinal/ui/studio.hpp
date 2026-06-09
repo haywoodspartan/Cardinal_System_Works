@@ -563,9 +563,14 @@ public:
                                       u32* selected_id_inout,
                                       const char* title = "Hierarchy",
                                       bool* p_open = nullptr) = 0;
+    // out_edit_active/out_edit_committed (optional): inspector edit lifecycle
+    // for host-side undo — snapshot the entity while !active, push one undo
+    // entry when committed (mirrors the gizmo drag-start/release pattern).
     virtual void draw_inspector(scene::Scene& scene, u32 selected_id,
                                 const char* title = "Inspector",
-                                bool* p_open = nullptr) = 0;
+                                bool* p_open = nullptr,
+                                bool* out_edit_active = nullptr,
+                                bool* out_edit_committed = nullptr) = 0;
     virtual void draw_asset_browser(const char* root_path,
                                     const char* title = "Assets",
                                     bool* p_open = nullptr) = 0;

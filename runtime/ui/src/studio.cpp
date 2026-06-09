@@ -2534,8 +2534,10 @@ public:
     // mutation (so undo/redo can hook into it later).
     // -------------------------------------------------------------------
     void draw_inspector(scene::Scene& scene, u32 selected_id,
-                        const char* title, bool* p_open) override {
-        panels::inspector_panel::draw(scene, selected_id, title, p_open);
+                        const char* title, bool* p_open,
+                        bool* out_edit_active, bool* out_edit_committed) override {
+        panels::inspector_panel::draw(scene, selected_id, title, p_open,
+                                      out_edit_active, out_edit_committed);
     }
 
     // -------------------------------------------------------------------
