@@ -3994,6 +3994,17 @@ private:
             swapchain_->set_on_rebuilt(nullptr);
         }
 
+        // Persist the editor layout (docked panels AND popped-out OS-window
+        // positions) one last time before teardown. ImGui only auto-saves on a
+        // ~5 s dirty timer, so without an explicit flush an exit shortly after
+        // rearranging panels loses the change. Done BEFORE DestroyPlatformWindows
+        // so the live per-viewport window positions are still captured.
+        if (ImGui::GetCurrentContext() != nullptr) {
+            const ImGuiIO& io = ImGui::GetIO();
+            if (io.IniFilename != nullptr)
+                ImGui::SaveIniSettingsToDisk(io.IniFilename);
+        }
+
         // Destroy any multi-viewport secondary platform windows BEFORE we
         // shut down the renderer backend. ImGui owns Win32 child HWNDs +
         // per-viewport DXGI swapchains; if we tear down the renderer first

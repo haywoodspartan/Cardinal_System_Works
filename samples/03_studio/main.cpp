@@ -331,7 +331,7 @@ static void build_default_layout(ImGuiID dockspace_id, const ImVec2& size,
     ImGui::DockBuilderFinish(dockspace_id);
 }
 
-static void draw_dockspace(bool& first_time,
+static void draw_dockspace(bool& first_time, bool& relayout_request,
                            const std::vector<std::string>& initial_viewport_titles) {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
@@ -350,11 +350,15 @@ static void draw_dockspace(bool& first_time,
     ImGui::PopStyleVar(3);
 
     const ImGuiID dock_id = ImGui::GetID("CardinalDockSpace");
-    if (first_time) {
-        first_time = false;
-        if (ImGui::DockBuilderGetNode(dock_id) == nullptr) {
-            build_default_layout(dock_id, vp->WorkSize, initial_viewport_titles);
-        }
+    // Build the default layout on the very first run (no saved layout in the
+    // ini) OR when the user explicitly asks to reset it (View > Reset Window
+    // Layout). A layout restored from the ini is otherwise left untouched.
+    const bool build_now = relayout_request ||
+        (first_time && ImGui::DockBuilderGetNode(dock_id) == nullptr);
+    first_time       = false;
+    relayout_request = false;
+    if (build_now) {
+        build_default_layout(dock_id, vp->WorkSize, initial_viewport_titles);
     }
     ImGui::DockSpace(dock_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
 }
@@ -649,6 +653,7 @@ int main(int argc, char** argv) {
     bool show_shader_cc = false;
     bool show_world_sys = true;
     bool first_layout   = true;
+    bool relayout_request = false;   // View/Settings > Reset window layout
     bool want_quit      = false;
     u32  selected_id    = 0;
     bool open_terrain_modal = false;
@@ -2046,7 +2051,7 @@ int main(int argc, char** argv) {
         // because ImGui parents undocked windows under the last-focused
         // node when first opened.
         std::vector<std::string> initial_viewport_titles;
-        if (first_layout) {
+        if (first_layout || relayout_request) {
             initial_viewport_titles.reserve(viewports.size());
             for (const auto& vps : viewports) initial_viewport_titles.push_back(vps.title);
         }
@@ -2084,7 +2089,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        draw_dockspace(first_layout, initial_viewport_titles);
+        draw_dockspace(first_layout, relayout_request, initial_viewport_titles);
 
         // World (level) save helper — shared by File > Save World and Ctrl+S.
         // Writes the actor world to the current project's startup-world path
@@ -2438,7 +2443,13 @@ int main(int argc, char** argv) {
                 }
 
                 ImGui::SeparatorText("Layout");
-                if (ImGui::MenuItem("Reset window layout"))         first_layout = true;
+                // Window positions (docked + popped-out) persist to
+                // cardinal_studio.ini: auto-saved on exit, or on demand here.
+                if (ImGui::MenuItem("Save window layout")) {
+                    if (ImGui::GetIO().IniFilename)
+                        ImGui::SaveIniSettingsToDisk(ImGui::GetIO().IniFilename);
+                }
+                if (ImGui::MenuItem("Reset window layout"))         relayout_request = true;
                 if (ImGui::MenuItem("Editor Preferences (CVars)…")) show_options = true;
                 ImGui::EndMenu();
             }
