@@ -1582,11 +1582,27 @@ void ImGui_ImplVulkanH_CreateWindowSwapChain(VkPhysicalDevice physical_device, V
         }
         err = vkCreateSwapchainKHR(device, &info, allocator, &wd->Swapchain);
         check_vk_result(err);
-        err = vkGetSwapchainImagesKHR(device, wd->Swapchain, &wd->ImageCount, nullptr);
-        check_vk_result(err);
         VkImage backbuffers[16] = {};
-        IM_ASSERT(wd->ImageCount >= min_image_count);
-        IM_ASSERT(wd->ImageCount < IM_ARRAYSIZE(backbuffers));
+        // Cardinal: a secondary (pop-out) viewport's surface can be lost while
+        // its OS window is closing/moving (VK_ERROR_SURFACE_LOST_KHR ->
+        // INITIALIZATION_FAILED), and a bad swapchain leaves wd->ImageCount
+        // garbage. Bail GRACEFULLY — leave the window swapchain-less so the
+        // per-frame render path skips + retries it — instead of asserting and
+        // aborting the whole engine. Only the main window may take the app down.
+        wd->ImageCount = 0;
+        if (err == VK_SUCCESS)
+            err = vkGetSwapchainImagesKHR(device, wd->Swapchain, &wd->ImageCount, nullptr);
+        if (err != VK_SUCCESS || wd->ImageCount == 0 ||
+            wd->ImageCount >= (uint32_t)IM_ARRAYSIZE(backbuffers))
+        {
+            if (wd->Swapchain) { vkDestroySwapchainKHR(device, wd->Swapchain, allocator); wd->Swapchain = VK_NULL_HANDLE; }
+            if (old_swapchain)   vkDestroySwapchainKHR(device, old_swapchain, allocator);
+            wd->ImageCount     = 0;
+            wd->SemaphoreCount = 0;
+            wd->Frames.resize(0);
+            wd->FrameSemaphores.resize(0);
+            return;   // swapchain-less; ImGui_ImplVulkan_RenderWindow skips it
+        }
         err = vkGetSwapchainImagesKHR(device, wd->Swapchain, &wd->ImageCount, backbuffers);
         check_vk_result(err);
 
@@ -1693,7 +1709,10 @@ void ImGui_ImplVulkanH_CreateOrResizeWindow(VkInstance instance, VkPhysicalDevic
     (void)instance;
     ImGui_ImplVulkanH_CreateWindowSwapChain(physical_device, device, wd, allocator, width, height, min_image_count);
     //ImGui_ImplVulkan_CreatePipeline(device, allocator, VK_NULL_HANDLE, wd->RenderPass, VK_SAMPLE_COUNT_1_BIT, &wd->Pipeline, g_VulkanInitInfo.Subpass);
-    ImGui_ImplVulkanH_CreateWindowCommandBuffers(physical_device, device, wd, queue_family, allocator);
+    // Cardinal: skip per-image command buffers if the swapchain bailed (a
+    // pop-out window whose surface was lost) — nothing to render into.
+    if (wd->ImageCount > 0)
+        ImGui_ImplVulkanH_CreateWindowCommandBuffers(physical_device, device, wd, queue_family, allocator);
 }
 
 void ImGui_ImplVulkanH_DestroyWindow(VkInstance instance, VkDevice device, ImGui_ImplVulkanH_Window* wd, const VkAllocationCallbacks* allocator)
@@ -1848,12 +1867,24 @@ static void ImGui_ImplVulkan_RenderWindow(ImGuiViewport* viewport, void*)
         vd->SwapChainNeedRebuild = vd->SwapChainSuboptimal = false;
     }
 
+    // Cardinal: the (re)build above can bail with no swapchain when a pop-out
+    // window's surface was lost. Skip this viewport for the frame + retry next
+    // frame, rather than indexing empty frame data / acquiring on a null handle.
+    if (wd->Swapchain == VK_NULL_HANDLE || wd->ImageCount == 0 || wd->FrameSemaphores.Size == 0)
+    {
+        vd->SwapChainNeedRebuild = true;
+        return;
+    }
+
     ImGui_ImplVulkanH_Frame* fd = nullptr;
     ImGui_ImplVulkanH_FrameSemaphores* fsd = &wd->FrameSemaphores[wd->SemaphoreIndex];
     {
         {
             err = vkAcquireNextImageKHR(v->Device, wd->Swapchain, UINT64_MAX, fsd->ImageAcquiredSemaphore, VK_NULL_HANDLE, &wd->FrameIndex);
-            if (err == VK_ERROR_OUT_OF_DATE_KHR)
+            // Cardinal: SURFACE_LOST (pop-out window closing) is recoverable
+            // here too — rebuild next frame instead of falling through to
+            // check_vk_result + indexing with a stale FrameIndex.
+            if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_ERROR_SURFACE_LOST_KHR)
             {
                 vd->SwapChainNeedRebuild = true; // Since we are not going to swap this frame anyway, it's ok that recreation happens on next frame.
                 return;
