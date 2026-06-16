@@ -1550,7 +1550,19 @@ void ImGui_ImplVulkanH_CreateWindowSwapChain(VkPhysicalDevice physical_device, V
     {
         VkSurfaceCapabilitiesKHR cap;
         err = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, wd->Surface, &cap);
-        check_vk_result(err);
+        // Cardinal: a pop-out window's surface is lost as it closes. Bail
+        // QUIETLY (no error log, no swapchain built from garbage caps) — this is
+        // expected + handled, not a fault. Only the main window's failures log.
+        if (err != VK_SUCCESS)
+        {
+            if (old_swapchain) vkDestroySwapchainKHR(device, old_swapchain, allocator);
+            wd->Swapchain      = VK_NULL_HANDLE;
+            wd->ImageCount     = 0;
+            wd->SemaphoreCount = 0;
+            wd->Frames.resize(0);
+            wd->FrameSemaphores.resize(0);
+            return;
+        }
 
         VkSwapchainCreateInfoKHR info = {};
         info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -1581,7 +1593,9 @@ void ImGui_ImplVulkanH_CreateWindowSwapChain(VkPhysicalDevice physical_device, V
             info.imageExtent.height = wd->Height = cap.currentExtent.height;
         }
         err = vkCreateSwapchainKHR(device, &info, allocator, &wd->Swapchain);
-        check_vk_result(err);
+        // Cardinal: do NOT check_vk_result here — a closing pop-out window's lost
+        // surface makes this fail expectedly; the graceful bail below handles it
+        // without an [error] log + stack dump.
         VkImage backbuffers[16] = {};
         // Cardinal: a secondary (pop-out) viewport's surface can be lost while
         // its OS window is closing/moving (VK_ERROR_SURFACE_LOST_KHR ->
@@ -2042,7 +2056,9 @@ static void ImGui_ImplVulkan_SwapBuffers(ImGuiViewport* viewport, void*)
     info.pSwapchains = &wd->Swapchain;
     info.pImageIndices = &present_index;
     err = vkQueuePresentKHR(v->Queue, &info);
-    if (err == VK_ERROR_OUT_OF_DATE_KHR)
+    // Cardinal: SURFACE_LOST (closing pop-out window) is expected + recoverable
+    // here too — rebuild next frame, don't log it as an error.
+    if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_ERROR_SURFACE_LOST_KHR)
     {
         vd->SwapChainNeedRebuild = true;
         return;
