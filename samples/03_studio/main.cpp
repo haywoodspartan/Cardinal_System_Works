@@ -323,6 +323,11 @@ static void build_default_layout(ImGuiID dockspace_id, const ImVec2& size,
     ImGui::DockBuilderDockWindow("Stack Tracer",         bottom);
     ImGui::DockBuilderDockWindow("Function Tracer",      bottom);
     ImGui::DockBuilderDockWindow("Script Debugger",      bottom);
+    // Diagnostic panels — dock them so they don't open as floating OS-viewport
+    // windows (Profiler defaults open; closing a popped-out one used to crash).
+    ImGui::DockBuilderDockWindow("Profiler",             bottom);
+    ImGui::DockBuilderDockWindow("Memory & Budgets",     bottom);
+    ImGui::DockBuilderDockWindow("Virtual Textures",     bottom);
     ImGui::DockBuilderFinish(dockspace_id);
 }
 

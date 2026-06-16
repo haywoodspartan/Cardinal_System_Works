@@ -237,6 +237,50 @@ public:
         return true;
     }
 
+    // ---- GPU-idle guard for closing pop-out (OS-viewport) windows ----------
+    // Closing a floating panel that ImGui promoted to its own platform window
+    // tears down that viewport's swapchain in the backend's
+    // Renderer_DestroyWindow. The backend does NOT drain the GPU first, so a
+    // swapchain with frames still in flight is destroyed -> device-lost / hard
+    // crash that takes down the whole engine (repro: the Profiler panel opens
+    // floating, gets popped to its own OS window, then closing it crashes). We
+    // wrap the backend's destroy hook to idle the GPU first. Only runs on a
+    // window close (rare), so a full device-idle is fine.
+    inline static void (*s_prev_renderer_destroy_)(ImGuiViewport*) = nullptr;
+    inline static VkDevice s_idle_vk_device_ = VK_NULL_HANDLE;
+#if CARDINAL_PLATFORM_WINDOWS
+    inline static ID3D12Device*       s_idle_d3d_device_ = nullptr;
+    inline static ID3D12CommandQueue* s_idle_d3d_queue_  = nullptr;
+#endif
+    static void renderer_destroy_window_idled(ImGuiViewport* vp) {
+        if (s_idle_vk_device_ != VK_NULL_HANDLE) {
+            vkDeviceWaitIdle(s_idle_vk_device_);
+        }
+#if CARDINAL_PLATFORM_WINDOWS
+        else if (s_idle_d3d_queue_ != nullptr && s_idle_d3d_device_ != nullptr) {
+            ComPtr<ID3D12Fence> fence;
+            if (SUCCEEDED(s_idle_d3d_device_->CreateFence(
+                    0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) {
+                HANDLE evt = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+                s_idle_d3d_queue_->Signal(fence.Get(), 1);
+                if (fence->GetCompletedValue() < 1) {
+                    fence->SetEventOnCompletion(1, evt);
+                    WaitForSingleObject(evt, INFINITE);
+                }
+                if (evt) CloseHandle(evt);
+            }
+        }
+#endif
+        if (s_prev_renderer_destroy_ != nullptr) s_prev_renderer_destroy_(vp);
+    }
+    // Install after a backend's ImGui_Impl*_Init has set the default hook.
+    static void install_destroy_idle_guard() {
+        ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+        if (pio.Renderer_DestroyWindow == &renderer_destroy_window_idled) return;
+        s_prev_renderer_destroy_   = pio.Renderer_DestroyWindow;
+        pio.Renderer_DestroyWindow = &renderer_destroy_window_idled;
+    }
+
     bool init_vulkan() {
         const auto dh = rhi::vulkan_handles(device_);
         const auto sh = rhi::vulkan_handles(swapchain_);
@@ -290,6 +334,9 @@ public:
             cardinal::log::errorf("ui/studio", "ImGui_ImplVulkan_Init failed");
             return false;
         }
+        // Drain the GPU before any pop-out viewport's swapchain is destroyed.
+        s_idle_vk_device_ = dh.device;
+        install_destroy_idle_guard();
         return true;
     }
 
@@ -329,6 +376,10 @@ public:
             cardinal::log::errorf("ui/studio", "ImGui_ImplDX12_Init failed");
             return false;
         }
+        // Drain the GPU before any pop-out viewport's swapchain is destroyed.
+        s_idle_d3d_device_ = dh.device;
+        s_idle_d3d_queue_  = dh.gfx_queue;
+        install_destroy_idle_guard();
         return true;
     }
 #else
