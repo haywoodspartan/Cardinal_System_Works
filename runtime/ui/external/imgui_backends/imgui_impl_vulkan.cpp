@@ -1532,13 +1532,18 @@ void ImGui_ImplVulkanH_CreateWindowSwapChain(VkPhysicalDevice physical_device, V
 
     // We don't use ImGui_ImplVulkanH_DestroyWindow() because we want to preserve the old swapchain to create the new one.
     // Destroy old Framebuffer
-    for (uint32_t i = 0; i < wd->ImageCount; i++)
+    // Cardinal: bound the teardown by the ACTUAL vector size as well as the
+    // tracked count. A prior bail (lost surface on a closing pop-out window)
+    // can leave count != Size; indexing past the ImVector buffer is an OOB
+    // access that silently corrupts the heap (manifests as a later 0xC0000374).
+    for (uint32_t i = 0; i < wd->ImageCount && i < (uint32_t)wd->Frames.Size; i++)
         ImGui_ImplVulkanH_DestroyFrame(device, &wd->Frames[i], allocator);
-    for (uint32_t i = 0; i < wd->SemaphoreCount; i++)
+    for (uint32_t i = 0; i < wd->SemaphoreCount && i < (uint32_t)wd->FrameSemaphores.Size; i++)
         ImGui_ImplVulkanH_DestroyFrameSemaphores(device, &wd->FrameSemaphores[i], allocator);
     wd->Frames.clear();
     wd->FrameSemaphores.clear();
     wd->ImageCount = 0;
+    wd->SemaphoreCount = 0;   // Cardinal: keep count consistent with the cleared vector
     if (wd->RenderPass)
         vkDestroyRenderPass(device, wd->RenderPass, allocator);
 
@@ -1625,6 +1630,12 @@ void ImGui_ImplVulkanH_CreateWindowSwapChain(VkPhysicalDevice physical_device, V
         wd->FrameSemaphores.resize(wd->SemaphoreCount);
         memset(wd->Frames.Data, 0, wd->Frames.size_in_bytes());
         memset(wd->FrameSemaphores.Data, 0, wd->FrameSemaphores.size_in_bytes());
+        // Cardinal: a rebuild can change ImageCount/SemaphoreCount; reset the
+        // cycling indices so a stale index from the previous (differently
+        // sized) swapchain can't run past the freshly-resized vectors on the
+        // next acquire/present.
+        wd->FrameIndex     = 0;
+        wd->SemaphoreIndex = 0;
         for (uint32_t i = 0; i < wd->ImageCount; i++)
             wd->Frames[i].Backbuffer = backbuffers[i];
     }
@@ -1734,9 +1745,10 @@ void ImGui_ImplVulkanH_DestroyWindow(VkInstance instance, VkDevice device, ImGui
     vkDeviceWaitIdle(device); // FIXME: We could wait on the Queue if we had the queue in wd-> (otherwise VulkanH functions can't use globals)
     //vkQueueWaitIdle(bd->Queue);
 
-    for (uint32_t i = 0; i < wd->ImageCount; i++)
+    // Cardinal: bound by the actual vector size too (see CreateWindowSwapChain).
+    for (uint32_t i = 0; i < wd->ImageCount && i < (uint32_t)wd->Frames.Size; i++)
         ImGui_ImplVulkanH_DestroyFrame(device, &wd->Frames[i], allocator);
-    for (uint32_t i = 0; i < wd->SemaphoreCount; i++)
+    for (uint32_t i = 0; i < wd->SemaphoreCount && i < (uint32_t)wd->FrameSemaphores.Size; i++)
         ImGui_ImplVulkanH_DestroyFrameSemaphores(device, &wd->FrameSemaphores[i], allocator);
     wd->Frames.clear();
     wd->FrameSemaphores.clear();
