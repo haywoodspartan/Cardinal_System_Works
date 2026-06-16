@@ -102,6 +102,30 @@ bool canonicalize(const cardinal::string& src, cardinal::string& out,
                   cardinal::string* err = nullptr);
 
 // =============================================================================
+// Execution — compile a graph to Cardinal VM bytecode (cardinal::vm).
+//
+// The current DSL is straight-line (no branches yet), so this is a linear
+// compile: function params + every let-bound output become VM locals; numeric
+// arithmetic add/sub/mul/div compile to the VM's f64 ops, `copy` to a
+// load/store, and ANY other call compiles to a HOST CALL resolved through
+// `hosts` (operation name -> a registered vm host-fn index + arity). Numbers
+// are f64 (VM cells carry the bits); a function's return value is the f64 bits
+// of its returned expression (0 for a void return / fall-through).
+//
+// Returns false and fills `err` on an unknown operation, a host-arity mismatch,
+// or a reference to an undefined variable. The emitted bytes load() into a
+// vm::Module that vm::VM::call() runs (see tests/blueprint for the round trip).
+// =============================================================================
+struct HostBinding {
+    cardinal::string name;          // operation name as it appears in the graph
+    u32              host_index{0}; // index into the VM's host-fn table
+    u32              arity{0};      // exact arg count (verified)
+};
+
+bool compile(const Graph& g, const cardinal::vector<HostBinding>& hosts,
+             cardinal::vector<u8>& out_bytes, cardinal::string* err = nullptr);
+
+// =============================================================================
 // Document — live, bidirectional graph<->source binding.
 //
 // Keeps a graph and its source buffer in sync in real time: the editor mutates

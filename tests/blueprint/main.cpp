@@ -10,11 +10,25 @@
 // =============================================================================
 
 #include <cardinal/blueprint/blueprint.hpp>
+#include <cardinal/vm/vm.hpp>
 #include <cardinal/core/diag/log.hpp>
+
+#include <cstring>   // std::memcpy (f64<->i64 cell reinterpret)
 
 namespace {
 
 namespace bp = cardinal::blueprint;
+
+cardinal::i64 f2i(cardinal::f64 v) { cardinal::i64 r; std::memcpy(&r, &v, 8); return r; }
+cardinal::f64 i2f(cardinal::i64 v) { cardinal::f64 r; std::memcpy(&r, &v, 8); return r; }
+
+// Host fn for the host-call test: records its (f64) argument, returns it.
+cardinal::f64 g_host_seen = 0.0;
+cardinal::i64 host_emit(cardinal::vm::HostContext&, const cardinal::i64* args,
+                        cardinal::u32 n) noexcept {
+    if (n >= 1) g_host_seen = i2f(args[0]);
+    return n >= 1 ? args[0] : 0;
+}
 
 int g_checks = 0, g_fail = 0;
 void check_impl(bool ok, const char* e, int l) {
@@ -228,6 +242,120 @@ void test_document_live_sync() {
     CHECK(doc.ok());
 }
 
+// Execution: compile a graph to VM bytecode + run it, asserting the result.
+void test_compile_and_run_arith() {
+    // func calc(a, b) { let s = add(a, b)  let p = mul(s, 2)  return p }
+    bp::Graph g;
+    bp::Function f; f.name = "calc";
+    f.params.push_back({ "a", "" }); f.params.push_back({ "b", "" });
+    { bp::Node n; n.kind = bp::NodeKind::Call; n.out = "s"; n.fn = "add";
+      n.args.push_back(bp::Arg::ref("a")); n.args.push_back(bp::Arg::ref("b"));
+      f.nodes.push_back(n); }
+    { bp::Node n; n.kind = bp::NodeKind::Call; n.out = "p"; n.fn = "mul";
+      n.args.push_back(bp::Arg::ref("s")); n.args.push_back(bp::Arg::lit(2));
+      f.nodes.push_back(n); }
+    { bp::Node n; n.kind = bp::NodeKind::Return; n.args.push_back(bp::Arg::ref("p"));
+      f.nodes.push_back(n); }
+    g.funcs.push_back(cardinal::move(f));
+
+    cardinal::vector<cardinal::u8> bytes;
+    cardinal::string err;
+    CHECK(bp::compile(g, {}, bytes, &err));
+    if (!err.empty()) cardinal::log::errorf("bptest", "compile err: %s", err.c_str());
+
+    cardinal::vm::Limits lim{};
+    auto mod = cardinal::vm::load(bytes.data(), bytes.size(), lim, &err);
+    CHECK(mod != nullptr);
+    if (mod == nullptr) { cardinal::log::errorf("bptest", "load err: %s", err.c_str()); return; }
+
+    auto vm = cardinal::vm::VM::create(lim);
+    const cardinal::i64 fi = cardinal::vm::module_find_func(*mod, "calc");
+    CHECK(fi >= 0);
+    cardinal::i64 args[2] = { f2i(3.0), f2i(4.0) };
+    cardinal::i64 ret = 0;
+    const auto trap = vm->call(*mod, static_cast<cardinal::u32>(fi), args, 2, &ret);
+    CHECK(trap == cardinal::vm::Trap::Finished || trap == cardinal::vm::Trap::Halted);
+    CHECK(i2f(ret) == 14.0);   // (3 + 4) * 2
+}
+
+// Execution: a host call (exec node) actually invokes the bound host fn.
+void test_compile_hostcall() {
+    // func act(x) { emit(mul(x, 10)) }
+    bp::Graph g;
+    bp::Function f; f.name = "act"; f.params.push_back({ "x", "" });
+    { bp::Node n; n.kind = bp::NodeKind::Call; n.out = "y"; n.fn = "mul";
+      n.args.push_back(bp::Arg::ref("x")); n.args.push_back(bp::Arg::lit(10));
+      f.nodes.push_back(n); }
+    { bp::Node n; n.kind = bp::NodeKind::Call; n.fn = "emit";   // exec, no output
+      n.args.push_back(bp::Arg::ref("y")); f.nodes.push_back(n); }
+    g.funcs.push_back(cardinal::move(f));
+
+    cardinal::vector<bp::HostBinding> hosts;
+    hosts.push_back({ "emit", 0u, 1u });
+    cardinal::vector<cardinal::u8> bytes;
+    cardinal::string err;
+    CHECK(bp::compile(g, hosts, bytes, &err));
+
+    cardinal::vm::Limits lim{};
+    auto mod = cardinal::vm::load(bytes.data(), bytes.size(), lim, &err);
+    CHECK(mod != nullptr);
+    if (mod == nullptr) return;
+    auto vm = cardinal::vm::VM::create(lim);
+    cardinal::vm::HostFnDesc desc{ "emit", host_emit, 1u };
+    vm->set_host_fns(&desc, 1);
+    const cardinal::i64 fi = cardinal::vm::module_find_func(*mod, "act");
+    CHECK(fi >= 0);
+    g_host_seen = 0.0;
+    cardinal::i64 args[1] = { f2i(5.0) };
+    cardinal::i64 ret = 0;
+    const auto trap = vm->call(*mod, static_cast<cardinal::u32>(fi), args, 1, &ret);
+    CHECK(trap == cardinal::vm::Trap::Finished || trap == cardinal::vm::Trap::Halted);
+    CHECK(g_host_seen == 50.0);   // emit saw mul(5, 10)
+}
+
+// Compile errors: unknown op (no binding) + undefined variable.
+void test_compile_errors() {
+    cardinal::vector<cardinal::u8> bytes;
+    cardinal::string err;
+    {   // unknown operation with no host binding
+        bp::Graph g; bp::Function f; f.name = "u";
+        bp::Node n; n.kind = bp::NodeKind::Call; n.fn = "nope";
+        f.nodes.push_back(n); g.funcs.push_back(cardinal::move(f));
+        CHECK(!bp::compile(g, {}, bytes, &err));
+        CHECK(!err.empty());
+    }
+    {   // reference to an undefined variable
+        err.clear();
+        bp::Graph g; bp::Function f; f.name = "u";
+        bp::Node n; n.kind = bp::NodeKind::Return; n.args.push_back(bp::Arg::ref("ghost"));
+        f.nodes.push_back(n); g.funcs.push_back(cardinal::move(f));
+        CHECK(!bp::compile(g, {}, bytes, &err));
+        CHECK(!err.empty());
+    }
+}
+
+// End-to-end: hand-written SOURCE -> parse -> compile -> run.
+void test_source_to_execution() {
+    const cardinal::string src =
+        "func calc(a, b) {\n"
+        "  return add(mul(a, b), 1)\n"   // nested -> flattened, then compiled
+        "}\n";
+    bp::Graph g; cardinal::string err;
+    CHECK(bp::parse_source(src, g, &err));
+    cardinal::vector<cardinal::u8> bytes;
+    CHECK(bp::compile(g, {}, bytes, &err));
+    cardinal::vm::Limits lim{};
+    auto mod = cardinal::vm::load(bytes.data(), bytes.size(), lim, &err);
+    CHECK(mod != nullptr);
+    if (mod == nullptr) return;
+    auto vm = cardinal::vm::VM::create(lim);
+    const cardinal::i64 fi = cardinal::vm::module_find_func(*mod, "calc");
+    cardinal::i64 args[2] = { f2i(6.0), f2i(7.0) };
+    cardinal::i64 ret = 0;
+    vm->call(*mod, static_cast<cardinal::u32>(fi), args, 2, &ret);
+    CHECK(i2f(ret) == 43.0);   // 6*7 + 1
+}
+
 }  // namespace
 
 int main() {
@@ -237,6 +365,10 @@ int main() {
     test_parse_errors();
     test_multi_function();
     test_document_live_sync();
+    test_compile_and_run_arith();
+    test_compile_hostcall();
+    test_compile_errors();
+    test_source_to_execution();
     if (g_fail == 0) {
         cardinal::log::infof("bptest", "OK  %d checks passed", g_checks);
         return 0;

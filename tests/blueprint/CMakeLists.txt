@@ -3,6 +3,7 @@
 add_executable(Cardinal_Test_Blueprint main.cpp)
 target_link_libraries(Cardinal_Test_Blueprint PRIVATE
     cardinal::blueprint
+    cardinal::vm           # run the compiled bytecode end-to-end
     cardinal::core
     cardinal::compile_flags)
 set_target_properties(Cardinal_Test_Blueprint PROPERTIES FOLDER tests)
