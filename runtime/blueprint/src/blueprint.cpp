@@ -270,8 +270,11 @@ private:
             Primary p;
             if (!parse_primary(p)) return false;
             if (p.node_idx >= 0) {
-                // RHS was a call: name that node directly (no alias node).
+                // RHS was a call: name that node directly (no alias node) and
+                // reclaim its throwaway temp number (it was the last allocated),
+                // so generated temps stay densely numbered per statement.
                 fn_->nodes[static_cast<usize>(p.node_idx)].out = cardinal::move(name);
+                if (temp_n_ > 0) --temp_n_;
             } else if (p.arg.is_literal) {
                 Node n; n.kind = NodeKind::Literal; n.out = cardinal::move(name);
                 n.literal = p.arg.literal; n.id = next_id_++;
@@ -302,6 +305,7 @@ private:
             isize idx = -1;
             if (!parse_call(cardinal::move(name), idx)) return false;
             fn_->nodes[static_cast<usize>(idx)].out.clear();   // exec node, no output
+            if (temp_n_ > 0) --temp_n_;                        // reclaim its temp number
             return true;
         }
         return fail("expected 'let', 'return', or a call");

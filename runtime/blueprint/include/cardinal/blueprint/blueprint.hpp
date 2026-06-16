@@ -101,4 +101,66 @@ bool parse_source(const cardinal::string& src, Graph& out, cardinal::string* err
 bool canonicalize(const cardinal::string& src, cardinal::string& out,
                   cardinal::string* err = nullptr);
 
+// =============================================================================
+// Document — live, bidirectional graph<->source binding.
+//
+// Keeps a graph and its source buffer in sync in real time: the editor mutates
+// ONE side and the Document re-derives the other. It caches the text it last
+// generated so it can tell its OWN writes from genuine user edits — without
+// that, regenerating source after a block edit would read back as a "source
+// edit" and loop forever. The graph is the model; source is the editable view.
+//
+//   block edit:   doc.commit_graph(g)      -> source() becomes canonical text
+//   source edit:  doc.edit_source(text)    -> graph() re-derived (if it parses)
+//
+// On a source syntax error the graph is left intact, error() holds "line N: ...",
+// and source() retains the user's in-progress text so they can fix it.
+// =============================================================================
+class Document {
+public:
+    Document() = default;
+    explicit Document(Graph g) { commit_graph(cardinal::move(g)); }
+
+    const Graph&            graph()  const noexcept { return graph_; }
+    const cardinal::string& source() const noexcept { return source_; }
+    const cardinal::string& error()  const noexcept { return error_; }
+    bool                    ok()     const noexcept { return error_.empty(); }
+
+    // The blocks/graph were edited: adopt `g` and regenerate canonical source.
+    void commit_graph(Graph g) {
+        graph_  = cardinal::move(g);
+        source_ = generate_source(graph_);
+        gen_    = source_;
+        error_.clear();
+    }
+
+    // The source buffer was edited to `text`. If `text` is exactly what we last
+    // generated, it's our own echo -> no-op (returns false). Otherwise parse it:
+    //   success -> adopt the new graph, re-canonicalize source(), clear error,
+    //              return true (the graph changed);
+    //   failure -> keep the graph, set error(), hold `text` in source() so the
+    //              user can keep editing, return false.
+    bool edit_source(const cardinal::string& text) {
+        if (text == gen_) { source_ = text; return false; }   // our own write
+        Graph g;
+        cardinal::string err;
+        if (!parse_source(text, g, &err)) {
+            source_ = text;                  // keep the in-progress (broken) text
+            error_  = cardinal::move(err);
+            return false;
+        }
+        graph_  = cardinal::move(g);
+        source_ = generate_source(graph_);   // normalize to canonical form
+        gen_    = source_;
+        error_.clear();
+        return true;
+    }
+
+private:
+    Graph            graph_;
+    cardinal::string source_;
+    cardinal::string gen_;      // last text generate_source produced (echo guard)
+    cardinal::string error_;
+};
+
 }  // namespace cardinal::blueprint

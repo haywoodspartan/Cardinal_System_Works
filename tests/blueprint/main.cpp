@@ -176,6 +176,58 @@ void test_multi_function() {
     CHECK(graphs_equal(g, g2));
 }
 
+// Document: live bidirectional sync, echo guard, error-keeps-graph.
+void test_document_live_sync() {
+    // Start from a graph (block-built): source is generated canonical text.
+    bp::Graph g;
+    { bp::Function f; f.name = "run"; f.params.push_back({ "dt", "" });
+      bp::Node a; a.kind = bp::NodeKind::Call; a.out = "v"; a.fn = "scale";
+      a.args.push_back(bp::Arg::ref("dt")); a.args.push_back(bp::Arg::lit(2));
+      f.nodes.push_back(a);
+      g.funcs.push_back(cardinal::move(f)); }
+    bp::Document doc(cardinal::move(g));
+    CHECK(doc.ok());
+    CHECK(doc.source().find("let v = scale(dt, 2)") != cardinal::string::npos);
+
+    // Echoing our own generated text back is a no-op (no feedback loop).
+    CHECK(!doc.edit_source(doc.source()));
+    CHECK(doc.ok());
+
+    // A genuine SOURCE edit re-derives the graph (add a node + nesting).
+    const cardinal::string edited =
+        "func run(dt) {\n"
+        "  let v = scale(dt, 2)\n"
+        "  move(add(v, 1))\n"
+        "}\n";
+    CHECK(doc.edit_source(edited));
+    CHECK(doc.ok());
+    CHECK(doc.graph().funcs[0].nodes.size() == 3u);   // scale, _t0=add, move
+    // Buffer was normalized to canonical form (nesting flattened).
+    CHECK(doc.source().find("let _t0 = add(v, 1)") != cardinal::string::npos);
+    CHECK(doc.source().find("move(_t0)") != cardinal::string::npos);
+    // ...and re-echoing the normalized buffer is again a no-op.
+    CHECK(!doc.edit_source(doc.source()));
+
+    // A BLOCK edit (graph mutated by the host) regenerates source.
+    bp::Graph g2 = doc.graph();
+    { bp::Node r; r.kind = bp::NodeKind::Return; r.args.push_back(bp::Arg::ref("v"));
+      g2.funcs[0].nodes.push_back(r); }
+    doc.commit_graph(cardinal::move(g2));
+    CHECK(doc.source().find("return v") != cardinal::string::npos);
+
+    // A broken source edit keeps the graph + reports the error + holds the text.
+    const cardinal::usize nodes_before = doc.graph().funcs[0].nodes.size();
+    CHECK(!doc.edit_source("func run(dt) {\n  let = oops\n}\n"));
+    CHECK(!doc.ok());
+    CHECK(!doc.error().empty());
+    CHECK(doc.graph().funcs[0].nodes.size() == nodes_before);   // graph intact
+    CHECK(doc.source().find("oops") != cardinal::string::npos); // user text kept
+
+    // Recovering with valid source clears the error.
+    CHECK(doc.edit_source("func run(dt) {\n  ping()\n}\n"));
+    CHECK(doc.ok());
+}
+
 }  // namespace
 
 int main() {
@@ -184,6 +236,7 @@ int main() {
     test_literals_and_alias();
     test_parse_errors();
     test_multi_function();
+    test_document_live_sync();
     if (g_fail == 0) {
         cardinal::log::infof("bptest", "OK  %d checks passed", g_checks);
         return 0;
