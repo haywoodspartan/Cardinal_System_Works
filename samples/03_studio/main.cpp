@@ -86,6 +86,8 @@ namespace cardinal::input {
 #include <cardinal/ui/cui_render.hpp>       // Cardinal Slate -> ImGui draw bridge
 #include <cardinal/cui/context.hpp>         // Cardinal Slate (our own UI framework)
 #include <cardinal/cui/widgets.hpp>
+#include <cardinal/blueprint/blueprint.hpp> // interoperable visual scripting
+#include <cardinal/vm/vm.hpp>               // run compiled blueprints
 #include <cardinal/window/window.hpp>
 
 #include <imgui.h>
@@ -668,6 +670,30 @@ int main(int argc, char** argv) {
     // state lives out here so it outlives the widget tree built once below.
     bool   show_slate_preview = false;
     bool   slate_check        = true;
+
+    // ---- Blueprint panel (interoperable visual scripting) ------------------
+    // A live blueprint::Document holds the graph + its editable source; the
+    // panel edits ONE side and the Document re-derives the other in real time.
+    // Seeded with a small example; "Compile & Run" lowers it to VM bytecode and
+    // executes the first function.
+    bool             show_blueprint = false;
+    bool             bp_src_dirty   = false;   // editor buffer changed this frame
+    char             bp_src_buf[4096];
+    cardinal::string bp_run_result;            // last Compile & Run outcome
+    cardinal::blueprint::Document bp_doc;
+    {
+        cardinal::blueprint::Graph seed;
+        if (cardinal::blueprint::parse_source(
+                "func calc(a, b) {\n"
+                "  let s = add(a, b)\n"
+                "  let p = mul(s, 2)\n"
+                "  return p\n"
+                "}\n", seed, nullptr)) {
+            bp_doc.commit_graph(cardinal::move(seed));
+        }
+        cardinal::strncpy(bp_src_buf, bp_doc.source().c_str(), sizeof(bp_src_buf) - 1);
+        bp_src_buf[sizeof(bp_src_buf) - 1] = '\0';
+    }
     float  slate_val          = 0.5f;
     int    slate_clicks       = 0;
     cardinal::cui::Ui     slate_ui;
@@ -2251,6 +2277,7 @@ int main(int argc, char** argv) {
                 ImGui::MenuItem("Console",             nullptr, &show_console);
                 ImGui::MenuItem("Options / Settings",  nullptr, &show_options);
                 ImGui::MenuItem("Cardinal Slate (preview)", nullptr, &show_slate_preview);
+                ImGui::MenuItem("Blueprint",                nullptr, &show_blueprint);
                 ImGui::MenuItem("Code Sandbox",        nullptr, &show_cppscript);
                 ImGui::Separator();
                 ImGui::MenuItem("Render Pipeline",     nullptr, &show_pipeline);
@@ -3415,6 +3442,118 @@ int main(int argc, char** argv) {
         if (!any_maximized && show_stats)    studio->draw_stats_panel("Stats", &show_stats);
         if (!any_maximized && show_options)
             cardinal::ui::panels::options_panel::draw("Options / Settings", &show_options);
+
+        // Blueprint — interoperable visual scripting. Left: the editable SOURCE
+        // (bound to blueprint::Document — typing re-derives the graph live).
+        // Right: the GRAPH the source parses to (the "blocks"), with buttons
+        // that mutate the graph and regenerate the source (the other direction).
+        // Compile & Run lowers it to VM bytecode and executes the first func.
+        if (!any_maximized && show_blueprint) {
+            if (ImGui::Begin("Blueprint", &show_blueprint)) {
+                namespace bp = cardinal::blueprint;
+                const float col_w = ImGui::GetContentRegionAvail().x * 0.5f - 4.0f;
+
+                // ---- Source pane (source -> graph) -----------------------------
+                ImGui::BeginChild("bp_src", ImVec2(col_w, -1), true);
+                ImGui::TextDisabled("Source (editable)");
+                const ImVec2 ed = ImGui::GetContentRegionAvail();
+                if (ImGui::InputTextMultiline("##bpsrc", bp_src_buf, sizeof(bp_src_buf),
+                        ImVec2(ed.x, ed.y - 28.0f))) {
+                    bp_src_dirty = true;   // adopt on this frame
+                }
+                // Push edits into the Document (echo-guarded; keeps graph on error).
+                if (bp_src_dirty) {
+                    bp_doc.edit_source(cardinal::string(bp_src_buf));
+                    if (bp_doc.ok()) {
+                        // Re-sync the buffer to the normalized (canonical) text.
+                        cardinal::strncpy(bp_src_buf, bp_doc.source().c_str(),
+                                          sizeof(bp_src_buf) - 1);
+                        bp_src_buf[sizeof(bp_src_buf) - 1] = '\0';
+                    }
+                    bp_src_dirty = false;
+                }
+                if (!bp_doc.ok())
+                    ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.4f, 1.0f),
+                                       "%s", bp_doc.error().c_str());
+                else
+                    ImGui::TextDisabled("parsed OK");
+                ImGui::EndChild();
+
+                ImGui::SameLine();
+
+                // ---- Graph pane (graph -> source) ------------------------------
+                ImGui::BeginChild("bp_graph", ImVec2(0, -1), true);
+                ImGui::TextDisabled("Graph (blocks)");
+                const bp::Graph& g = bp_doc.graph();
+                for (const bp::Function& fn : g.funcs) {
+                    ImGui::Separator();
+                    ImGui::Text("func %s", fn.name.c_str());
+                    int row = 0;
+                    for (const bp::Node& n : fn.nodes) {
+                        cardinal::string line;
+                        switch (n.kind) {
+                        case bp::NodeKind::Literal: line = n.out + " = " + (
+                            [&]{ char b[32]; std::snprintf(b,sizeof(b),"%g",n.literal); return cardinal::string(b);}() ); break;
+                        case bp::NodeKind::Return:  line = "return"; break;
+                        case bp::NodeKind::Call:
+                            if (!n.out.empty()) { line = n.out; line += " = "; }
+                            line += n.fn; line += "(";
+                            for (cardinal::usize i=0;i<n.args.size();++i){ if(i)line+=", ";
+                                if(n.args[i].is_literal){char b[32];std::snprintf(b,sizeof(b),"%g",n.args[i].literal);line+=b;}
+                                else line+=n.args[i].var; }
+                            line += ")"; break;
+                        }
+                        ImGui::BulletText("[%d] %s", row++, line.c_str());
+                    }
+                }
+                ImGui::Separator();
+                // Block edit (graph -> source): append a node, regenerate source.
+                if (ImGui::SmallButton("+ add(a, b)") && !g.funcs.empty()) {
+                    bp::Graph g2 = g;
+                    bp::Node n; n.kind = bp::NodeKind::Call; n.out = "n";
+                    n.fn = "add"; n.args.push_back(bp::Arg::ref("a"));
+                    n.args.push_back(bp::Arg::ref("b"));
+                    // insert before a trailing return if present, else append
+                    auto& nodes = g2.funcs[0].nodes;
+                    usize at = nodes.size();
+                    if (!nodes.empty() && nodes.back().kind == bp::NodeKind::Return) --at;
+                    nodes.insert(nodes.begin() + static_cast<cardinal::isize>(at), n);
+                    bp_doc.commit_graph(cardinal::move(g2));
+                    cardinal::strncpy(bp_src_buf, bp_doc.source().c_str(), sizeof(bp_src_buf)-1);
+                    bp_src_buf[sizeof(bp_src_buf)-1] = '\0';
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Compile & Run")) {
+                    cardinal::vector<cardinal::u8> bytes; cardinal::string cerr;
+                    if (!bp::compile(bp_doc.graph(), {}, bytes, &cerr)) {
+                        bp_run_result = "compile error: " + cerr;
+                    } else {
+                        cardinal::vm::Limits lim{};
+                        auto mod = cardinal::vm::load(bytes.data(), bytes.size(), lim, &cerr);
+                        if (mod == nullptr) { bp_run_result = "load error: " + cerr; }
+                        else {
+                            auto vmrun = cardinal::vm::VM::create(lim);
+                            const i64 fi = cardinal::vm::module_find_func(*mod, "calc");
+                            if (fi < 0) bp_run_result = "no func 'calc'";
+                            else {
+                                f64 a = 3.0, b = 4.0; i64 ia, ib;
+                                cardinal::memcpy(&ia,&a,8); cardinal::memcpy(&ib,&b,8);
+                                i64 ar[2] = { ia, ib }; i64 ret = 0;
+                                vmrun->call(*mod, static_cast<u32>(fi), ar, 2, &ret);
+                                f64 rv; cardinal::memcpy(&rv,&ret,8);
+                                char b2[96];
+                                std::snprintf(b2,sizeof(b2),"calc(3,4) = %g",rv);
+                                bp_run_result = b2;
+                            }
+                        }
+                    }
+                }
+                if (!bp_run_result.empty())
+                    ImGui::TextWrapped("%s", bp_run_result.c_str());
+                ImGui::EndChild();
+            }
+            ImGui::End();
+        }
 
         // Cardinal Slate (cui) live preview — our own retained-mode UI framework
         // rendered inside this ImGui window via the cui->ImGui bridge. Proves the
