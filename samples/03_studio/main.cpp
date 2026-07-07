@@ -706,22 +706,59 @@ int main(int argc, char** argv) {
     }
     float  slate_val          = 0.5f;
     int    slate_clicks       = 0;
-    cardinal::cui::Ui     slate_ui;
-    cardinal::cui::Label* slate_clicks_lbl = nullptr;
+    cardinal::cui::Ui       slate_ui;
+    cardinal::cui::Label*   slate_clicks_lbl = nullptr;
+    cardinal::cui::Label*   slate_status_lbl = nullptr;
+    cardinal::cui::Combo*   slate_combo      = nullptr;
+    cardinal::cui::MenuBar* slate_menubar    = nullptr;
     {
         using namespace cardinal::cui;
         auto panel = cardinal::make_unique<Panel>(slate_ui.theme().panel_bg, Edges::all(10.0f));
-        auto stack = cardinal::make_unique<Stack>(Axis::Vertical, 8.0f);
-        stack->add(cardinal::make_unique<Label>("Cardinal Slate - live (our own UI framework)"));
-        stack->add(cardinal::make_unique<Button>("Click me", [&slate_clicks]() { ++slate_clicks; }));
+        auto tabs  = cardinal::make_unique<Tabs>();
+
+        // -- "Widgets" page: the full control set, incl. slice-3 additions.
+        auto page = cardinal::make_unique<Stack>(Axis::Vertical, 8.0f);
+        auto mb = cardinal::make_unique<MenuBar>();
+        const int m_file = mb->add_menu("File");
+        mb->add_item(m_file, "Open");
+        mb->add_item(m_file, "Save");
+        const int m_edit = mb->add_menu("Edit");
+        mb->add_item(m_edit, "Undo");
+        mb->set_on_item([&slate_status_lbl](int m, int i) {
+            if (slate_status_lbl)
+                slate_status_lbl->set_text("menu " + std::to_string(m) +
+                                           " item " + std::to_string(i));
+        });
+        slate_menubar = static_cast<MenuBar*>(page->add(cardinal::move(mb)));
+        page->add(cardinal::make_unique<Label>("Cardinal Slate - live (our own UI framework)"));
+        page->add(cardinal::make_unique<Button>("Click me", [&slate_clicks]() { ++slate_clicks; }));
         slate_clicks_lbl = static_cast<Label*>(
-            stack->add(cardinal::make_unique<Label>("clicks: 0")));
-        stack->add(cardinal::make_unique<Checkbox>("Enabled", &slate_check));
-        stack->add(cardinal::make_unique<Slider>(&slate_val, 0.0f, 1.0f));
+            page->add(cardinal::make_unique<Label>("clicks: 0")));
+        slate_status_lbl = static_cast<Label*>(
+            page->add(cardinal::make_unique<Label>("status: -")));
+        page->add(cardinal::make_unique<Checkbox>("Enabled", &slate_check));
+        page->add(cardinal::make_unique<Slider>(&slate_val, 0.0f, 1.0f));
+        auto combo = cardinal::make_unique<Combo>();
+        combo->set_items({ "Solid", "Wireframe", "Unlit" });
+        combo->set_placeholder("view mode...");
+        combo->set_on_select([&slate_status_lbl](int i) {
+            if (slate_status_lbl)
+                slate_status_lbl->set_text("combo -> " + std::to_string(i));
+        });
+        slate_combo = static_cast<Combo*>(page->add(cardinal::move(combo)));
         auto field = cardinal::make_unique<TextField>();
         field->set_placeholder("type here (click to focus)...");
-        stack->add(cardinal::move(field));
-        panel->add(cardinal::move(stack));
+        page->add(cardinal::move(field));
+        tabs->add_tab("Widgets", cardinal::move(page));
+
+        // -- "About" page: proves tab switching hides/shows whole subtrees.
+        auto about = cardinal::make_unique<Stack>(Axis::Vertical, 8.0f);
+        about->add(cardinal::make_unique<Label>("Cardinal Slate (cui)"));
+        about->add(cardinal::make_unique<Label>("Retained-mode, engine-owned UI."));
+        about->add(cardinal::make_unique<Label>("This panel is drawn by cui itself."));
+        tabs->add_tab("About", cardinal::move(about));
+
+        panel->add(cardinal::move(tabs));
         slate_ui.set_root(cardinal::move(panel));
     }
 
@@ -3586,6 +3623,19 @@ int main(int argc, char** argv) {
 
                 slate_ui.layout(size);
 
+                // Popup contract: while a dropdown is open its widget wins
+                // input + paints on top (Ui::set_popup). Refreshed again after
+                // update_input so paint sees this frame's open state.
+                auto refresh_popup = [&]() {
+                    cardinal::cui::Widget* pop = nullptr;
+                    if (slate_combo != nullptr && slate_combo->open())
+                        pop = slate_combo;
+                    else if (slate_menubar != nullptr && slate_menubar->open_menu() >= 0)
+                        pop = slate_menubar;
+                    slate_ui.set_popup(pop);
+                };
+                refresh_popup();
+
                 const ImVec2 m = ImGui::GetMousePos();
                 cardinal::cui::InputState in;
                 in.mouse      = { m.x - origin.x, m.y - origin.y };
@@ -3608,6 +3658,7 @@ int main(int argc, char** argv) {
                     in.key_escape    = ImGui::IsKeyPressed(ImGuiKey_Escape);
                 }
                 slate_ui.update_input(in);
+                refresh_popup();   // open/close may have toggled this frame
 
                 cardinal::cui::DrawList dl;
                 slate_ui.paint(dl);

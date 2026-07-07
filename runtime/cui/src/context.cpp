@@ -12,7 +12,11 @@ void Ui::layout(Vec2 screen_size) {
 }
 
 void Ui::update_input(const InputState& in) {
-    hovered_ = root_ ? root_->hit_test(in.mouse) : nullptr;
+    // The popped widget (open dropdown) gets first claim on the cursor; the
+    // tree is only consulted where the popup doesn't hit.
+    hovered_ = nullptr;
+    if (popup_ != nullptr) hovered_ = popup_->hit_test(in.mouse);
+    if (hovered_ == nullptr && root_) hovered_ = root_->hit_test(in.mouse);
 
     // Route the mouse wheel to the deepest scroll container under the cursor.
     if (in.scroll != 0.0f && root_ != nullptr) {
@@ -60,6 +64,9 @@ void Ui::paint(DrawList& dl) {
     ctx.ui    = this;
     dl.rect_filled(root_->rect(), theme_.window_bg, 0.0f);   // backdrop (full alpha)
     root_->paint_tree(ctx);                                  // cascades alpha down
+    // Repaint the popped widget on top so its dropdown overlays later siblings
+    // (tree order would otherwise bury it).
+    if (popup_ != nullptr) popup_->paint_tree(ctx);
 }
 
 }  // namespace cardinal::cui

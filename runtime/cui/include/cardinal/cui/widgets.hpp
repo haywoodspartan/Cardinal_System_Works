@@ -10,7 +10,8 @@
 //   Checkbox — bound bool toggle with a label
 //   Slider   — bound float in [min,max] with a draggable knob
 //
-// More widgets (text input, list/table, dock, tabs) come in later phases.
+// Later phases added: ScrollPanel, TextField, ListView, TreeView, Combo,
+// MenuBar, Tabs. Still to come: dock, table, multiline text.
 // =============================================================================
 
 #include <cardinal/core/types.hpp>
@@ -266,6 +267,139 @@ private:
     Vec2  press_{};
     bool  press_valid_{false};
     cardinal::function<void(int)> on_select_;
+};
+
+// Combo — dropdown selector. Closed it's a one-line control (current item +
+// arrow); clicking opens an item list BELOW it. While open the widget extends
+// its own rect over the dropdown so the rows stay hit-testable; hosts should
+// hand it to Ui::set_popup while open so it also wins input/paint over later
+// siblings. Click-away and Escape close via focus loss (focusable widget).
+class Combo : public Widget {
+public:
+    Combo() = default;
+    void set_items(cardinal::vector<cardinal::string> items) {
+        items_ = cardinal::move(items);
+        if (selected_ >= static_cast<int>(items_.size())) selected_ = -1;
+    }
+    void add_item(cardinal::string item) { items_.push_back(cardinal::move(item)); }
+    const cardinal::vector<cardinal::string>& items() const noexcept { return items_; }
+
+    int  selected() const noexcept { return selected_; }
+    void set_selected(int i) {
+        selected_ = (i >= 0 && i < static_cast<int>(items_.size())) ? i : -1;
+    }
+    void set_on_select(cardinal::function<void(int)> f) { on_select_ = cardinal::move(f); }
+    void set_placeholder(cardinal::string p) { placeholder_ = cardinal::move(p); }
+    bool open() const noexcept { return open_; }
+
+    Vec2 measure(const Constraints& c) override;
+    void arrange(const Rect& r) override;      // intrinsic header height + dropdown
+    void paint(PaintContext& ctx) override;
+    bool interactive() const noexcept override { return true; }
+    bool focusable()   const noexcept override { return true; }
+    void on_drag(Vec2 mouse) override { press_ = mouse; press_valid_ = true; }
+    void on_click() override;
+    void on_focus_changed(bool focused) override { if (!focused) open_ = false; }
+
+private:
+    float header_h() const noexcept;
+    cardinal::vector<cardinal::string> items_;
+    cardinal::string placeholder_{"Select..."};
+    int   selected_{-1};
+    bool  open_{false};
+    float min_width_{160.0f};
+    float font_size_{14.0f};
+    float row_h_{22.0f};
+    float arrow_w_{16.0f};
+    Edges pad_{8, 4, 8, 4};
+    Vec2  press_{};
+    bool  press_valid_{false};
+    cardinal::function<void(int)> on_select_;
+};
+
+// MenuBar — horizontal bar of menu titles; clicking a title drops its item
+// list below the bar. add_menu returns a menu handle; on_item fires with
+// (menu, item). Same popup contract as Combo: extends rect_ while open, hosts
+// pass it to Ui::set_popup, click-away/Escape close via focus loss. A stray
+// click inside the extended region but outside the popup just closes it.
+class MenuBar : public Widget {
+public:
+    MenuBar() = default;
+    int  add_menu(cardinal::string title) {
+        menus_.push_back(Menu{ cardinal::move(title), {} });
+        return static_cast<int>(menus_.size()) - 1;
+    }
+    void add_item(int menu, cardinal::string item) {
+        if (menu >= 0 && menu < static_cast<int>(menus_.size()))
+            menus_[static_cast<usize>(menu)].items.push_back(cardinal::move(item));
+    }
+    void set_on_item(cardinal::function<void(int, int)> f) { on_item_ = cardinal::move(f); }
+    int  open_menu() const noexcept { return open_; }
+
+    Vec2 measure(const Constraints& c) override;
+    void arrange(const Rect& r) override;      // bar height + open popup
+    void paint(PaintContext& ctx) override;
+    bool interactive() const noexcept override { return true; }
+    bool focusable()   const noexcept override { return true; }
+    void on_drag(Vec2 mouse) override { press_ = mouse; press_valid_ = true; }
+    void on_click() override;
+    void on_focus_changed(bool focused) override { if (!focused) open_ = -1; }
+
+private:
+    struct Menu {
+        cardinal::string                   title;
+        cardinal::vector<cardinal::string> items;
+    };
+    float title_w(int i) const noexcept;   // span width of title i (incl. padding)
+    float title_x(int i) const noexcept;   // span left edge, relative to rect_.left()
+    Rect  popup_rect() const noexcept;     // valid while open_ >= 0
+
+    cardinal::vector<Menu> menus_;
+    int   open_{-1};
+    float bar_h_{24.0f};
+    float row_h_{22.0f};
+    float font_size_{14.0f};
+    float title_pad_{10.0f};
+    float item_pad_{10.0f};
+    Vec2  press_{};
+    bool  press_valid_{false};
+    cardinal::function<void(int, int)> on_item_;
+};
+
+// Tabs — a header strip of tab labels over a content region showing one page
+// at a time. add_tab(label, content) appends a page; non-selected pages are
+// hidden (visible=false hides them from paint AND hit-testing). No popups —
+// plain in-flow widget.
+class Tabs : public Widget {
+public:
+    Tabs() = default;
+    Widget* add_tab(cardinal::string label, cardinal::unique_ptr<Widget> content);
+    int  count() const noexcept { return static_cast<int>(labels_.size()); }
+    int  selected() const noexcept { return selected_; }
+    void set_selected(int i);                  // swaps page visibility + arranges
+    void set_on_change(cardinal::function<void(int)> f) { on_change_ = cardinal::move(f); }
+
+    Vec2 measure(const Constraints& c) override;
+    void arrange(const Rect& r) override;
+    void paint(PaintContext& ctx) override;
+    bool interactive() const noexcept override { return true; }
+    void on_drag(Vec2 mouse) override { press_ = mouse; press_valid_ = true; }
+    void on_click() override;                  // header strip -> select tab
+
+private:
+    float tab_w(int i) const noexcept;
+    Rect  content_rect() const noexcept {
+        return { { rect_.left(), rect_.top() + tab_h_ },
+                 { rect_.width(), rect_.height() - tab_h_ } };
+    }
+    cardinal::vector<cardinal::string> labels_;
+    int   selected_{0};
+    float tab_h_{26.0f};
+    float font_size_{14.0f};
+    float tab_pad_{10.0f};
+    Vec2  press_{};
+    bool  press_valid_{false};
+    cardinal::function<void(int)> on_change_;
 };
 
 }  // namespace cardinal::cui

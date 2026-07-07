@@ -482,4 +482,303 @@ void TreeView::paint(PaintContext& ctx) {
     }
 }
 
+// -----------------------------------------------------------------------------
+// Combo
+// -----------------------------------------------------------------------------
+float Combo::header_h() const noexcept {
+    return line_height(font_size_) + pad_.vert();
+}
+
+Vec2 Combo::measure(const Constraints& c) {
+    float w = 0.0f;
+    for (const auto& it : items_) w = maxf(w, text_advance(it, font_size_));
+    w = maxf(w, text_advance(placeholder_, font_size_));
+    Vec2 s{ maxf(min_width_, w + pad_.horiz() + arrow_w_), header_h() };
+    s.x = c.clamp_w(s.x);
+    s.y = c.clamp_h(s.y);
+    measured_ = s;
+    return s;
+}
+
+void Combo::arrange(const Rect& r) {
+    // Intrinsic header height (a stretching parent must not inflate the
+    // closed control); while open, the rect extends over the dropdown so the
+    // rows stay inside this widget's hit region.
+    float h = header_h();
+    if (open_) h += row_h_ * static_cast<float>(items_.size());
+    rect_ = { r.pos, { r.width(), h } };
+}
+
+void Combo::on_click() {
+    if (!press_valid_) return;
+    press_valid_ = false;
+    const float drop_top = rect_.top() + header_h();
+    if (press_.y < drop_top) {                       // header -> toggle
+        open_ = !open_;
+        return;
+    }
+    if (!open_ || row_h_ <= 0.0f) return;            // dropdown row -> select
+    const int i = static_cast<int>((press_.y - drop_top) / row_h_);
+    if (i >= 0 && i < static_cast<int>(items_.size())) {
+        if (i != selected_) {
+            selected_ = i;
+            if (on_select_) on_select_(i);
+        }
+        open_ = false;
+    }
+}
+
+void Combo::paint(PaintContext& ctx) {
+    const Rect header{ rect_.pos, { rect_.width(), header_h() } };
+
+    Color bg = ctx.theme->control;
+    if      (open_)                    bg = ctx.theme->control_active;
+    else if (ctx.ui->is_hovered(this)) bg = ctx.theme->control_hot;
+    ctx.dl->rect_filled(header, ctx.apply(bg), ctx.theme->rounding);
+    ctx.dl->rect_stroke(header,
+                        ctx.apply(ctx.ui->is_focused(this) ? ctx.theme->accent
+                                                           : ctx.theme->border),
+                        1.0f, ctx.theme->rounding);
+
+    const float ty = header.top() + (header.height() - line_height(font_size_)) * 0.5f;
+    if (selected_ >= 0 && selected_ < static_cast<int>(items_.size()))
+        ctx.dl->text({ header.left() + pad_.l, ty },
+                     items_[static_cast<usize>(selected_)],
+                     ctx.apply(ctx.theme->text), font_size_);
+    else
+        ctx.dl->text({ header.left() + pad_.l, ty }, placeholder_,
+                     ctx.apply(ctx.theme->text_dim), font_size_);
+    ctx.dl->text({ header.right() - arrow_w_ + 2.0f, ty }, open_ ? "^" : "v",
+                 ctx.apply(ctx.theme->text_dim), font_size_);
+
+    if (!open_) return;
+    const Rect drop{ { rect_.left(), rect_.top() + header_h() },
+                     { rect_.width(), row_h_ * static_cast<float>(items_.size()) } };
+    ctx.dl->rect_filled(drop, ctx.apply(ctx.theme->panel_bg), ctx.theme->rounding);
+    ctx.dl->rect_stroke(drop, ctx.apply(ctx.theme->border), 1.0f, ctx.theme->rounding);
+    float y = drop.top();
+    for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
+        const Rect row{ { drop.left(), y }, { drop.width(), row_h_ } };
+        if (i == selected_)
+            ctx.dl->rect_filled(row, ctx.apply(ctx.theme->control_active), 2.0f);
+        ctx.dl->text({ row.left() + pad_.l,
+                       row.top() + (row_h_ - line_height(font_size_)) * 0.5f },
+                     items_[static_cast<usize>(i)],
+                     ctx.apply(ctx.theme->text), font_size_);
+        y += row_h_;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// MenuBar
+// -----------------------------------------------------------------------------
+float MenuBar::title_w(int i) const noexcept {
+    return text_advance(menus_[static_cast<usize>(i)].title, font_size_) +
+           2.0f * title_pad_;
+}
+
+float MenuBar::title_x(int i) const noexcept {
+    float x = 0.0f;
+    for (int m = 0; m < i; ++m) x += title_w(m);
+    return x;
+}
+
+Rect MenuBar::popup_rect() const noexcept {
+    const Menu& m = menus_[static_cast<usize>(open_)];
+    float w = 0.0f;
+    for (const auto& it : m.items) w = maxf(w, text_advance(it, font_size_));
+    w = maxf(w + 2.0f * item_pad_, title_w(open_));
+    return { { rect_.left() + title_x(open_), rect_.top() + bar_h_ },
+             { w, row_h_ * static_cast<float>(m.items.size()) } };
+}
+
+Vec2 MenuBar::measure(const Constraints& c) {
+    float titles = 0.0f;
+    for (int i = 0; i < static_cast<int>(menus_.size()); ++i) titles += title_w(i);
+    Vec2 s{ (c.max_w < 1e8f) ? c.max_w : titles, bar_h_ };
+    s.x = c.clamp_w(s.x);
+    s.y = c.clamp_h(s.y);
+    measured_ = s;
+    return s;
+}
+
+void MenuBar::arrange(const Rect& r) {
+    float h = bar_h_;
+    if (open_ >= 0 && open_ < static_cast<int>(menus_.size()))
+        h += row_h_ * static_cast<float>(menus_[static_cast<usize>(open_)].items.size());
+    rect_ = { r.pos, { r.width(), h } };
+}
+
+void MenuBar::on_click() {
+    if (!press_valid_) return;
+    press_valid_ = false;
+
+    if (press_.y < rect_.top() + bar_h_) {           // bar -> toggle/switch menu
+        const float rel = press_.x - rect_.left();
+        float x = 0.0f;
+        for (int i = 0; i < static_cast<int>(menus_.size()); ++i) {
+            const float w = title_w(i);
+            if (rel >= x && rel < x + w) {
+                open_ = (open_ == i) ? -1 : i;
+                return;
+            }
+            x += w;
+        }
+        open_ = -1;                                   // bar, right of all titles
+        return;
+    }
+
+    if (open_ < 0) return;
+    const Rect pr = popup_rect();                     // popup row -> fire item
+    if (pr.contains(press_) && row_h_ > 0.0f) {
+        const int i = static_cast<int>((press_.y - pr.top()) / row_h_);
+        const int menu = open_;
+        open_ = -1;
+        if (i >= 0 &&
+            i < static_cast<int>(menus_[static_cast<usize>(menu)].items.size()) &&
+            on_item_)
+            on_item_(menu, i);
+        return;
+    }
+    open_ = -1;                                       // stray click in the band
+}
+
+void MenuBar::paint(PaintContext& ctx) {
+    const Rect bar{ rect_.pos, { rect_.width(), bar_h_ } };
+    ctx.dl->rect_filled(bar, ctx.apply(ctx.theme->control), 0.0f);
+
+    float x = bar.left();
+    const float ty = bar.top() + (bar_h_ - line_height(font_size_)) * 0.5f;
+    for (int i = 0; i < static_cast<int>(menus_.size()); ++i) {
+        const float w = title_w(i);
+        if (i == open_)
+            ctx.dl->rect_filled({ { x, bar.top() }, { w, bar_h_ } },
+                                ctx.apply(ctx.theme->control_active), 0.0f);
+        ctx.dl->text({ x + title_pad_, ty },
+                     menus_[static_cast<usize>(i)].title,
+                     ctx.apply(ctx.theme->text), font_size_);
+        x += w;
+    }
+
+    if (open_ < 0) return;
+    const Rect pr = popup_rect();
+    ctx.dl->rect_filled(pr, ctx.apply(ctx.theme->panel_bg), ctx.theme->rounding);
+    ctx.dl->rect_stroke(pr, ctx.apply(ctx.theme->border), 1.0f, ctx.theme->rounding);
+    const Menu& m = menus_[static_cast<usize>(open_)];
+    float y = pr.top();
+    for (const auto& it : m.items) {
+        ctx.dl->text({ pr.left() + item_pad_,
+                       y + (row_h_ - line_height(font_size_)) * 0.5f },
+                     it, ctx.apply(ctx.theme->text), font_size_);
+        y += row_h_;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Tabs
+// -----------------------------------------------------------------------------
+Widget* Tabs::add_tab(cardinal::string label, cardinal::unique_ptr<Widget> content) {
+    labels_.push_back(cardinal::move(label));
+    Widget* raw = add(cardinal::move(content));
+    raw->set_visible(static_cast<int>(labels_.size()) - 1 == selected_);
+    return raw;
+}
+
+float Tabs::tab_w(int i) const noexcept {
+    return text_advance(labels_[static_cast<usize>(i)], font_size_) + 2.0f * tab_pad_;
+}
+
+void Tabs::set_selected(int i) {
+    if (i < 0 || i >= count() || i == selected_) return;
+    selected_ = i;
+    for (int c = 0; c < static_cast<int>(children_.size()); ++c)
+        if (children_[static_cast<usize>(c)])
+            children_[static_cast<usize>(c)]->set_visible(c == selected_);
+    // Arrange the newly shown page immediately (its rect may be stale/empty).
+    if (rect_.width() > 0.0f && selected_ < static_cast<int>(children_.size())) {
+        auto& ch = children_[static_cast<usize>(selected_)];
+        if (ch) {
+            const Rect cr = content_rect();
+            ch->measure(Constraints::loose(cr.width(), cr.height()));
+            ch->arrange(cr);
+        }
+    }
+}
+
+Vec2 Tabs::measure(const Constraints& c) {
+    // A page host fills the space it is offered (headers + content region).
+    float titles = 0.0f;
+    for (int i = 0; i < count(); ++i) titles += tab_w(i);
+    const Constraints inner = Constraints::loose(
+        c.max_w < 1e8f ? c.max_w : titles,
+        c.max_h < 1e8f ? (c.max_h > tab_h_ ? c.max_h - tab_h_ : 0.0f) : 0.0f);
+    for (auto& ch : children_)
+        if (ch && ch->visible()) ch->measure(inner);
+    Vec2 s{ c.clamp_w(c.max_w < 1e8f ? c.max_w : titles),
+            c.clamp_h(c.max_h < 1e8f ? c.max_h : tab_h_) };
+    measured_ = s;
+    return s;
+}
+
+void Tabs::arrange(const Rect& r) {
+    rect_ = r;
+    const Rect cr = content_rect();
+    for (int i = 0; i < static_cast<int>(children_.size()); ++i) {
+        auto& ch = children_[static_cast<usize>(i)];
+        if (!ch) continue;
+        ch->set_visible(i == selected_);
+        if (i == selected_) {
+            ch->measure(Constraints::loose(cr.width(), cr.height()));
+            ch->arrange(cr);
+        }
+    }
+}
+
+void Tabs::on_click() {
+    if (!press_valid_) return;
+    press_valid_ = false;
+    if (press_.y >= rect_.top() + tab_h_) return;     // content area -> not ours
+    const float rel = press_.x - rect_.left();
+    float x = 0.0f;
+    for (int i = 0; i < count(); ++i) {
+        const float w = tab_w(i);
+        if (rel >= x && rel < x + w) {
+            if (i != selected_) {
+                set_selected(i);
+                if (on_change_) on_change_(i);
+            }
+            return;
+        }
+        x += w;
+    }
+}
+
+void Tabs::paint(PaintContext& ctx) {
+    const Rect strip{ rect_.pos, { rect_.width(), tab_h_ } };
+    ctx.dl->rect_filled(strip, ctx.apply(ctx.theme->window_bg), 0.0f);
+
+    float x = strip.left();
+    const float ty = strip.top() + (tab_h_ - line_height(font_size_)) * 0.5f;
+    for (int i = 0; i < count(); ++i) {
+        const float w = tab_w(i);
+        const Rect tab{ { x, strip.top() }, { w, tab_h_ } };
+        ctx.dl->rect_filled(tab,
+                            ctx.apply(i == selected_ ? ctx.theme->panel_bg
+                                                     : ctx.theme->control),
+                            ctx.theme->rounding);
+        if (i == selected_)                            // accent underline
+            ctx.dl->rect_filled({ { x, strip.bottom() - 2.0f }, { w, 2.0f } },
+                                ctx.apply(ctx.theme->accent), 0.0f);
+        ctx.dl->text({ x + tab_pad_, ty }, labels_[static_cast<usize>(i)],
+                     ctx.apply(i == selected_ ? ctx.theme->text : ctx.theme->text_dim),
+                     font_size_);
+        x += w;
+    }
+
+    const Rect cr = content_rect();
+    ctx.dl->rect_filled(cr, ctx.apply(ctx.theme->panel_bg), 0.0f);
+    ctx.dl->rect_stroke(rect_, ctx.apply(ctx.theme->border), 1.0f, 0.0f);
+    paint_children(ctx);                               // only the visible page paints
+}
+
 }  // namespace cardinal::cui

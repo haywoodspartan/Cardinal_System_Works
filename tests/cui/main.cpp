@@ -387,6 +387,205 @@ void test_treeview_expand_select() {
     CHECK(ap(tv->rect().height(), 66.0f, 0.5f));
 }
 
+// ---- Combo: open/select/close + popup priority + focus-loss close ----------
+void test_combo_dropdown() {
+    ui::Ui u;
+    auto* panel = static_cast<ui::Panel*>(
+        u.set_root(cardinal::make_unique<ui::Panel>(u.theme().panel_bg, ui::Edges::all(8.0f))));
+    auto stack = cardinal::make_unique<ui::Stack>(ui::Axis::Vertical, 4.0f);
+    auto* cb = static_cast<ui::Combo*>(stack->add(cardinal::make_unique<ui::Combo>()));
+    cb->set_items({ "Alpha", "Beta", "Gamma" });
+    int selects = 0, last = -1;
+    cb->set_on_select([&](int i) { ++selects; last = i; });
+    int btn_clicks = 0;
+    auto* btn = static_cast<ui::Button*>(stack->add(
+        cardinal::make_unique<ui::Button>("Go", [&]() { ++btn_clicks; })));
+    panel->add(cardinal::move(stack));
+    u.layout({ 300.0f, 300.0f });
+
+    // Closed: intrinsic header height (line_height(14)+8 = 24), not stretched.
+    const float header_h = ui::line_height(14.0f) + 8.0f;
+    CHECK(ap(cb->rect().height(), header_h));
+    CHECK(!cb->open());
+
+    ui::DrawList closed_dl;
+    u.paint(closed_dl);
+    const auto closed_texts = closed_dl.count(ui::DrawKind::Text);
+
+    auto click_at = [&](ui::Vec2 p) {
+        ui::InputState in{};
+        in.mouse = p;              u.update_input(in);
+        in.mouse_down = true;      u.update_input(in);
+        in.mouse_down = false;     u.update_input(in);
+    };
+
+    // Header point: stable regardless of dropdown extension (the rect stays
+    // extended until the next layout after a close, so center() would drift
+    // into the dropdown region — always aim at the header band).
+    const ui::Vec2 header_pt{ cb->rect().left() + 10.0f,
+                              cb->rect().top() + header_h * 0.5f };
+
+    // Click the header -> opens + takes focus; rect extends over the dropdown.
+    click_at(header_pt);
+    CHECK(cb->open());
+    CHECK(u.is_focused(cb));
+    u.layout({ 300.0f, 300.0f });
+    CHECK(ap(cb->rect().height(), header_h + 3.0f * 22.0f));
+
+    // Open paints the dropdown rows (more text commands than closed).
+    ui::DrawList open_dl;
+    u.paint(open_dl);
+    CHECK(open_dl.count(ui::DrawKind::Text) > closed_texts);
+
+    // Host popup contract: while open the combo wins input over later siblings.
+    u.set_popup(cb);
+    // Click row 1 ("Beta"): y = header bottom + 1.5 rows.
+    click_at({ cb->rect().left() + 10.0f,
+               cb->rect().top() + header_h + 1.5f * 22.0f });
+    CHECK(cb->selected() == 1 && last == 1 && selects == 1);
+    CHECK(!cb->open());
+    u.set_popup(nullptr);
+
+    // Reopen; a click on the BUTTON's center (inside the dropdown overlap)
+    // must go to the popup, not the button.
+    click_at(header_pt);
+    u.layout({ 300.0f, 300.0f });
+    u.set_popup(cb);
+    click_at(btn->rect().center());
+    CHECK(btn_clicks == 0);
+    CHECK(!cb->open());
+    u.set_popup(nullptr);
+
+    // WITHOUT the popup contract, the later sibling wins the overlap (known
+    // tree-order limitation) — and the focus steal still closes the combo.
+    click_at(header_pt);
+    u.layout({ 300.0f, 300.0f });
+    click_at(btn->rect().center());
+    CHECK(btn_clicks == 1);
+    CHECK(!cb->open());
+
+    // Escape closes via Ui-consumed focus clear.
+    click_at(header_pt);
+    CHECK(cb->open());
+    ui::InputState esc{};
+    esc.mouse = cb->rect().center();
+    esc.key_escape = true;
+    u.update_input(esc);
+    CHECK(!cb->open() && !u.is_focused(cb));
+}
+
+// ---- MenuBar: open/switch/fire-item/stray-close/focus-close ----------------
+void test_menubar() {
+    ui::Ui u;
+    auto* panel = static_cast<ui::Panel*>(
+        u.set_root(cardinal::make_unique<ui::Panel>(u.theme().panel_bg, ui::Edges::all(0.0f))));
+    auto* mb = static_cast<ui::MenuBar*>(panel->add(cardinal::make_unique<ui::MenuBar>()));
+    const int m_file = mb->add_menu("File");
+    mb->add_item(m_file, "Open");
+    mb->add_item(m_file, "Save");
+    const int m_edit = mb->add_menu("Edit");
+    mb->add_item(m_edit, "Undo");
+    int fired = 0, last_menu = -1, last_item = -1;
+    mb->set_on_item([&](int m, int i) { ++fired; last_menu = m; last_item = i; });
+    u.layout({ 400.0f, 300.0f });
+    CHECK(ap(mb->rect().height(), 24.0f));   // closed bar
+
+    const float tw_file = ui::text_advance("File", 14.0f) + 20.0f;
+    const float tw_edit = ui::text_advance("Edit", 14.0f) + 20.0f;
+
+    auto click_at = [&](ui::Vec2 p) {
+        ui::InputState in{};
+        in.mouse = p;              u.update_input(in);
+        in.mouse_down = true;      u.update_input(in);
+        in.mouse_down = false;     u.update_input(in);
+    };
+
+    // Open "File".
+    click_at({ mb->rect().left() + tw_file * 0.5f, mb->rect().top() + 12.0f });
+    CHECK(mb->open_menu() == m_file);
+    u.layout({ 400.0f, 300.0f });
+    CHECK(ap(mb->rect().height(), 24.0f + 2.0f * 22.0f));   // bar + 2 items
+    u.set_popup(mb);
+
+    // Click "Save" (row 1 under the File title).
+    click_at({ mb->rect().left() + 5.0f,
+               mb->rect().top() + 24.0f + 1.5f * 22.0f });
+    CHECK(fired == 1 && last_menu == m_file && last_item == 1);
+    CHECK(mb->open_menu() == -1);
+    u.set_popup(nullptr);
+
+    // Open "File", then click "Edit" -> switches menus.
+    click_at({ mb->rect().left() + tw_file * 0.5f, mb->rect().top() + 12.0f });
+    CHECK(mb->open_menu() == m_file);
+    click_at({ mb->rect().left() + tw_file + tw_edit * 0.5f, mb->rect().top() + 12.0f });
+    CHECK(mb->open_menu() == m_edit);
+
+    // Stray click below the bar but outside the popup just closes.
+    u.layout({ 400.0f, 300.0f });
+    click_at({ mb->rect().right() - 10.0f, mb->rect().top() + 30.0f });
+    CHECK(mb->open_menu() == -1);
+    CHECK(fired == 1);                       // nothing fired
+
+    // Reopen, then press outside the bar entirely -> focus loss closes.
+    click_at({ mb->rect().left() + tw_file * 0.5f, mb->rect().top() + 12.0f });
+    CHECK(mb->open_menu() == m_file);
+    click_at({ 200.0f, 250.0f });
+    CHECK(mb->open_menu() == -1);
+}
+
+// ---- Tabs: page switching, visibility, content hit-testing -----------------
+void test_tabs_pages() {
+    ui::Ui u;
+    auto tabs_owned = cardinal::make_unique<ui::Tabs>();
+    auto* tabs = tabs_owned.get();
+    auto* lbl = tabs->add_tab("One", cardinal::make_unique<ui::Label>("PageA"));
+    int clicks = 0;
+    auto* btn = tabs->add_tab("Two",
+        cardinal::make_unique<ui::Button>("B", [&]() { ++clicks; }));
+    int changes = 0, last_tab = -1;
+    tabs->set_on_change([&](int i) { ++changes; last_tab = i; });
+    u.set_root(cardinal::move(tabs_owned));
+    u.layout({ 400.0f, 300.0f });
+
+    CHECK(tabs->selected() == 0);
+    CHECK(lbl->visible() && !btn->visible());
+
+    // Only the visible page paints: 2 tab labels + "PageA".
+    ui::DrawList dl;
+    u.paint(dl);
+    CHECK(dl.count(ui::DrawKind::Text) == 3);
+
+    const float tw_one = ui::text_advance("One", 14.0f) + 20.0f;
+    const float tw_two = ui::text_advance("Two", 14.0f) + 20.0f;
+
+    auto click_at = [&](ui::Vec2 p) {
+        ui::InputState in{};
+        in.mouse = p;              u.update_input(in);
+        in.mouse_down = true;      u.update_input(in);
+        in.mouse_down = false;     u.update_input(in);
+    };
+
+    // Click the "Two" header -> switch page.
+    click_at({ tw_one + tw_two * 0.5f, 13.0f });
+    CHECK(tabs->selected() == 1 && changes == 1 && last_tab == 1);
+    CHECK(!lbl->visible() && btn->visible());
+    // The new page is arranged into the content region (below the 26px strip).
+    CHECK(btn->rect().top() >= 26.0f - 1e-3f);
+    CHECK(ap(btn->rect().height(), 300.0f - 26.0f));
+
+    // The shown page is hit-testable: click the button.
+    click_at(btn->rect().center());
+    CHECK(clicks == 1);
+
+    // Clicking the already-selected header fires no change.
+    click_at({ tw_one + tw_two * 0.5f, 13.0f });
+    CHECK(changes == 1);
+
+    // Programmatic switch swaps visibility without firing on_change.
+    tabs->set_selected(0);
+    CHECK(lbl->visible() && !btn->visible() && changes == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -404,6 +603,9 @@ int main() {
     test_textfield_focus_typing();
     test_listview_select();
     test_treeview_expand_select();
+    test_combo_dropdown();
+    test_menubar();
+    test_tabs_pages();
 
     if (g_fail == 0) {
         cardinal::log::infof("cuitest", "OK  %d checks passed", g_checks);

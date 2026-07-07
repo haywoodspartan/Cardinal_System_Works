@@ -57,12 +57,24 @@ public:
     }
     void clear_focus() { set_focus(nullptr); }
 
+    // Popup priority (host-managed). A widget with an open dropdown (Combo,
+    // MenuBar) extends its rect_ over later siblings, but tree hit order gives
+    // the LAST child the hit and paint order draws it UNDER later siblings.
+    // Point the Ui at the popped widget and it wins hit-testing and repaints
+    // on top of the tree (small overdraw of the widget itself — acceptable).
+    // Hosts set this each frame, e.g.:
+    //     ui.set_popup(combo->open() ? combo : nullptr);
+    // Non-owning, like focused_ — clear before destroying the widget.
+    void    set_popup(Widget* w) noexcept { popup_ = w; }
+    Widget* popup() const noexcept        { return popup_; }
+
 private:
     Theme                        theme_;
     cardinal::unique_ptr<Widget> root_;
     Widget*                      hovered_{nullptr};
     Widget*                      active_{nullptr};
     Widget*                      focused_{nullptr};
+    Widget*                      popup_{nullptr};
     InputState                   prev_{};
     bool                         prev_valid_{false};
 };
