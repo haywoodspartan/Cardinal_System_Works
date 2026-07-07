@@ -118,7 +118,8 @@ AssetPlacement::create(cardinal::actor::World& world,
 
 PlaceResult AssetPlacement::place(const char* asset_id,
                                   cardinal::rhi::Device* device,
-                                  const cardinal::scene::Vec3& position) {
+                                  const cardinal::scene::Vec3& position,
+                                  f32 yaw_rad) {
     PlaceResult out{};
     if (asset_id == nullptr) return out;
 
@@ -137,6 +138,28 @@ PlaceResult AssetPlacement::place(const char* asset_id,
     const u32 primary = res.primary_id ? res.primary_id
                                        : res.entity_ids.front();
     cardinal::scene::Entity* pe = scene_.find_by_id(primary);
+
+    // 1b. Bake the requested placement yaw (about world up). Sub-entities of
+    // a composite rotate as a rigid group about the placement point, using
+    // the same convention as Mat4::rotation_xyz (x' = x*c + z*s,
+    // z' = -x*s + z*c), so a rotated composite renders exactly as if the
+    // whole asset were one mesh. Done BEFORE the actor copies the primary
+    // transform and BEFORE offsets are captured — both pick up the rotated
+    // form for free, and the per-frame syncs need no rotation math.
+    if (yaw_rad != 0.0f) {
+        const f32 cy = cardinal::cos(yaw_rad), sy = cardinal::sin(yaw_rad);
+        for (u32 eid : res.entity_ids) {
+            cardinal::scene::Entity* e = scene_.find_by_id(eid);
+            if (e == nullptr) continue;
+            if (eid != primary) {
+                const f32 dx = e->transform.translation.x - position.x;
+                const f32 dz = e->transform.translation.z - position.z;
+                e->transform.translation.x = position.x + dx * cy + dz * sy;
+                e->transform.translation.z = position.z - dx * sy + dz * cy;
+            }
+            e->transform.rotation_euler.y += yaw_rad;
+        }
+    }
 
     // 2. Authoritative backing actor.
     cardinal::actor::Actor* a =

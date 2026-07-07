@@ -796,6 +796,8 @@ int main(int argc, char** argv) {
     enum class Tool : int { Select = 0, PlaceAsset };
     Tool        tool = Tool::Select;
     std::string placement_asset_id;     // empty when tool != PlaceAsset
+    float       placement_yaw_deg = 0.0f;   // placement rotation about world up
+                                            // ([ / ] = 15-deg steps, toolbar drag)
 
     // Undo / redo stack — wired to the toolbar buttons + Ctrl+Z / Ctrl+Y
     // hotkeys + the gizmo-drag-release edge.
@@ -2507,6 +2509,13 @@ int main(int argc, char** argv) {
                 ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f), "(%s)",
                     placement_asset_id.empty() ? "pick from palette"
                                                : placement_asset_id.c_str());
+                // Placement rotation — applied to the next placed object.
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80.0f);
+                ImGui::DragFloat("##place_yaw", &placement_yaw_deg,
+                                 1.0f, -360.0f, 360.0f, "yaw %.0f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Placement rotation ([ / ] = 15-deg steps)");
             }
             // ---- Edit — undo/redo + clipboard-style ops + settings shortcuts.
             if (ImGui::BeginMenu("Edit")) {
@@ -2940,6 +2949,7 @@ int main(int argc, char** argv) {
             cx.device         = device.get();
             cx.active_asset_id = asset_id;
             cx.place_position = pos;          // no viewport -> direct-position mode
+            cx.place_yaw      = placement_yaw_deg * 0.0174532925f;
             const auto r = commands.dispatch("world.place_asset", cx);
             if (!r.ok) return;
             selected_id = cx.result_entity;
@@ -2950,6 +2960,7 @@ int main(int argc, char** argv) {
             auto live = std::make_shared<cardinal::actor::ActorId>(cx.result_actor);
             std::string  id_copy = asset_id;
             scn::Vec3    at      = cx.result_hit;
+            float        yaw     = cx.place_yaw;
             auto*        pl      = placement.get();
             rhi::Device* dev     = device.get();
             edit::Command cmd;
@@ -2957,8 +2968,8 @@ int main(int argc, char** argv) {
             cmd.revert = [live, pl]() {
                 if (*live != 0u) { pl->remove(*live); *live = 0u; }
             };
-            cmd.apply  = [live, pl, id_copy, at, dev, &selected_id]() {
-                auto rr = pl->place(id_copy.c_str(), dev, at);
+            cmd.apply  = [live, pl, id_copy, at, yaw, dev, &selected_id]() {
+                auto rr = pl->place(id_copy.c_str(), dev, at, yaw);
                 *live = rr.actor;
                 if (rr.primary_entity) selected_id = rr.primary_entity;
             };
@@ -3320,6 +3331,15 @@ int main(int argc, char** argv) {
                 if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !selection.empty()) {
                     selection.clear();                                      // Esc (deselect)
                     selected_id = 0;
+                }
+                // [ / ] — rotate the pending placement (hold to spin).
+                if (!ctrl && tool == Tool::PlaceAsset) {
+                    if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket))
+                        placement_yaw_deg -= 15.0f;
+                    if (ImGui::IsKeyPressed(ImGuiKey_RightBracket))
+                        placement_yaw_deg += 15.0f;
+                    if (placement_yaw_deg >= 360.0f)  placement_yaw_deg -= 360.0f;
+                    if (placement_yaw_deg <= -360.0f) placement_yaw_deg += 360.0f;
                 }
             }
         }
@@ -4490,14 +4510,16 @@ int main(int argc, char** argv) {
                     cx.active_asset_id = placement_asset_id;
                     cx.snap_enabled    = snap_enabled;
                     cx.snap_step       = snap_step;
+                    cx.place_yaw       = placement_yaw_deg * 0.0174532925f;
                     const auto r = commands.dispatch("world.place_asset", cx);
                     if (r.ok) {
                         selected_id = cx.result_entity;
                         // Undo removes the placement; redo re-places at the
-                        // captured hit (mirrors spawn_asset_at).
+                        // captured hit + yaw (mirrors spawn_asset_at).
                         auto live = std::make_shared<cardinal::actor::ActorId>(cx.result_actor);
                         std::string  id_copy = placement_asset_id;
                         scn::Vec3    at      = cx.result_hit;
+                        float        yaw     = cx.place_yaw;
                         auto*        pl      = placement.get();
                         rhi::Device* dev     = device.get();
                         edit::Command cmd;
@@ -4505,8 +4527,8 @@ int main(int argc, char** argv) {
                         cmd.revert = [live, pl]() {
                             if (*live != 0u) { pl->remove(*live); *live = 0u; }
                         };
-                        cmd.apply  = [live, pl, id_copy, at, dev, &selected_id]() {
-                            auto rr = pl->place(id_copy.c_str(), dev, at);
+                        cmd.apply  = [live, pl, id_copy, at, yaw, dev, &selected_id]() {
+                            auto rr = pl->place(id_copy.c_str(), dev, at, yaw);
                             *live = rr.actor;
                             if (rr.primary_entity) selected_id = rr.primary_entity;
                         };

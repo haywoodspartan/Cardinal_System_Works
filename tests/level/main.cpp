@@ -402,11 +402,96 @@ void test_asset_placement() {
     CHECK(dead == nullptr || !dead->alive());
 }
 
+// ---- AssetPlacement: placement yaw (rotation about world up) ---------
+void test_asset_placement_yaw() {
+    constexpr float kHalfPi = 1.5707963268f;
+
+    // Composite test asset: primary at ctx.position + a sub-part 2 units
+    // along +X with no authored rotation. register_asset is id-idempotent.
+    {
+        cardinal::scene::AssetDesc d{};
+        d.id      = "test.tree";
+        d.label   = "Test Tree";
+        d.category= "Test";
+        d.factory = [](const cardinal::scene::AssetSpawnContext& ctx)
+                        -> cardinal::scene::AssetSpawnResult {
+            if (ctx.scene == nullptr) return {};
+            // NB: capture each id BEFORE the next add_entity — adding can
+            // reallocate the entity storage and invalidate the reference.
+            auto& trunk = ctx.scene->add_entity("Trunk");
+            trunk.transform.translation = ctx.position;
+            const u32 trunk_id = trunk.id;
+            auto& leaf = ctx.scene->add_entity("Leaf");
+            leaf.transform.translation = { ctx.position.x + 2.0f,
+                                           ctx.position.y,
+                                           ctx.position.z };
+            const u32 leaf_id = leaf.id;
+            return cardinal::scene::AssetSpawnResult{
+                { trunk_id, leaf_id }, trunk_id };
+        };
+        cardinal::scene::AssetCatalog::instance().register_asset(
+            cardinal::move(d));
+    }
+
+    ac::World              w;
+    cardinal::scene::Scene scene;
+    auto pl = lv::AssetPlacement::create(w, scene);
+
+    // Single-mesh: yaw lands on the actor + the primary entity; the
+    // position is untouched.
+    const auto r1 = pl->place("test.box", nullptr, v3(5, 0, -3), kHalfPi);
+    CHECK(r1.actor != 0u);
+    auto* tc1 = w.find(r1.actor)->get_component<ac::TransformComponent>();
+    CHECK(tc1 != nullptr && ap(tc1->rotation_euler.y, kHalfPi));
+    auto* pe1 = scene.find_by_id(r1.primary_entity);
+    CHECK(pe1 != nullptr && ap(pe1->transform.rotation_euler.y, kHalfPi));
+    CHECK(pe1 != nullptr && apv(pe1->transform.translation, 5, 0, -3));
+
+    // Composite: the sub-part rotates as a rigid group about the placement
+    // point using the Mat4::rotation_xyz convention (x'=x*c+z*s, z'=-x*s+z*c):
+    // offset (2,0,0) yawed +pi/2 -> (0,0,-2). Its own yaw composes too.
+    const auto r2 = pl->place("test.tree", nullptr, v3(0, 0, 0), kHalfPi);
+    CHECK(r2.actor != 0u);
+    auto* pe2 = scene.find_by_id(r2.primary_entity);
+    CHECK(pe2 != nullptr && ap(pe2->transform.rotation_euler.y, kHalfPi));
+    // Find the sub-entity (the placement record lists primary first).
+    const auto& rec = pl->placements().back();
+    CHECK(rec.entities.size() == sz(2));
+    auto* sub = scene.find_by_id(rec.entities[1]);
+    CHECK(sub != nullptr && apv(sub->transform.translation, 0, 0, -2));
+    CHECK(sub != nullptr && ap(sub->transform.rotation_euler.y, kHalfPi));
+
+    // The rotated offset was captured at place time, so the group stays
+    // rigid under actor moves with the existing (rotation-free) sync.
+    ac::Actor* a2  = w.find(r2.actor);
+    auto*      tc2 = a2 ? a2->get_component<ac::TransformComponent>() : nullptr;
+    CHECK(tc2 != nullptr);
+    if (tc2 != nullptr && pe2 != nullptr && sub != nullptr) {
+        tc2->translation = v3(10, 0, 0);
+        pl->sync_to_scene();
+        CHECK(apv(pe2->transform.translation, 10, 0, 0));
+        CHECK(apv(sub->transform.translation, 10, 0, -2));
+        CHECK(ap(pe2->transform.rotation_euler.y, kHalfPi));
+
+        // Gizmo-style edit still round-trips: rotate the primary entity,
+        // the authoritative actor picks it up.
+        pe2->transform.rotation_euler.y = 0.25f;
+        pl->sync_from_scene();
+        CHECK(ap(tc2->rotation_euler.y, 0.25f));
+    }
+
+    // Yaw defaults to 0 -> byte-for-byte the old behavior.
+    const auto r3 = pl->place("test.box", nullptr, v3(1, 0, 1));
+    auto* pe3 = scene.find_by_id(r3.primary_entity);
+    CHECK(pe3 != nullptr && ap(pe3->transform.rotation_euler.y, 0.0f));
+}
+
 int main() {
     test_level_manager();
     test_build_hlod();
     test_select_hlod();
     test_asset_placement();
+    test_asset_placement_yaw();
 
     if (g_fail == 0) {
         cardinal::log::infof("lvltest", "OK  %d checks passed", g_checks);

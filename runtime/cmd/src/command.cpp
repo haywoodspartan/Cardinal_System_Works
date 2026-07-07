@@ -97,7 +97,7 @@ void register_builtin_commands(CommandRegistry& reg) {
             }
         }
         const auto pr = ctx.placement->place(ctx.active_asset_id.c_str(),
-                                             ctx.device, hit);
+                                             ctx.device, hit, ctx.place_yaw);
         if (pr.actor == 0u) return { false, "placement produced no actor" };
         ctx.result_actor  = pr.actor;
         ctx.result_entity = pr.primary_entity;

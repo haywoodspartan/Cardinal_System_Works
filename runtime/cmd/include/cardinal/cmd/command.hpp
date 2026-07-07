@@ -65,6 +65,7 @@ struct CommandContext {
     cardinal::string active_asset_id;   // world.place_asset
     bool             snap_enabled{false};
     float            snap_step{0.0f};
+    float            place_yaw{0.0f};   // radians about world up (world.place_asset)
 
     // Selection + layout inputs (actor.* / layout.* commands act on these).
     cardinal::vector<cardinal::u32> selection;       // selected ACTOR ids

@@ -147,9 +147,16 @@ public:
     static cardinal::shared_ptr<AssetPlacement>
         create(cardinal::actor::World& world, cardinal::scene::Scene& scene);
 
+    // Spawn `asset_id` at `position`, optionally yawed (radians, about the
+    // world up axis) — the Studio's placement-rotation. The yaw is baked at
+    // place time: the actor + primary entity carry it in rotation_euler.y,
+    // and composite sub-entities are rotated as a rigid group about the
+    // placement point (their captured offsets are the rotated ones, so the
+    // per-frame syncs need no rotation math).
     PlaceResult place(const char* asset_id,
                       cardinal::rhi::Device* device,
-                      const cardinal::scene::Vec3& position);
+                      const cardinal::scene::Vec3& position,
+                      f32 yaw_rad = 0.0f);
 
     void sync_to_scene();     // actor (authoritative) -> scene render mirror
     void sync_from_scene();   // scene edit (Studio gizmo/inspector) -> actor
