@@ -130,8 +130,10 @@ namespace cardinal::rhi {
 
 class D3D12Buffer final : public Buffer {
 public:
-    D3D12Buffer(ComPtr<ID3D12Resource> r, usize size, bool cpu_writable)
-        : res_(cardinal::move(r)), size_(size), cpu_writable_(cpu_writable) {
+    D3D12Buffer(ComPtr<ID3D12Resource> r, usize size, bool cpu_writable,
+                bool cpu_readable = false)
+        : res_(cardinal::move(r)), size_(size), cpu_writable_(cpu_writable),
+          cpu_readable_(cpu_readable) {
         gpu_va_ = res_->GetGPUVirtualAddress();
     }
 
@@ -158,12 +160,35 @@ public:
 
     u64 device_address() const noexcept override { return gpu_va_; }
 
+    bool download(void* dst, usize size, usize offset) override {
+        if (!cpu_readable_) {
+            cardinal::log::errorf("rhi/d3d12",
+                "download() on non-cpu_readable buffer (READBACK heap required)");
+            return false;
+        }
+        if (offset + size > size_) {
+            cardinal::log::errorf("rhi/d3d12", "download() out of range");
+            return false;
+        }
+        void* mapped = nullptr;
+        D3D12_RANGE read_range{ offset, offset + size };   // we DO read this range
+        if (FAILED(res_->Map(0, &read_range, &mapped))) {
+            cardinal::log::errorf("rhi/d3d12", "download Map failed");
+            return false;
+        }
+        cardinal::memcpy(dst, static_cast<const u8*>(mapped) + offset, size);
+        D3D12_RANGE written{0, 0};                          // we wrote nothing
+        res_->Unmap(0, &written);
+        return true;
+    }
+
     ID3D12Resource* resource() const noexcept { return res_.Get(); }
 
 private:
     ComPtr<ID3D12Resource> res_;
     usize                  size_{0};
     bool                   cpu_writable_{false};
+    bool                   cpu_readable_{false};
     u64                    gpu_va_{0};
 };
 

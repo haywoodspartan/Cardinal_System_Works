@@ -81,6 +81,11 @@ struct BufferDesc {
     bool  cpu_writable;   // true: host-visible (mappable). false: GPU-only.
                           //    GPU-only currently still allocates host-visible —
                           //    proper staging upload lands in Phase 2.5-E.
+    bool  cpu_readable{false};   // true: READBACK destination — the GPU copies
+                                 // into it, the CPU reads via download(). D3D12:
+                                 // READBACK heap in COPY_DEST (never a UAV/SRV);
+                                 // Vulkan: host-cached mapping (RANDOM access).
+                                 // Used by the GPU compute validation harness.
 };
 
 class Buffer {
@@ -102,6 +107,16 @@ public:
     // ray-tracing acceleration structure inputs and bindless / buffer
     // descriptor patterns.
     virtual u64 device_address() const noexcept = 0;
+
+    // Copy `size` bytes OUT of the buffer at `offset` into `dst`. Requires a
+    // host-readable buffer (BufferDesc::cpu_readable, or any host-visible
+    // allocation on Vulkan). The caller must have fenced the producing GPU
+    // work first (Fence::wait_cpu) — download() does no synchronisation of
+    // its own. Returns false if the buffer isn't readable or out of range.
+    virtual bool download(void* dst, usize size, usize offset = 0) {
+        (void)dst; (void)size; (void)offset;
+        return false;
+    }
 
 protected:
     Buffer() = default;

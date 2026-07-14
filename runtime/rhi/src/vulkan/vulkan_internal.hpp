@@ -64,6 +64,13 @@ class VulkanDevice;   // fwd (VulkanSwapchain holds a VulkanDevice&)
 
 inline constexpr u32 frames_in_flight = 2;
 
+// Fixed descriptor binding for the FIRST compute UAV (HLSL u0). DXC's default
+// SPIR-V register mapping puts tN and uN at the SAME binding N, so UAVs must
+// be shifted (-fvk-u-shift kUavBindingBase 0 at compile) and the pipeline
+// layout + descriptor writes must place them at kUavBindingBase + slot.
+// 16 == kMaxStorageSlots, so reads occupy [0,16) and UAVs [16,32) — disjoint.
+inline constexpr u32 kUavBindingBase = 16;
+
 // Per-thread transient arena used by VulkanSwapchain::end_frame() to back
 // the per-frame barrier staging vector (VkImageMemoryBarrier2 batch for
 // viewport→SHADER_READ + swapchain UNDEFINED→COLOR_ATTACHMENT). Reset
@@ -396,7 +403,9 @@ private:
     // 2-slot pipeline (lights @0 + materials @1) gets ONE set with both
     // bindings, not two sets that clobber each other. Cleared on
     // bind_pipeline (a new pipeline starts with nothing bound).
-    static constexpr u32 kMaxStorageSlots = 8;
+    // 16: VBufResolvePass declares 9 read accesses — at 8, slot t8 was
+    // silently DROPPED by the bind guard (garbage reads under gpu_execute).
+    static constexpr u32 kMaxStorageSlots = 16;
     Buffer*  pending_sb_[kMaxStorageSlots]{};
     Texture* pending_st_[kMaxStorageSlots]{};   // sampled textures (graphics)
     Buffer*  pending_uav_[kMaxStorageSlots]{};  // read-write UAV buffers (compute)
@@ -668,7 +677,12 @@ public:
 
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO;
-        if (desc.cpu_writable) {
+        if (desc.cpu_readable) {
+            // Readback: host-cached memory with RANDOM access (reads from
+            // write-combined SEQUENTIAL_WRITE memory are legal but glacial).
+            aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                        VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        } else if (desc.cpu_writable) {
             aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                         VMA_ALLOCATION_CREATE_MAPPED_BIT;
         }
@@ -681,6 +695,7 @@ public:
         }
         mapped_ptr_ = info.pMappedData;
         cpu_writable_ = desc.cpu_writable;
+        cpu_readable_ = desc.cpu_readable;
 
         // Cache device address if requested.
         if ((desc.usage & static_cast<u32>(BufferUsage::ShaderDeviceAddress)) ||
@@ -717,6 +732,33 @@ public:
         }
     }
 
+    bool download(void* dst, usize size, usize offset) override {
+        // Any host-visible allocation is readable on Vulkan (readback buffers
+        // get cached RANDOM-access memory; reading write-combined upload
+        // memory is slow but valid — fine for the validation harness).
+        if (!cpu_readable_ && !cpu_writable_) {
+            cardinal::log::errorf("rhi/vk", "download() from GPU-only buffer");
+            return false;
+        }
+        if (offset + size > size_) {
+            cardinal::log::errorf("rhi/vk",
+                "download out of range (offset=%zu size=%zu buffer=%zu)",
+                offset, size, size_);
+            return false;
+        }
+        // Non-coherent host memory needs an invalidate before the CPU read.
+        vmaInvalidateAllocation(dev_.allocator_, alloc_, offset, size);
+        if (mapped_ptr_ != nullptr) {
+            cardinal::memcpy(dst, static_cast<const u8*>(mapped_ptr_) + offset, size);
+        } else {
+            void* p = nullptr;
+            if (vmaMapMemory(dev_.allocator_, alloc_, &p) != VK_SUCCESS) return false;
+            cardinal::memcpy(dst, static_cast<const u8*>(p) + offset, size);
+            vmaUnmapMemory(dev_.allocator_, alloc_);
+        }
+        return true;
+    }
+
     VkBuffer handle() const noexcept { return buffer_; }
 
 private:
@@ -726,6 +768,7 @@ private:
     void*          mapped_ptr_{nullptr};
     usize          size_{0};
     bool           cpu_writable_{false};
+    bool           cpu_readable_{false};
     u64            device_address_{0};
 };
 struct OneShotCmd {

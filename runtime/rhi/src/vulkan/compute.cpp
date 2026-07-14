@@ -7,11 +7,11 @@ namespace cardinal::rhi {
 // Async compute (AEGIS Block 10) — timeline-semaphore Fence, the compute-list
 // recorder, and the ComputeQueue that submits onto the dedicated compute queue.
 //
-// NOTE: compute *dispatch* (bind compute pipeline / dispatch) is a separate
-// feature still pending in both backends, so the recorder's dispatch() stays
-// the base no-op for now — buffer copies, UAV barriers and the cross-queue
-// timeline handshake are functional. Dispatch lights up here with no async-lane
-// changes once compute pipelines land.
+// The recorder is dispatch-complete: bind_pipeline, storage/UAV descriptor
+// binds (per-submit pool owned by the queue), push constants, dispatch,
+// copies, UAV barriers and the cross-queue timeline handshake — enough to run
+// any AEGIS kernel off the graphics queue (and for the headless GPU
+// validation harness in tests/gpu_compute).
 // =============================================================================
 
 // Timeline-semaphore Fence. wait_cpu blocks on vkWaitSemaphores; current_value
@@ -56,10 +56,14 @@ private:
     u64         next_{1};
 };
 
-// Records compute-queue-valid ops (buffer copies, UAV barriers) onto `cmd_`.
+// Records compute-queue-valid ops (buffer copies, UAV barriers, full compute
+// bind/push/dispatch) onto `cmd_`. Descriptor sets are allocated from the
+// owning queue's per-submit pool (`pool`, reset by the queue after the
+// previous submission retires) — sets stay alive until the GPU is done.
 class VulkanComputeRecorder final : public Swapchain {
 public:
-    VulkanComputeRecorder(VkDevice dev, VkCommandBuffer cmd) : dev_(dev), cmd_(cmd) {}
+    VulkanComputeRecorder(VkDevice dev, VkCommandBuffer cmd, VkDescriptorPool pool)
+        : dev_(dev), cmd_(cmd), pool_(pool) {}
 
     void copy_buffer(Buffer* src, usize src_off,
                      Buffer* dst, usize dst_off, usize size) override {
@@ -81,6 +85,44 @@ public:
         dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
         dep.memoryBarrierCount = 1;
         dep.pMemoryBarriers    = &mb;
+        vkCmdPipelineBarrier2(cmd_, &dep);
+    }
+    void transition_buffer_state(Buffer* b, ResourceState before,
+                                 ResourceState after) override {
+        auto* vb = static_cast<VulkanBuffer*>(b);
+        if (!cmd_ || !vb || before == after) return;
+        auto access = [](ResourceState s) -> VkAccessFlags2 {
+            switch (s) {
+                case ResourceState::UnorderedAccess:
+                    return VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                case ResourceState::ShaderResource: return VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                case ResourceState::CopySource:     return VK_ACCESS_2_TRANSFER_READ_BIT;
+                case ResourceState::CopyDest:       return VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                default:                            return 0;
+            }
+        };
+        auto stage = [](ResourceState s) -> VkPipelineStageFlags2 {
+            switch (s) {
+                case ResourceState::CopySource:
+                case ResourceState::CopyDest: return VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                default:                      return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            }
+        };
+        VkBufferMemoryBarrier2 bb{};
+        bb.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        bb.srcStageMask        = stage(before);
+        bb.srcAccessMask       = access(before);
+        bb.dstStageMask        = stage(after);
+        bb.dstAccessMask       = access(after);
+        bb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bb.buffer              = vb->handle();
+        bb.offset              = 0;
+        bb.size                = VK_WHOLE_SIZE;
+        VkDependencyInfo dep{};
+        dep.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dep.bufferMemoryBarrierCount = 1;
+        dep.pBufferMemoryBarriers    = &bb;
         vkCmdPipelineBarrier2(cmd_, &dep);
     }
 
@@ -107,18 +149,37 @@ public:
     u32    begin_frame(float, float, float, float) override { return 0; }
     void   end_frame() override {}
     void   set_overlay(OverlayCallback, void*) override {}
-    // Real compute recording on the async list. Push constants ride the
-    // pipeline layout; storage/UAV descriptor binds on the async lane need a
-    // per-submit descriptor pool (deferred) — push-only compute kernels work
-    // today, and the main-queue recorder handles full buffer binding.
+    // Real compute recording on the async list: bind/push/dispatch plus
+    // storage-buffer descriptor binds via the queue's per-submit pool.
     void   bind_pipeline(Pipeline* p) override {
         auto* vp = static_cast<VulkanPipeline*>(p);
         if (cmd_ == VK_NULL_HANDLE || vp == nullptr || !vp->is_compute()) return;
         bound_ = vp;
+        for (auto& b : pending_sb_)  b = nullptr;   // new pipeline, clean slate
+        for (auto& b : pending_uav_) b = nullptr;
+        desc_dirty_ = false;
         vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, vp->handle());
     }
+    void   bind_storage_buffer(u32 slot, Buffer* b) override {
+        if (bound_ == nullptr || b == nullptr) return;
+        if (slot >= bound_->storage_buffer_slots() || slot >= kMaxSlots_) return;
+        pending_sb_[slot] = b;
+        desc_dirty_ = true;
+    }
+    void   bind_storage_buffer_uav(u32 slot, Buffer* b) override {
+        if (bound_ == nullptr || b == nullptr) return;
+        if (slot >= bound_->uav_slots() || slot >= kMaxSlots_) return;
+        pending_uav_[slot] = b;
+        desc_dirty_ = true;
+    }
     void   dispatch(u32 gx, u32 gy = 1, u32 gz = 1) override {
-        if (cmd_ != VK_NULL_HANDLE) vkCmdDispatch(cmd_, gx, gy, gz);
+        if (cmd_ == VK_NULL_HANDLE) return;
+        flush_descriptors_();
+        // A failed descriptor flush leaves the set unbound/stale — dispatching
+        // through it is undefined. Drop the dispatch instead (logged once by
+        // the flush) rather than record garbage.
+        if (desc_dirty_) return;
+        vkCmdDispatch(cmd_, gx, gy, gz);
     }
     void   set_push_constants(u32 offset, const void* data, u32 size) override {
         if (cmd_ == VK_NULL_HANDLE || bound_ == nullptr ||
@@ -130,9 +191,70 @@ public:
     void   draw(u32, u32, u32, u32) override {}
 
 private:
-    VkDevice        dev_{VK_NULL_HANDLE};
-    VkCommandBuffer cmd_{VK_NULL_HANDLE};
-    VulkanPipeline* bound_{nullptr};   // for push-constant layout
+    // Build + bind one descriptor set from the pending tables — deferred to
+    // dispatch so a run of bind calls costs one set, mirroring the main-queue
+    // layout: read-only SSBOs at bindings [0, nstore), UAVs at [nstore, +uav).
+    void flush_descriptors_() {
+        if (!desc_dirty_ || bound_ == nullptr || pool_ == VK_NULL_HANDLE) return;
+        VkDescriptorSetLayout dsl = bound_->descriptor_set_layout();
+        if (dsl == VK_NULL_HANDLE) { desc_dirty_ = false; return; }  // push-only kernel
+
+        VkDescriptorSetAllocateInfo dai{};
+        dai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dai.descriptorPool     = pool_;
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts        = &dsl;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(dev_, &dai, &set) != VK_SUCCESS) {
+            cardinal::log::errorf("rhi/vk", "async descriptor-set alloc failed");
+            return;
+        }
+
+        const u32 nstore = bound_->storage_buffer_slots();
+        const u32 nuav   = bound_->uav_slots();
+        VkDescriptorBufferInfo dbi[kMaxSlots_]{};
+        VkDescriptorBufferInfo dbu[kMaxSlots_]{};
+        VkWriteDescriptorSet   wr [kMaxSlots_ * 2]{};
+        u32 nw = 0;
+        for (u32 s = 0; s < nstore && s < kMaxSlots_; ++s) {
+            if (pending_sb_[s] == nullptr) continue;
+            dbi[s].buffer = static_cast<VulkanBuffer*>(pending_sb_[s])->handle();
+            dbi[s].range  = VK_WHOLE_SIZE;
+            wr[nw].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr[nw].dstSet          = set;
+            wr[nw].dstBinding      = s;
+            wr[nw].descriptorCount = 1;
+            wr[nw].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            wr[nw].pBufferInfo     = &dbi[s];
+            ++nw;
+        }
+        for (u32 s = 0; s < nuav && s < kMaxSlots_; ++s) {
+            if (pending_uav_[s] == nullptr) continue;
+            dbu[s].buffer = static_cast<VulkanBuffer*>(pending_uav_[s])->handle();
+            dbu[s].range  = VK_WHOLE_SIZE;
+            wr[nw].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr[nw].dstSet          = set;
+            wr[nw].dstBinding      = kUavBindingBase + s;   // matches -fvk-u-shift
+            wr[nw].descriptorCount = 1;
+            wr[nw].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            wr[nw].pBufferInfo     = &dbu[s];
+            ++nw;
+        }
+        if (nw > 0) vkUpdateDescriptorSets(dev_, nw, wr, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                bound_->layout(), 0, 1, &set, 0, nullptr);
+        desc_dirty_ = false;
+    }
+
+    static constexpr u32 kMaxSlots_ = 16;   // matches swapchain kMaxStorageSlots
+
+    VkDevice         dev_{VK_NULL_HANDLE};
+    VkCommandBuffer  cmd_{VK_NULL_HANDLE};
+    VkDescriptorPool pool_{VK_NULL_HANDLE};
+    VulkanPipeline*  bound_{nullptr};
+    Buffer*          pending_sb_ [kMaxSlots_]{};
+    Buffer*          pending_uav_[kMaxSlots_]{};
+    bool             desc_dirty_{false};
 };
 
 // Owns a command pool + buffer on the compute family; submit() records the
@@ -155,9 +277,22 @@ public:
         if (vkAllocateCommandBuffers(dev, &ai, &cmd_) != VK_SUCCESS) return false;
         VkFenceCreateInfo fci{};
         fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        return vkCreateFence(dev, &fci, nullptr, &done_) == VK_SUCCESS;
+        if (vkCreateFence(dev, &fci, nullptr, &done_) != VK_SUCCESS) return false;
+        // Per-submit descriptor pool for the recorder's storage-buffer binds.
+        // Reset after each previous-submission wait, so sets live exactly as
+        // long as the GPU may read them.
+        VkDescriptorPoolSize ps{};
+        ps.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        ps.descriptorCount = 256u * 32u;
+        VkDescriptorPoolCreateInfo dpci{};
+        dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpci.maxSets       = 256;
+        dpci.poolSizeCount = 1;
+        dpci.pPoolSizes    = &ps;
+        return vkCreateDescriptorPool(dev, &dpci, nullptr, &desc_pool_) == VK_SUCCESS;
     }
     ~VulkanComputeQueue() override {
+        if (desc_pool_) vkDestroyDescriptorPool(dev_, desc_pool_, nullptr);
         if (done_) vkDestroyFence(dev_, done_, nullptr);
         if (pool_) vkDestroyCommandPool(dev_, pool_, nullptr);   // frees cmd_
     }
@@ -166,11 +301,13 @@ public:
                Fence* signal_fence, u64 signal_value) override {
         if (queue_ == VK_NULL_HANDLE || cmd_ == VK_NULL_HANDLE) return 0;
 
-        // Wait for the PREVIOUS submission to retire before reusing the buffer.
+        // Wait for the PREVIOUS submission to retire before reusing the buffer
+        // (and its descriptor sets — safe to reset the pool only after this).
         if (submitted_) {
             vkWaitForFences(dev_, 1, &done_, VK_TRUE, ~0ull);
             vkResetFences(dev_, 1, &done_);
         }
+        if (desc_pool_) vkResetDescriptorPool(dev_, desc_pool_, 0);
 
         vkResetCommandBuffer(cmd_, 0);
         VkCommandBufferBeginInfo bi{};
@@ -178,7 +315,7 @@ public:
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vkBeginCommandBuffer(cmd_, &bi);
         if (record) {
-            VulkanComputeRecorder rec(dev_, cmd_);
+            VulkanComputeRecorder rec(dev_, cmd_, desc_pool_);
             record(&rec, user);
         }
         vkEndCommandBuffer(cmd_);
@@ -209,12 +346,13 @@ public:
     }
 
 private:
-    VkDevice        dev_{VK_NULL_HANDLE};
-    VkQueue         queue_{VK_NULL_HANDLE};   // device-owned compute queue
-    VkCommandPool   pool_{VK_NULL_HANDLE};
-    VkCommandBuffer cmd_{VK_NULL_HANDLE};
-    VkFence         done_{VK_NULL_HANDLE};    // internal reuse fence
-    bool            submitted_{false};
+    VkDevice         dev_{VK_NULL_HANDLE};
+    VkQueue          queue_{VK_NULL_HANDLE};   // device-owned compute queue
+    VkCommandPool    pool_{VK_NULL_HANDLE};
+    VkCommandBuffer  cmd_{VK_NULL_HANDLE};
+    VkFence          done_{VK_NULL_HANDLE};    // internal reuse fence
+    VkDescriptorPool desc_pool_{VK_NULL_HANDLE};  // recorder SSBO sets, per-submit
+    bool             submitted_{false};
 };
 
 // ---- VulkanDevice async-compute factories ----

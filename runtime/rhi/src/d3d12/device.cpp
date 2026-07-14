@@ -265,7 +265,9 @@ cardinal::unique_ptr<Buffer> D3D12Device::create_buffer(const BufferDesc& desc) 
     if (desc.size == 0) return nullptr;
 
     D3D12_HEAP_PROPERTIES heap{};
-    heap.Type = desc.cpu_writable ? D3D12_HEAP_TYPE_UPLOAD : D3D12_HEAP_TYPE_DEFAULT;
+    heap.Type = desc.cpu_readable ? D3D12_HEAP_TYPE_READBACK
+              : desc.cpu_writable ? D3D12_HEAP_TYPE_UPLOAD
+                                  : D3D12_HEAP_TYPE_DEFAULT;
 
     D3D12_RESOURCE_DESC rd{};
     rd.Dimension          = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -283,12 +285,15 @@ cardinal::unique_ptr<Buffer> D3D12Device::create_buffer(const BufferDesc& desc) 
     // heap and are bound read-only as root SRVs (StructuredBuffer<T>), so
     // requesting UAV here makes CreateCommittedResource fail with
     // E_INVALIDARG. Only DEFAULT-heap storage buffers may be UAVs.
-    if (!desc.cpu_writable &&
+    if (!desc.cpu_writable && !desc.cpu_readable &&
         (static_cast<u32>(desc.usage) & static_cast<u32>(BufferUsage::Storage)))
         rd.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
+    // READBACK-heap resources must be created in COPY_DEST (they're pure
+    // GPU-copy destinations the CPU maps for reading).
     const D3D12_RESOURCE_STATES initial =
-        desc.cpu_writable ? D3D12_RESOURCE_STATE_GENERIC_READ
+        desc.cpu_readable ? D3D12_RESOURCE_STATE_COPY_DEST
+      : desc.cpu_writable ? D3D12_RESOURCE_STATE_GENERIC_READ
                           : D3D12_RESOURCE_STATE_COMMON;
 
     ComPtr<ID3D12Resource> res;
@@ -299,7 +304,8 @@ cardinal::unique_ptr<Buffer> D3D12Device::create_buffer(const BufferDesc& desc) 
             hr_str(hr));
         return nullptr;
     }
-    return cardinal::make_unique<D3D12Buffer>(cardinal::move(res), desc.size, desc.cpu_writable);
+    return cardinal::make_unique<D3D12Buffer>(cardinal::move(res), desc.size,
+                                              desc.cpu_writable, desc.cpu_readable);
 }
 
 cardinal::unique_ptr<Texture> D3D12Device::create_texture(const TextureDesc& desc) {

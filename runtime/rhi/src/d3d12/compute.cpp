@@ -17,11 +17,11 @@
 //                        signals the caller's Fence. An internal fence makes the
 //                        allocator safe to reuse across back-to-back submits.
 //
-// NOTE: compute *dispatch* (Swapchain::dispatch / bind compute pipeline) is a
-// separate feature still pending in BOTH backends (no create_compute_pipeline
-// yet), so the recorder's dispatch() stays the base no-op for now — copies,
-// barriers and cross-queue sync are fully functional. Wiring dispatch lights up
-// here with no async-lane changes once compute pipelines land.
+// The recorder is dispatch-complete: bind_pipeline (compute root sig + PSO),
+// root SRV/UAV buffer binds, inline push constants (<=64B blocks), dispatch,
+// copies, UAV barriers and the cross-queue timeline handshake — enough to run
+// any AEGIS kernel off the graphics queue (and for the headless GPU
+// validation harness in tests/gpu_compute).
 //
 // Windows-only.
 // =============================================================================
@@ -61,6 +61,28 @@ public:
         D3D12_RESOURCE_BARRIER bar{};
         bar.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
         bar.UAV.pResource = db->resource();
+        cmd_->ResourceBarrier(1, &bar);
+    }
+    void transition_buffer_state(Buffer* b, ResourceState before,
+                                 ResourceState after) override {
+        auto* db = static_cast<D3D12Buffer*>(b);
+        if (!cmd_ || !db || before == after) return;
+        // Compute-list-legal subset of the main swapchain's state map.
+        auto st = [](ResourceState s) -> D3D12_RESOURCE_STATES {
+            switch (s) {
+                case ResourceState::UnorderedAccess:  return D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                case ResourceState::ShaderResource:   return D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                case ResourceState::CopySource:       return D3D12_RESOURCE_STATE_COPY_SOURCE;
+                case ResourceState::CopyDest:         return D3D12_RESOURCE_STATE_COPY_DEST;
+                default:                              return D3D12_RESOURCE_STATE_COMMON;
+            }
+        };
+        D3D12_RESOURCE_BARRIER bar{};
+        bar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        bar.Transition.pResource   = db->resource();
+        bar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        bar.Transition.StateBefore = st(before);
+        bar.Transition.StateAfter  = st(after);
         cmd_->ResourceBarrier(1, &bar);
     }
     void begin_event(const char* n) override {
@@ -121,7 +143,26 @@ public:
     }
     void   bind_vertex_buffer(Buffer*, usize) override {}
     void   draw(u32, u32, u32, u32) override {}
-    void   set_push_constants(u32, const void*, u32) override {}
+    void   set_push_constants(u32 offset, const void* data, u32 size) override {
+        // Inline-root-constants path only (blocks <=64B — every AEGIS kernel).
+        // The CBV-ring path for large blocks lives on the main swapchain; the
+        // async recorder has no per-frame ring, so big blocks warn + drop.
+        if (!cmd_ || bound_ == nullptr) return;
+        const u32 declared = bound_->push_constant_size();
+        if (declared == 0) return;
+        if (offset + size > declared || bound_->push_is_cbv()) {
+            static bool warned = false;
+            if (!warned) {
+                cardinal::log::warnf("rhi/d3d12",
+                    "async set_push_constants unsupported shape "
+                    "(offset=%u size=%u declared=%u cbv=%d) — dropped",
+                    offset, size, declared, bound_->push_is_cbv() ? 1 : 0);
+                warned = true;
+            }
+            return;
+        }
+        cmd_->SetComputeRoot32BitConstants(0, (size + 3u) / 4u, data, offset / 4u);
+    }
 
 private:
     ID3D12Device*              dev_{nullptr};

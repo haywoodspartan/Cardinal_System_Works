@@ -504,6 +504,12 @@ ShaderBlob VulkanDevice::compile_shader(
         // to garbage clip space and never rendered as 3D. Pin
         // column-major explicitly so the two backends can't diverge.
         L"-Zpc",                         // column-major (match D3D12)
+        // UAV register shift: DXC's default SPIR-V mapping puts tN AND uN at
+        // binding N (register classes share the per-space binding namespace),
+        // so u0 aliased t0's SSBO — every compute kernel's UAV writes landed
+        // in its first SRV's buffer (caught by tests/gpu_compute). Shift u
+        // registers to the fixed base the pipeline layout + binders use.
+        L"-fvk-u-shift", L"16", L"0",
     };
     if (caps_.shader_float16 && settings_.prefer_fp16) {
         args.push_back(L"-enable-16bit-types");
@@ -863,10 +869,23 @@ bool VulkanPipeline::initialize_compute(const ComputePipelineDesc& desc) {
 
     const u32 total_ssbo = storage_buffer_slots_ + uav_slots_;
     if (total_ssbo > 0) {
+        // Bindings mirror DXC's register mapping: read-only SSBOs (HLSL tN)
+        // at bindings [0, storage); UAVs (HLSL uN, compiled with
+        // -fvk-u-shift kUavBindingBase) at [kUavBindingBase, +uav). The old
+        // contiguous [storage, +uav) layout silently aliased u0 onto t0's
+        // binding in the SPIR-V (caught by tests/gpu_compute).
         cardinal::vector<VkDescriptorSetLayoutBinding> b;
-        for (u32 s = 0; s < total_ssbo; ++s) {
+        for (u32 s = 0; s < storage_buffer_slots_; ++s) {
             VkDescriptorSetLayoutBinding lb{};
-            lb.binding         = s;                         // [0,storage)=RO, [storage,+uav)=RW
+            lb.binding         = s;
+            lb.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            lb.descriptorCount = 1;
+            lb.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            b.push_back(lb);
+        }
+        for (u32 s = 0; s < uav_slots_; ++s) {
+            VkDescriptorSetLayoutBinding lb{};
+            lb.binding         = kUavBindingBase + s;
             lb.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             lb.descriptorCount = 1;
             lb.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;

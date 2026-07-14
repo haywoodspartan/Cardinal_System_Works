@@ -259,9 +259,9 @@ void VulkanSwapchain::rebuild_and_bind_descriptor_set_() {
         wr[nw].pBufferInfo     = &dbi[s];
         ++nw;
     }
-    // Compute: read-write UAVs occupy bindings [nstore, nstore+uav) (Vulkan
-    // models UAV as a STORAGE_BUFFER; the layout reserved them in
-    // initialize_compute).
+    // Compute: read-write UAVs occupy bindings [kUavBindingBase, +uav) —
+    // matching DXC's -fvk-u-shift so HLSL uN lands where the layout put it
+    // (Vulkan models a buffer UAV as a STORAGE_BUFFER descriptor).
     for (u32 s = 0; s < nuav && s < kMaxStorageSlots; ++s) {
         if (pending_uav_[s] == nullptr) continue;
         auto* vbuf      = static_cast<VulkanBuffer*>(pending_uav_[s]);
@@ -270,7 +270,7 @@ void VulkanSwapchain::rebuild_and_bind_descriptor_set_() {
         dbu[s].range    = VK_WHOLE_SIZE;
         wr[nw].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         wr[nw].dstSet          = set;
-        wr[nw].dstBinding      = nstore + s;
+        wr[nw].dstBinding      = kUavBindingBase + s;
         wr[nw].descriptorCount = 1;
         wr[nw].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         wr[nw].pBufferInfo     = &dbu[s];
