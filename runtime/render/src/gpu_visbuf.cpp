@@ -234,12 +234,17 @@ cardinal::shared_ptr<VisibilityBufferPass::State> VisibilityBufferPass::add_to_g
     rg::PassDesc pd;
     pd.name = "VisibilityBufferPass";
     pd.kind = rg::PassKind::Compute;
+    // FIXED SRV LAYOUT: the aux access is ALWAYS declared (dummy when the
+    // host has none) so the kernel's t3 never shifts; the push flag tells
+    // the kernel whether t3 carries real per-tri aux. The CPU record keeps
+    // gating on the ORIGINAL handle in State.
+    rg::ResourceHandle aux_bind = in_aux_per_tri;
+    if (!aux_bind.is_valid())
+        aux_bind = g.declare_buffer(rg::BufferDesc{"vbuf.noaux", 4, 4, true});
     pd.accesses.push_back(rg::ResourceAccess{in_tris,        rg::AccessMode::Read,  0});
     pd.accesses.push_back(rg::ResourceAccess{in_mat_ids,     rg::AccessMode::Read,  1});
     pd.accesses.push_back(rg::ResourceAccess{in_matrix,      rg::AccessMode::Read,  2});
-    if (in_aux_per_tri.is_valid()) {
-        pd.accesses.push_back(rg::ResourceAccess{in_aux_per_tri, rg::AccessMode::Read, 3});
-    }
+    pd.accesses.push_back(rg::ResourceAccess{aux_bind,       rg::AccessMode::Read,  3});
     pd.accesses.push_back(rg::ResourceAccess{st->out_depth,   rg::AccessMode::Write, 4});
     pd.accesses.push_back(rg::ResourceAccess{st->out_prim_id, rg::AccessMode::Write, 5});
     pd.accesses.push_back(rg::ResourceAccess{st->out_mat_id,  rg::AccessMode::Write, 6});
@@ -251,36 +256,144 @@ cardinal::shared_ptr<VisibilityBufferPass::State> VisibilityBufferPass::add_to_g
     pd.dispatch_x = (width  + 7) / 8;
     pd.dispatch_y = (height + 7) / 8;
     pd.dispatch_z = 1;
+    pd.compute_hlsl = VisibilityBufferPass::hlsl_source();
+    pd.push_constant_size = 16;
+    pd.push_constants.clear();
+    auto push_u32 = [&pd](cardinal::u32 x) {
+        pd.push_constants.push_back(static_cast<cardinal::u8>( x        & 0xFF));
+        pd.push_constants.push_back(static_cast<cardinal::u8>((x >>  8) & 0xFF));
+        pd.push_constants.push_back(static_cast<cardinal::u8>((x >> 16) & 0xFF));
+        pd.push_constants.push_back(static_cast<cardinal::u8>((x >> 24) & 0xFF));
+    };
+    push_u32(width);
+    push_u32(height);
+    push_u32(triangle_count);
+    push_u32(in_aux_per_tri.is_valid() ? 1u : 0u);
     g.add_pass(cardinal::move(pd));
     return st;
 }
 
 const char* VisibilityBufferPass::hlsl_source() noexcept {
-    return R"(// Cardinal — VisibilityBufferPass.hlsl
-//
-// Tile-parallel. One thread per pixel. Same edge-function + barycentric
-// inside-test as PolygonViewportPass; differs only in WHAT it writes:
-// instead of an interpolated RGB, the V-Buf records prim_id, mat_id,
-// oct-packed normal, motion vector, aux — the compact info needed to
-// reconstruct attributes in a later compute resolver.
-ByteAddressBuffer   in_tris    : register(t0);
-ByteAddressBuffer   in_mat_ids : register(t1);
-ByteAddressBuffer   in_matrix  : register(t2);
-ByteAddressBuffer   in_aux     : register(t3);
-RWByteAddressBuffer out_depth  : register(u0);
-RWByteAddressBuffer out_prim   : register(u1);
-RWByteAddressBuffer out_mat    : register(u2);
-RWByteAddressBuffer out_normal : register(u3);
-RWByteAddressBuffer out_motion : register(u4);
-RWByteAddressBuffer out_aux    : register(u5);
-cbuffer Params : register(b0) { uint width, height, tri_count, _pad; };
-[numthreads(8, 8, 1)]
-void main(uint3 tid : SV_DispatchThreadID) {
-    // Per-pixel walk of every visible tri; identical algorithm to
-    // PolygonViewportPass but writes the 6 V-Buf channels instead of
-    // a single RGB. Body deferred to RHI compute commit.
-}
-)";
+    // One thread per PIXEL, looping every triangle in submission order —
+    // deliberately mirrors the CPU rasterizer's winner selection: the CPU
+    // iterates triangles outer and accepts on strict z < depth, so a per-pixel
+    // inner loop over the SAME ascending order with the same strict compare
+    // resolves to the identical winner (ties keep the earlier triangle).
+    // O(pixels * tris) — validation-first; a binned rasterizer is the
+    // optimization slice once numerics are pinned.
+    return
+    "// Cardinal - VisibilityBufferPass.hlsl - per-pixel triangle-loop raster.\n"
+    "ByteAddressBuffer   InTris   : register(t0);   // 9 floats per tri\n"
+    "ByteAddressBuffer   InMatIds : register(t1);   // u32 per tri\n"
+    "ByteAddressBuffer   InMatrix : register(t2);   // 16 floats row-major VP\n"
+    "ByteAddressBuffer   InAux    : register(t3);   // u32 per tri (or dummy)\n"
+    "RWByteAddressBuffer OutDepth : register(u0);\n"
+    "RWByteAddressBuffer OutPrim  : register(u1);\n"
+    "RWByteAddressBuffer OutMat   : register(u2);\n"
+    "RWByteAddressBuffer OutNrm   : register(u3);\n"
+    "RWByteAddressBuffer OutMV    : register(u4);\n"
+    "RWByteAddressBuffer OutAux   : register(u5);\n"
+    "struct PushT { uint w; uint h; uint triCount; uint hasAux; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "#define gW pc.w\n"
+    "#define gH pc.h\n"
+    "#define gTriCount pc.triCount\n"
+    "#define gHasAux pc.hasAux\n"
+    "float edge_fn(float ax, float ay, float bx, float by, float cx, float cy) {\n"
+    "  return (bx-ax)*(cy-ay) - (by-ay)*(cx-ax);\n"
+    "}\n"
+    "uint oct_pack(float3 n) {\n"
+    "  float inv_l1 = 1.0 / (abs(n.x) + abs(n.y) + abs(n.z) + 1.0e-8);\n"
+    "  float ox = n.x * inv_l1;\n"
+    "  float oz = n.z * inv_l1;\n"
+    "  if (n.y < 0.0) {\n"
+    "    float tx = (1.0 - abs(oz)) * (ox >= 0.0 ? 1.0 : -1.0);\n"
+    "    float tz = (1.0 - abs(ox)) * (oz >= 0.0 ? 1.0 : -1.0);\n"
+    "    ox = tx; oz = tz;\n"
+    "  }\n"
+    "  uint ix = uint(int(clamp(ox, -1.0, 1.0) * 32767.0)) & 0xFFFFu;\n"
+    "  uint iz = uint(int(clamp(oz, -1.0, 1.0) * 32767.0)) & 0xFFFFu;\n"
+    "  return ix | (iz << 16);\n"
+    "}\n"
+    "[numthreads(8,8,1)]\n"
+    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
+    "  if (tid.x >= gW || tid.y >= gH) return;\n"
+    "  uint pix = tid.y*gW + tid.x;\n"
+    "  float bestZ = 1.0;\n"
+    "  uint bestPrim = 0xFFFFFFFFu, bestMat = 0xFFFFFFFFu, bestNrm = 0u, bestAux = 0u;\n"
+    "  float4 r0 = asfloat(InMatrix.Load4(0));\n"
+    "  float4 r1 = asfloat(InMatrix.Load4(16));\n"
+    "  float4 r2 = asfloat(InMatrix.Load4(32));\n"
+    "  float4 r3 = asfloat(InMatrix.Load4(48));\n"
+    "  float hw = 0.5*(float)gW, hh = 0.5*(float)gH;\n"
+    "  float fx = (float)tid.x + 0.5, fy = (float)tid.y + 0.5;\n"
+    "  [loop] for (uint t = 0u; t < gTriCount; ++t) {\n"
+    "    uint b = t*36u;\n"
+    "    float3 v0 = asfloat(InTris.Load3(b+0));\n"
+    "    float3 v1 = asfloat(InTris.Load3(b+12));\n"
+    "    float3 v2 = asfloat(InTris.Load3(b+24));\n"
+    "    float sx[3], sy[3], sz[3], sw[3];\n"
+    "    [unroll] for (uint k = 0u; k < 3u; ++k) {\n"
+    "      float3 p = (k == 0u) ? v0 : ((k == 1u) ? v1 : v2);\n"
+    "      float cw = dot(r3.xyz, p) + r3.w;\n"
+    "      sw[k] = cw;\n"
+    "      if (abs(cw) < 1.0e-8 || !isfinite(cw) || cw <= 0.0) {\n"
+    "        sx[k] = 0.0; sy[k] = 0.0; sz[k] = 1.0e30;\n"
+    "      } else {\n"
+    "        sx[k] = (dot(r0.xyz, p) + r0.w) / cw;\n"
+    "        sy[k] = (dot(r1.xyz, p) + r1.w) / cw;\n"
+    "        sz[k] = (dot(r2.xyz, p) + r2.w) / cw;\n"
+    "      }\n"
+    "    }\n"
+    "    if (sw[0] <= 0.0 || sw[1] <= 0.0 || sw[2] <= 0.0) continue;\n"
+    "    if (sx[0] < -1.0 && sx[1] < -1.0 && sx[2] < -1.0) continue;\n"
+    "    if (sx[0] >  1.0 && sx[1] >  1.0 && sx[2] >  1.0) continue;\n"
+    "    if (sy[0] < -1.0 && sy[1] < -1.0 && sy[2] < -1.0) continue;\n"
+    "    if (sy[0] >  1.0 && sy[1] >  1.0 && sy[2] >  1.0) continue;\n"
+    "    float px[3], py[3], pz[3];\n"
+    "    [unroll] for (uint k2 = 0u; k2 < 3u; ++k2) {\n"
+    "      px[k2] = sx[k2]*hw + hw;\n"
+    "      py[k2] = hh - sy[k2]*hh;\n"
+    "      pz[k2] = 0.5*(sz[k2] + 1.0);\n"
+    "    }\n"
+    "    float min_x = min(px[0], min(px[1], px[2]));\n"
+    "    float max_x = max(px[0], max(px[1], px[2]));\n"
+    "    float min_y = min(py[0], min(py[1], py[2]));\n"
+    "    float max_y = max(py[0], max(py[1], py[2]));\n"
+    "    int x0 = (int)min_x;      if (x0 < 0) x0 = 0;\n"
+    "    int x1 = (int)max_x + 1;  if (x1 > (int)gW) x1 = (int)gW;\n"
+    "    int y0 = (int)min_y;      if (y0 < 0) y0 = 0;\n"
+    "    int y1 = (int)max_y + 1;  if (y1 > (int)gH) y1 = (int)gH;\n"
+    "    if ((int)tid.x < x0 || (int)tid.x >= x1) continue;\n"
+    "    if ((int)tid.y < y0 || (int)tid.y >= y1) continue;\n"
+    "    float area = edge_fn(px[0], py[0], px[1], py[1], px[2], py[2]);\n"
+    "    if (abs(area) < 1.0e-6) continue;\n"
+    "    float inv_area = 1.0 / area;\n"
+    "    float w0 = edge_fn(px[1], py[1], px[2], py[2], fx, fy);\n"
+    "    float w1 = edge_fn(px[2], py[2], px[0], py[0], fx, fy);\n"
+    "    float w2 = edge_fn(px[0], py[0], px[1], py[1], fx, fy);\n"
+    "    bool inside = (area > 0.0) ? (w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0)\n"
+    "                               : (w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0);\n"
+    "    if (!inside) continue;\n"
+    "    precise float z = (w0*inv_area)*pz[0] + (w1*inv_area)*pz[1] + (w2*inv_area)*pz[2];\n"
+    "    if (!isfinite(z) || z < 0.0 || z > 1.0) continue;\n"
+    "    if (z >= bestZ) continue;\n"
+    "    float3 nrm = cross(v1 - v0, v2 - v0);\n"
+    "    float  nl  = sqrt(dot(nrm, nrm));\n"
+    "    nrm = (nl > 1.0e-8) ? nrm / nl : float3(0, 1, 0);\n"
+    "    bestZ    = z;\n"
+    "    bestPrim = t;\n"
+    "    bestMat  = InMatIds.Load(t*4u);\n"
+    "    bestNrm  = oct_pack(nrm);\n"
+    "    bestAux  = (gHasAux != 0u) ? InAux.Load(t*4u) : t;\n"
+    "  }\n"
+    "  OutDepth.Store(pix*4u, asuint(bestZ));\n"
+    "  OutPrim.Store (pix*4u, bestPrim);\n"
+    "  OutMat.Store  (pix*4u, bestMat);\n"
+    "  OutNrm.Store  (pix*4u, bestNrm);\n"
+    "  OutMV.Store   (pix*4u, 0u);\n"
+    "  OutAux.Store  (pix*4u, bestAux);\n"
+    "}\n";
 }
 
 // =============================================================================

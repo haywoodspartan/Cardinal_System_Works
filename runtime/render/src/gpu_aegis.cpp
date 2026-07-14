@@ -101,17 +101,57 @@ cardinal::shared_ptr<GeometryClassifyPass::State> GeometryClassifyPass::add_to_g
     st->out_class = g.declare_buffer(od);
     rg::PassDesc pd;
     pd.name = "GeometryClassifyPass"; pd.kind = rg::PassKind::Compute;
-    pd.accesses.push_back(rg::ResourceAccess{in_tris, rg::AccessMode::Read, 0});
-    if (in_curv.is_valid()) pd.accesses.push_back(rg::ResourceAccess{in_curv, rg::AccessMode::Read, 1});
+    // FIXED SRV LAYOUT: the curvature access is ALWAYS declared — RhiBackend
+    // assigns t-registers in access order, so a conditional access would shift
+    // out_class between t1/u0 shapes and a single kernel couldn't match both.
+    // When the host has no curvature we bind a 4-byte dummy and tell the
+    // kernel via the push flag; the CPU record keeps gating on the ORIGINAL
+    // handle in State (it never reads the dummy).
+    rg::ResourceHandle curv_bind = in_curv;
+    if (!curv_bind.is_valid())
+        curv_bind = g.declare_buffer(rg::BufferDesc{"geom.nocurv", 4, 4, true});
+    pd.accesses.push_back(rg::ResourceAccess{in_tris,       rg::AccessMode::Read,  0});
+    pd.accesses.push_back(rg::ResourceAccess{curv_bind,     rg::AccessMode::Read,  1});
     pd.accesses.push_back(rg::ResourceAccess{st->out_class, rg::AccessMode::Write, 2});
     pd.record = classify_record; pd.user_ctx = st.get();
     pd.dispatch_x = (N + 63) / 64;
+    pd.compute_hlsl = GeometryClassifyPass::hlsl_source();
+    pd.push_constant_size = 16;
+    pack_push(pd.push_constants, N, in_curv.is_valid() ? 1u : 0u, 0.0f, 0u);
     g.add_pass(cardinal::move(pd));
     return st;
 }
 
 const char* GeometryClassifyPass::hlsl_source() noexcept {
-    return "// Cardinal — GeometryClassifyPass.hlsl\n// One thread per triangle; per-tri classifier into 5 AEGIS classes.\n";
+    return
+    "// Cardinal - GeometryClassifyPass.hlsl - one thread per triangle.\n"
+    "// Mirrors classify_record: 5-class heuristic from area^2 + curvature.\n"
+    "ByteAddressBuffer   InTris   : register(t0);   // 9 floats per tri\n"
+    "ByteAddressBuffer   InCurv   : register(t1);   // 1 float per tri (or dummy)\n"
+    "RWByteAddressBuffer OutClass : register(u0);   // u32 class per tri\n"
+    "struct PushT { uint n; uint hasCurv; uint p0; uint p1; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "#define gN pc.n\n"
+    "#define gHasCurv pc.hasCurv\n"
+    "[numthreads(64,1,1)]\n"
+    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
+    "  uint t = tid.x; if (t >= gN) return;\n"
+    "  uint b = t*36u;\n"
+    "  float3 v0 = asfloat(InTris.Load3(b+0));\n"
+    "  float3 v1 = asfloat(InTris.Load3(b+12));\n"
+    "  float3 v2 = asfloat(InTris.Load3(b+24));\n"
+    "  float3 n  = cross(v1-v0, v2-v0);\n"
+    "  float a2  = dot(n,n);\n"
+    "  float c   = 0.0;\n"
+    "  if (gHasCurv != 0u) { c = asfloat(InCurv.Load(t*4u)); if (!isfinite(c)) c = 0.0; }\n"
+    "  uint k;\n"
+    "  if      (a2 < 1.0e-4) k = 4u;   // Foliage (degenerate area)\n"
+    "  else if (c > 0.5)     k = 3u;   // Displaced\n"
+    "  else if (c > 0.2)     k = 2u;   // Organic\n"
+    "  else if (c > 0.05)    k = 1u;   // HardSurface\n"
+    "  else                  k = 0u;   // Planar\n"
+    "  OutClass.Store(t*4u, k);\n"
+    "}\n";
 }
 
 // ============================================================================
@@ -209,12 +249,67 @@ cardinal::shared_ptr<MeshletBuildPass::State> MeshletBuildPass::add_to_graph(
     pd.accesses.push_back(rg::ResourceAccess{st->out_meshlet_count,  rg::AccessMode::Write, 2});
     pd.record = meshlet_record; pd.user_ctx = st.get();
     pd.dispatch_x = (M + 63) / 64;
+    pd.compute_hlsl = MeshletBuildPass::hlsl_source();
+    pd.push_constant_size = 16;
+    pack_push(pd.push_constants, N, M, 0.0f, 0u);
     g.add_pass(cardinal::move(pd));
     return st;
 }
 
 const char* MeshletBuildPass::hlsl_source() noexcept {
-    return "// Cardinal — MeshletBuildPass.hlsl\n// One thread per meshlet; emits 12-float record (first/count/min/max/cone).\n";
+    return
+    "// Cardinal - MeshletBuildPass.hlsl - one thread per 64-tri meshlet.\n"
+    "// Mirrors meshlet_record: AABB + averaged-normal cone axis + min-dot cone.\n"
+    "// Record (48B): u32 first, u32 count, f3 min, f3 max, f3 axis, f cone_cos.\n"
+    "ByteAddressBuffer   InTris      : register(t0);\n"
+    "RWByteAddressBuffer OutMeshlets : register(u0);\n"
+    "RWByteAddressBuffer OutCount    : register(u1);\n"
+    "struct PushT { uint triCount; uint meshletCount; uint p0; uint p1; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "#define gTriCount pc.triCount\n"
+    "#define gMeshletCount pc.meshletCount\n"
+    "[numthreads(64,1,1)]\n"
+    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
+    "  uint m = tid.x; if (m >= gMeshletCount) return;\n"
+    "  if (m == 0u) OutCount.Store(0, gMeshletCount);\n"
+    "  uint first = m*64u;\n"
+    "  uint last  = min(first + 64u, gTriCount);\n"
+    "  float3 mn = float3( 1e30, 1e30, 1e30);\n"
+    "  float3 mx = float3(-1e30,-1e30,-1e30);\n"
+    "  float3 acc = float3(0,0,0);\n"
+    "  uint t;\n"
+    "  [loop] for (t = first; t < last; ++t) {\n"
+    "    uint b = t*36u;\n"
+    "    float3 p0 = asfloat(InTris.Load3(b+0));\n"
+    "    float3 p1 = asfloat(InTris.Load3(b+12));\n"
+    "    float3 p2 = asfloat(InTris.Load3(b+24));\n"
+    "    mn = min(mn, min(p0, min(p1, p2)));\n"
+    "    mx = max(mx, max(p0, max(p1, p2)));\n"
+    "    float3 fn = cross(p1-p0, p2-p0);\n"
+    "    float  nl = sqrt(dot(fn,fn));\n"
+    "    if (nl > 1e-8) acc += fn / nl;\n"
+    "  }\n"
+    "  float  al   = sqrt(dot(acc,acc));\n"
+    "  float3 axis = (al > 1e-8) ? acc / al : float3(0,1,0);\n"
+    "  float cone = 1.0;\n"
+    "  [loop] for (t = first; t < last; ++t) {\n"
+    "    uint b = t*36u;\n"
+    "    float3 p0 = asfloat(InTris.Load3(b+0));\n"
+    "    float3 p1 = asfloat(InTris.Load3(b+12));\n"
+    "    float3 p2 = asfloat(InTris.Load3(b+24));\n"
+    "    float3 fn = cross(p1-p0, p2-p0);\n"
+    "    float  nl = sqrt(dot(fn,fn));\n"
+    "    if (nl > 1e-8) fn /= nl;\n"
+    "    cone = min(cone, dot(axis, fn));\n"
+    "  }\n"
+    "  uint base = m*48u;\n"
+    "  OutMeshlets.Store (base+0,  first);\n"
+    "  OutMeshlets.Store (base+4,  last - first);\n"
+    "  OutMeshlets.Store3(base+8,  asuint(mn));\n"
+    "  OutMeshlets.Store3(base+20, asuint(mx));\n"
+    "  OutMeshlets.Store3(base+32, asuint(axis));\n"
+    "  OutMeshlets.Store (base+44, asuint(cone));\n"
+    "}\n";
 }
 
 // ============================================================================
@@ -281,7 +376,11 @@ cardinal::shared_ptr<MeshletCullPass::State> MeshletCullPass::add_to_graph(
     auto st = cardinal::shared_ptr<State>(new State());
     st->in_meshlets = in_meshlets; st->in_matrix = in_mat; st->in_camera_dir = in_dir;
     st->meshlet_count = N;
-    rg::BufferDesc od; od.name = "meshlet.vis"; od.size_bytes = N; od.stride_bytes = 1;
+    rg::BufferDesc od; od.name = "meshlet.vis"; od.stride_bytes = 1;
+    // Rounded up to a whole u32: the GPU kernel packs 4 visibility bytes per
+    // 32-bit store (ByteAddressBuffer stores are 4-byte wide), and a root-
+    // descriptor UAV has no bounds checking to forgive a tail overhang.
+    od.size_bytes = (static_cast<cardinal::usize>(N) + 3u) & ~static_cast<cardinal::usize>(3u);
     st->out_visibility = g.declare_buffer(od);
     rg::PassDesc pd;
     pd.name = "MeshletCullPass"; pd.kind = rg::PassKind::Compute;
@@ -290,13 +389,69 @@ cardinal::shared_ptr<MeshletCullPass::State> MeshletCullPass::add_to_graph(
     pd.accesses.push_back(rg::ResourceAccess{in_dir,             rg::AccessMode::Read,  2});
     pd.accesses.push_back(rg::ResourceAccess{st->out_visibility, rg::AccessMode::Write, 3});
     pd.record = meshlet_cull_record; pd.user_ctx = st.get();
-    pd.dispatch_x = (N + 63) / 64;
+    // GPU: one thread per PACKED WORD (4 meshlets), see kernel.
+    pd.dispatch_x = (((N + 3) / 4) + 63) / 64;
+    if (pd.dispatch_x == 0) pd.dispatch_x = 1;
+    pd.compute_hlsl = MeshletCullPass::hlsl_source();
+    pd.push_constant_size = 16;
+    pack_push(pd.push_constants, N, 0u, 0.0f, 0u);
     g.add_pass(cardinal::move(pd));
     return st;
 }
 
 const char* MeshletCullPass::hlsl_source() noexcept {
-    return "// Cardinal — MeshletCullPass.hlsl\n// Per-meshlet frustum + normal-cone backface reject.\n";
+    return
+    "// Cardinal - MeshletCullPass.hlsl - frustum + normal-cone backface reject.\n"
+    "// One thread per packed WORD of 4 visibility bytes (u8 out channel; BAB\n"
+    "// stores are 4-byte wide, so each thread culls 4 meshlets + stores 1 u32).\n"
+    "ByteAddressBuffer   InMeshlets : register(t0);   // 48B records\n"
+    "ByteAddressBuffer   InMatrix   : register(t1);   // 16 floats row-major VP\n"
+    "ByteAddressBuffer   InCamDir   : register(t2);   // 3 floats\n"
+    "RWByteAddressBuffer OutVis     : register(u0);   // 1 byte per meshlet\n"
+    "struct PushT { uint n; uint p0; uint p1; uint p2; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "#define gN pc.n\n"
+    "[numthreads(64,1,1)]\n"
+    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
+    "  uint w = tid.x;\n"
+    "  uint words = (gN + 3u) / 4u;\n"
+    "  if (w >= words) return;\n"
+    "  float4 r0 = asfloat(InMatrix.Load4(0));\n"
+    "  float4 r1 = asfloat(InMatrix.Load4(16));\n"
+    "  float4 r2 = asfloat(InMatrix.Load4(32));\n"
+    "  float4 r3 = asfloat(InMatrix.Load4(48));\n"
+    "  float3 cam = asfloat(InCamDir.Load3(0));\n"
+    "  uint word = 0u;\n"
+    "  [loop] for (uint k = 0u; k < 4u; ++k) {\n"
+    "    uint i = w*4u + k;\n"
+    "    if (i >= gN) break;\n"
+    "    uint b = i*48u;\n"
+    "    float3 mn   = asfloat(InMeshlets.Load3(b+8));\n"
+    "    float3 mx   = asfloat(InMeshlets.Load3(b+20));\n"
+    "    float3 axis = asfloat(InMeshlets.Load3(b+32));\n"
+    "    float  cone = asfloat(InMeshlets.Load(b+44));\n"
+    "    bool any_in = false;\n"
+    "    [loop] for (uint c = 0u; c < 8u; ++c) {\n"
+    "      float3 p = float3((c & 1u) ? mx.x : mn.x,\n"
+    "                        (c & 2u) ? mx.y : mn.y,\n"
+    "                        (c & 4u) ? mx.z : mn.z);\n"
+    "      float cw = dot(r3.xyz, p) + r3.w;\n"
+    "      if (cw <= 0.0) continue;\n"
+    "      float nx = (dot(r0.xyz, p) + r0.w) / cw;\n"
+    "      float ny = (dot(r1.xyz, p) + r1.w) / cw;\n"
+    "      float nz = (dot(r2.xyz, p) + r2.w) / cw;\n"
+    "      if (nx >= -1.0 && nx <= 1.0 && ny >= -1.0 && ny <= 1.0 &&\n"
+    "          nz >= 0.0 && nz <= 1.0) { any_in = true; break; }\n"
+    "    }\n"
+    "    uint vis = 0u;\n"
+    "    if (any_in) {\n"
+    "      float face_dot = dot(axis, cam);\n"
+    "      vis = (face_dot > 0.0 && (face_dot - (1.0 - cone)) > 0.5) ? 0u : 1u;\n"
+    "    }\n"
+    "    word |= vis << (k*8u);\n"
+    "  }\n"
+    "  OutVis.Store(w*4u, word);\n"
+    "}\n";
 }
 
 // ============================================================================
@@ -357,12 +512,49 @@ cardinal::shared_ptr<ScreenSpaceErrorPass::State> ScreenSpaceErrorPass::add_to_g
     pd.accesses.push_back(rg::ResourceAccess{st->out_lod, rg::AccessMode::Write, 2});
     pd.record = sse_record; pd.user_ctx = st.get();
     pd.dispatch_x = (N + 63) / 64;
+    pd.compute_hlsl = ScreenSpaceErrorPass::hlsl_source();
+    pd.push_constant_size = 16;
+    // b0 = { uint gN, uint _pad, float gVpH, float gThresh } — pack manually
+    // (pack_push's fixed shape is u32,u32,f32,u32).
+    pd.push_constants.clear();
+    put_u32(pd.push_constants, N);
+    put_u32(pd.push_constants, 0u);
+    put_u32(pd.push_constants, f32_bits(static_cast<float>(vp_h)));
+    put_u32(pd.push_constants, f32_bits(cardinal::isfinite(st->error_threshold_px)
+                                            ? st->error_threshold_px : 2.0f));
     g.add_pass(cardinal::move(pd));
     return st;
 }
 
 const char* ScreenSpaceErrorPass::hlsl_source() noexcept {
-    return "// Cardinal — ScreenSpaceErrorPass.hlsl\n// Per-meshlet screen radius → LOD level.\n";
+    return
+    "// Cardinal - ScreenSpaceErrorPass.hlsl - per-meshlet screen radius -> LOD.\n"
+    "ByteAddressBuffer   InMeshlets : register(t0);   // 48B records\n"
+    "ByteAddressBuffer   InMatrix   : register(t1);   // 16 floats row-major VP\n"
+    "RWByteAddressBuffer OutLod     : register(u0);   // u32 LOD 0..7 per meshlet\n"
+    "struct PushT { uint n; uint p0; float vpH; float thresh; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "#define gN pc.n\n"
+    "#define gVpH pc.vpH\n"
+    "#define gThresh pc.thresh\n"
+    "[numthreads(64,1,1)]\n"
+    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
+    "  uint i = tid.x; if (i >= gN) return;\n"
+    "  uint b = i*48u;\n"
+    "  float3 mn = asfloat(InMeshlets.Load3(b+8));\n"
+    "  float3 mx = asfloat(InMeshlets.Load3(b+20));\n"
+    "  float3 c  = 0.5*(mn + mx);\n"
+    "  float3 e  = 0.5*(mx - mn);\n"
+    "  float  radius = sqrt(dot(e,e));\n"
+    "  float4 r3 = asfloat(InMatrix.Load4(48));\n"
+    "  float  pw = dot(r3.xyz, c) + r3.w;\n"
+    "  uint chosen = 0u;\n"
+    "  if (pw > 1e-4) {\n"
+    "    float r_at = (radius * gVpH / (pw * 2.0)) / gThresh;\n"
+    "    [loop] while (r_at < 1.0 && chosen < 7u) { r_at *= 2.0; ++chosen; }\n"
+    "  }\n"
+    "  OutLod.Store(i*4u, chosen);\n"
+    "}\n";
 }
 
 // ============================================================================
@@ -414,13 +606,45 @@ cardinal::shared_ptr<DrawIndirectGenPass::State> DrawIndirectGenPass::add_to_gra
     pd.accesses.push_back(rg::ResourceAccess{st->out_commands, rg::AccessMode::Write, 2});
     pd.accesses.push_back(rg::ResourceAccess{st->out_count,    rg::AccessMode::Write, 3});
     pd.record = indirect_record; pd.user_ctx = st.get();
-    pd.dispatch_x = (N + 63) / 64;
+    // GPU: ONE thread does the whole compaction (see kernel note).
+    pd.dispatch_x = 1;
+    pd.compute_hlsl = DrawIndirectGenPass::hlsl_source();
+    pd.push_constant_size = 16;
+    pack_push(pd.push_constants, N, 0u, 0.0f, 0u);
     g.add_pass(cardinal::move(pd));
     return st;
 }
 
 const char* DrawIndirectGenPass::hlsl_source() noexcept {
-    return "// Cardinal — DrawIndirectGenPass.hlsl\n// Compact visibility → indirect draw command list with atomic count.\n";
+    return
+    "// Cardinal - DrawIndirectGenPass.hlsl - visibility -> dense command list.\n"
+    "// DELIBERATELY single-threaded: a serial scan emits commands in the same\n"
+    "// order as the CPU reference (bit-exact validation) and initialises the\n"
+    "// count itself — no cross-group atomic ordering, no pre-clear pass.\n"
+    "// Meshlet counts are small (tris/64); a prefix-sum compaction is the\n"
+    "// optimisation slice once the pipeline is validated end-to-end.\n"
+    "ByteAddressBuffer   InVis      : register(t0);   // 1 byte per meshlet\n"
+    "ByteAddressBuffer   InMeshlets : register(t1);   // 48B records\n"
+    "RWByteAddressBuffer OutCmds    : register(u0);   // 16B IndirectDrawCmd\n"
+    "RWByteAddressBuffer OutCount   : register(u1);   // u32 emitted\n"
+    "struct PushT { uint n; uint p0; uint p1; uint p2; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "#define gN pc.n\n"
+    "[numthreads(1,1,1)]\n"
+    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
+    "  if (tid.x != 0u) return;\n"
+    "  uint emitted = 0u;\n"
+    "  [loop] for (uint i = 0u; i < gN; ++i) {\n"
+    "    uint vis = (InVis.Load((i/4u)*4u) >> ((i%4u)*8u)) & 0xFFu;\n"
+    "    if (vis == 0u) continue;\n"
+    "    uint mb = i*48u;\n"
+    "    uint first = InMeshlets.Load(mb+0);\n"
+    "    uint cnt   = InMeshlets.Load(mb+4);\n"
+    "    OutCmds.Store4(emitted*16u, uint4(first, cnt, i, 0u));\n"
+    "    ++emitted;\n"
+    "  }\n"
+    "  OutCount.Store(0, emitted);\n"
+    "}\n";
 }
 
 // ============================================================================
@@ -486,12 +710,43 @@ cardinal::shared_ptr<TiledLightCullPass::State> TiledLightCullPass::add_to_graph
     pd.accesses.push_back(rg::ResourceAccess{st->out_tile_counts, rg::AccessMode::Write, 4});
     pd.record = tile_light_record; pd.user_ctx = st.get();
     pd.dispatch_x = st->tiles_x; pd.dispatch_y = st->tiles_y;
+    pd.compute_hlsl = TiledLightCullPass::hlsl_source();
+    pd.push_constant_size = 16;
+    pack_push(pd.push_constants, st->tiles_x, st->tiles_y, 0.0f, L);
     g.add_pass(cardinal::move(pd));
     return st;
 }
 
 const char* TiledLightCullPass::hlsl_source() noexcept {
-    return "// Cardinal — TiledLightCullPass.hlsl\n// 16x16 tile per workgroup; per-tile depth bounds + light frustum overlap.\n";
+    return
+    "// Cardinal - TiledLightCullPass.hlsl - one thread group per 16x16 tile.\n"
+    "// Mirrors tile_light_record's simplified reference: every intensity>0\n"
+    "// light lands in every tile (capped 64) — depth-bounds culling arrives\n"
+    "// with the real depth wiring. Depth/matrix are declared to keep the\n"
+    "// t-register layout in access order, but unused (as on the CPU).\n"
+    "ByteAddressBuffer   InLights      : register(t0);  // 16 floats per light\n"
+    "ByteAddressBuffer   InDepth       : register(t1);  // unused (layout only)\n"
+    "ByteAddressBuffer   InMatrix      : register(t2);  // unused (layout only)\n"
+    "RWByteAddressBuffer OutTileLights : register(u0);  // 64 u32 per tile\n"
+    "RWByteAddressBuffer OutTileCounts : register(u1);  // u32 per tile\n"
+    "struct PushT { uint tilesX; uint tilesY; float p0; uint lightCount; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "#define gTilesX pc.tilesX\n"
+    "#define gTilesY pc.tilesY\n"
+    "#define gLightCount pc.lightCount\n"
+    "[numthreads(1,1,1)]\n"
+    "void CSMain(uint3 gid : SV_GroupID){\n"
+    "  if (gid.x >= gTilesX || gid.y >= gTilesY) return;\n"
+    "  uint ti = gid.y*gTilesX + gid.x;\n"
+    "  uint c = 0u;\n"
+    "  [loop] for (uint l = 0u; l < gLightCount && c < 64u; ++l) {\n"
+    "    float inten = asfloat(InLights.Load(l*64u + 44u));\n"
+    "    if (!(inten > 0.0)) continue;   // NaN compares false — matches fzf->0\n"
+    "    OutTileLights.Store((ti*64u + c)*4u, l);\n"
+    "    ++c;\n"
+    "  }\n"
+    "  OutTileCounts.Store(ti*4u, c);\n"
+    "}\n";
 }
 
 // ============================================================================
@@ -567,12 +822,57 @@ cardinal::shared_ptr<VBufResolvePass::State> VBufResolvePass::add_to_graph(
     pd.accesses.push_back(rg::ResourceAccess{st->out_radiance, rg::AccessMode::Write, 9});
     pd.record = resolve_record; pd.user_ctx = st.get();
     pd.dispatch_x = (W + 7) / 8; pd.dispatch_y = (H + 7) / 8;
+    pd.compute_hlsl = VBufResolvePass::hlsl_source();
+    pd.push_constant_size = 16;
+    pack_push(pd.push_constants, W, H, 0.0f, MC);
     g.add_pass(cardinal::move(pd));
     return st;
 }
 
 const char* VBufResolvePass::hlsl_source() noexcept {
-    return "// Cardinal — VBufResolvePass.hlsl\n// Per-pixel: sample V-Buf, reconstruct world pos via depth, fetch tile light list, shade with Cook-Torrance.\n";
+    return
+    "// Cardinal - VBufResolvePass.hlsl - per-pixel ambient-proxy shade.\n"
+    "// Mirrors resolve_record: sky pixels take ambient; hit pixels take\n"
+    "// material base * (ambient + 1). The tile-light loop arrives with the\n"
+    "// real lighting commit. 9 SRVs — declared in access order (t0..t8) even\n"
+    "// where unused, to keep the register layout stable.\n"
+    "ByteAddressBuffer   InDepth      : register(t0);  // unused (layout only)\n"
+    "ByteAddressBuffer   InPrim       : register(t1);  // u32 per pixel\n"
+    "ByteAddressBuffer   InMatId      : register(t2);  // u32 per pixel\n"
+    "ByteAddressBuffer   InNormal     : register(t3);  // unused (layout only)\n"
+    "ByteAddressBuffer   InMaterials  : register(t4);  // 8 floats per material\n"
+    "ByteAddressBuffer   InTileLights : register(t5);  // unused (layout only)\n"
+    "ByteAddressBuffer   InTileCounts : register(t6);  // unused (layout only)\n"
+    "ByteAddressBuffer   InLights     : register(t7);  // unused (layout only)\n"
+    "ByteAddressBuffer   InAmbient    : register(t8);  // 3 floats\n"
+    "RWByteAddressBuffer OutRadiance  : register(u0);  // float3 per pixel\n"
+    "struct PushT { uint w; uint h; float p0; uint matCount; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "#define gW pc.w\n"
+    "#define gH pc.h\n"
+    "#define gMatCount pc.matCount\n"
+    "float fz(float v, float fb) { return isfinite(v) ? v : fb; }\n"
+    "[numthreads(8,8,1)]\n"
+    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
+    "  if (tid.x >= gW || tid.y >= gH) return;\n"
+    "  uint i = tid.y*gW + tid.x;\n"
+    "  float3 ambr = asfloat(InAmbient.Load3(0));\n"
+    "  float3 amb  = float3(fz(ambr.x,0.0), fz(ambr.y,0.0), fz(ambr.z,0.0));\n"
+    "  uint pid = InPrim.Load(i*4u);\n"
+    "  float3 radv;\n"
+    "  if (pid == 0xFFFFFFFFu) {\n"
+    "    radv = amb;\n"
+    "  } else {\n"
+    "    uint  mid  = InMatId.Load(i*4u);\n"
+    "    float3 base = float3(0.5, 0.5, 0.5);\n"
+    "    if (mid < gMatCount) {\n"
+    "      float3 m = asfloat(InMaterials.Load3(mid*32u));\n"
+    "      base = float3(fz(m.x,0.5), fz(m.y,0.5), fz(m.z,0.5));\n"
+    "    }\n"
+    "    radv = base * (amb + 1.0);\n"
+    "  }\n"
+    "  OutRadiance.Store3(i*12u, asuint(radv));\n"
+    "}\n";
 }
 
 // ============================================================================
@@ -627,12 +927,31 @@ cardinal::shared_ptr<MotionVectorPass::State> MotionVectorPass::add_to_graph(
     pd.accesses.push_back(rg::ResourceAccess{st->out_motion, rg::AccessMode::Write, 3});
     pd.record = motion_record; pd.user_ctx = st.get();
     pd.dispatch_x = (W + 7) / 8; pd.dispatch_y = (H + 7) / 8;
+    pd.compute_hlsl = MotionVectorPass::hlsl_source();
+    pd.push_constant_size = 16;
+    pack_push(pd.push_constants, W, H, 0.0f, 0u);
     g.add_pass(cardinal::move(pd));
     return st;
 }
 
 const char* MotionVectorPass::hlsl_source() noexcept {
-    return "// Cardinal — MotionVectorPass.hlsl\n// Per-pixel: reconstruct world pos from depth + inv-VP; reproject through prev VP; pack snorm16 delta.\n";
+    return
+    "// Cardinal - MotionVectorPass.hlsl - zero-motion placeholder, exactly\n"
+    "// like the CPU reference (real reprojection lands with the inverse-VP\n"
+    "// wiring; the CPU record writes 0 for every pixel today, so parity = 0).\n"
+    "ByteAddressBuffer   InDepth  : register(t0);  // unused (layout only)\n"
+    "ByteAddressBuffer   InVP     : register(t1);  // unused (layout only)\n"
+    "ByteAddressBuffer   InVPPrev : register(t2);  // unused (layout only)\n"
+    "RWByteAddressBuffer OutMV    : register(u0);  // u32 snorm16x2 per pixel\n"
+    "struct PushT { uint w; uint h; float p0; uint p1; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "#define gW pc.w\n"
+    "#define gH pc.h\n"
+    "[numthreads(8,8,1)]\n"
+    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
+    "  if (tid.x >= gW || tid.y >= gH) return;\n"
+    "  OutMV.Store((tid.y*gW + tid.x)*4u, 0u);\n"
+    "}\n";
 }
 
 // ============================================================================
@@ -707,7 +1026,11 @@ const char* TonemapPass::hlsl_source() noexcept {
     "// Cardinal - TonemapPass.hlsl - ACES filmic + sRGB encode per pixel.\n"
     "ByteAddressBuffer   InRadiance : register(t0);   // float3 per pixel (12B)\n"
     "RWByteAddressBuffer OutRGBA    : register(u0);   // RGBA8 per pixel (4B)\n"
-    "cbuffer Push : register(b0) { uint gW; uint gH; float gExposure; uint _pad; };\n"
+    "struct PushT { uint w; uint h; float exposure; uint pad; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "#define gW pc.w\n"
+    "#define gH pc.h\n"
+    "#define gExposure pc.exposure\n"
     "float aces(float x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14;\n"
     "  return saturate((x*(a*x+b))/(x*(c*x+d)+e)); }\n"
     "float srgb(float c){ return c<=0.0031308 ? 12.92*c : 1.055*pow(c,1.0/2.4)-0.055; }\n"
@@ -777,18 +1100,62 @@ cardinal::shared_ptr<CompositePresentPass::State> CompositePresentPass::add_to_g
     st->out_presentation = g.declare_buffer(od);
     rg::PassDesc pd;
     pd.name = "CompositePresentPass"; pd.kind = rg::PassKind::Compute;
+    // FIXED SRV LAYOUT (the long-standing "special SRV-layout issue"): the UI
+    // and gizmo accesses are ALWAYS declared so the kernel's t0/t1/t2 layout
+    // never shifts with overlay availability. Missing overlays bind 4-byte
+    // dummies; push flags tell the kernel which are live. The CPU record
+    // still gates on the ORIGINAL handles in State.
+    rg::ResourceHandle ui_bind  = in_ui;
+    rg::ResourceHandle giz_bind = in_giz;
+    if (!ui_bind.is_valid())
+        ui_bind  = g.declare_buffer(rg::BufferDesc{"present.noui",  4, 4, true});
+    if (!giz_bind.is_valid())
+        giz_bind = g.declare_buffer(rg::BufferDesc{"present.nogiz", 4, 4, true});
     pd.accesses.push_back(rg::ResourceAccess{in_scene, rg::AccessMode::Read, 0});
-    if (in_ui.is_valid())  pd.accesses.push_back(rg::ResourceAccess{in_ui,  rg::AccessMode::Read, 1});
-    if (in_giz.is_valid()) pd.accesses.push_back(rg::ResourceAccess{in_giz, rg::AccessMode::Read, 2});
+    pd.accesses.push_back(rg::ResourceAccess{ui_bind,  rg::AccessMode::Read, 1});
+    pd.accesses.push_back(rg::ResourceAccess{giz_bind, rg::AccessMode::Read, 2});
     pd.accesses.push_back(rg::ResourceAccess{st->out_presentation, rg::AccessMode::Write, 3});
     pd.record = composite_record; pd.user_ctx = st.get();
     pd.dispatch_x = (W + 7) / 8; pd.dispatch_y = (H + 7) / 8;
+    pd.compute_hlsl = CompositePresentPass::hlsl_source();
+    pd.push_constant_size = 16;
+    pack_push(pd.push_constants, W, H, 0.0f,
+              (in_ui.is_valid() ? 1u : 0u) | (in_giz.is_valid() ? 2u : 0u));
     g.add_pass(cardinal::move(pd));
     return st;
 }
 
 const char* CompositePresentPass::hlsl_source() noexcept {
-    return "// Cardinal — CompositePresentPass.hlsl\n// Scene + UI + gizmo alpha-test composite for present.\n";
+    return
+    "// Cardinal - CompositePresentPass.hlsl - alpha-TEST composite (a != 0),\n"
+    "// gizmo first then UI (UI wins), output alpha = scene alpha. Mirrors\n"
+    "// composite_record byte-for-byte on RGBA8 words.\n"
+    "ByteAddressBuffer   InScene : register(t0);\n"
+    "ByteAddressBuffer   InUi    : register(t1);   // dummy when gFlags bit0 = 0\n"
+    "ByteAddressBuffer   InGiz   : register(t2);   // dummy when gFlags bit1 = 0\n"
+    "RWByteAddressBuffer OutP    : register(u0);\n"
+    "struct PushT { uint w; uint h; float p0; uint flags; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "#define gW pc.w\n"
+    "#define gH pc.h\n"
+    "#define gFlags pc.flags\n"
+    "[numthreads(8,8,1)]\n"
+    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
+    "  if (tid.x >= gW || tid.y >= gH) return;\n"
+    "  uint i = tid.y*gW + tid.x;\n"
+    "  uint s = InScene.Load(i*4u);\n"
+    "  uint r = s & 0xFFu, g = (s >> 8) & 0xFFu, b = (s >> 16) & 0xFFu;\n"
+    "  uint a = (s >> 24) & 0xFFu;\n"
+    "  if ((gFlags & 2u) != 0u) {\n"
+    "    uint z = InGiz.Load(i*4u);\n"
+    "    if ((z >> 24) != 0u) { r = z & 0xFFu; g = (z >> 8) & 0xFFu; b = (z >> 16) & 0xFFu; }\n"
+    "  }\n"
+    "  if ((gFlags & 1u) != 0u) {\n"
+    "    uint u = InUi.Load(i*4u);\n"
+    "    if ((u >> 24) != 0u) { r = u & 0xFFu; g = (u >> 8) & 0xFFu; b = (u >> 16) & 0xFFu; }\n"
+    "  }\n"
+    "  OutP.Store(i*4u, r | (g << 8) | (b << 16) | (a << 24));\n"
+    "}\n";
 }
 
 // ============================================================================
