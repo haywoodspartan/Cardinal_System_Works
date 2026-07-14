@@ -390,13 +390,33 @@ public:
     void set_gpu_execute(bool e) noexcept { gpu_execute_ = e; }
     bool gpu_execute() const noexcept { return gpu_execute_; }
 
+    // The live rhi::Buffer backing a graph resource (by BufferDesc name), or
+    // null if the resource never materialised. Used by the GPU validation
+    // harness to copy pass outputs into readback buffers after execute().
+    cardinal::rhi::Buffer* gpu_buffer(const cardinal::string& name) const noexcept;
+
+    // Fence + transition `name`'s buffer into CopySource based on the state
+    // execute() left it in (UAV write vs SRV read — the harness can't know).
+    // Call between execute() and Swapchain::copy_buffer, on the SAME
+    // recording the execute targeted.
+    void make_copy_source(const cardinal::string& name) noexcept;
+
 private:
     RhiBackend() = default;
 
     cardinal::rhi::Device*    dev_ {nullptr};
     cardinal::rhi::Swapchain* sw_  {nullptr};
-    // Pass id → compiled compute pipeline (lazy, cached across executes).
-    cardinal::vector<cardinal::unique_ptr<cardinal::rhi::Pipeline>> pipeline_cache_;
+    // Pass NAME → compiled compute pipeline (lazy, cached across executes).
+    // Keyed by name, not pass id: the graph is rebuilt per frame and pass ids
+    // SHIFT when the topology changes (ReSTIR / MotionVector wire in
+    // conditionally) — an id-keyed cache would hand a kernel-less pass a
+    // stale slot and dispatch the WRONG kernel with its buffers. `tried`
+    // stops a failing kernel from re-running DXC every frame.
+    struct CachedPipeline {
+        cardinal::unique_ptr<cardinal::rhi::Pipeline> pipe;
+        bool                                          tried {false};
+    };
+    cardinal::unordered_map<cardinal::string, CachedPipeline> pipeline_cache_;
     // GAP-2 buffer storage. buffer_cache_ OWNS the rhi::Buffers and PERSISTS them
     // across frames, keyed by resource name + size — so a stable graph reuses its
     // buffers instead of recreating every one every execute (the per-frame churn
@@ -405,9 +425,15 @@ private:
     struct CachedBuffer {
         cardinal::unique_ptr<cardinal::rhi::Buffer> buf;
         usize                                       size {0};
+        bool host_visible {false};   // imported/UPLOAD-heap (never a UAV; on
+                                     // D3D12 pinned GENERIC_READ — no barriers)
     };
     cardinal::unordered_map<cardinal::string, CachedBuffer> buffer_cache_;
     cardinal::vector<cardinal::rhi::Buffer*>                buffers_;
+    // Final per-buffer use state after the last execute() (Srv/Uav), so
+    // make_copy_source can issue the correct pre-copy barrier.
+    enum class BufUse : u8 { Untouched, Srv, Uav };
+    cardinal::unordered_map<cardinal::rhi::Buffer*, BufUse> final_use_;
     cardinal::vector<PassEvent> events_;
     Stats stats_;
     bool  gpu_execute_ {false};   // opt-in; see set_gpu_execute (default safe)

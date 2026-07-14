@@ -41,9 +41,22 @@ public:
         gpu::AegisConfig cfg,
         AegisBackendMode mode = AegisBackendMode::Cpu);
 
+    // Start a FRESH frame graph and return it, so the host can declare its
+    // scene-input buffers on the graph that build() will actually consume.
+    // Without this, declaring inputs on graph() then calling build() was a
+    // stale-handle bug: build() replaced the graph internally, dangling every
+    // previously returned handle (frame 1 the ids silently aliased the
+    // pipeline's own resources; frames 2+ they were out of range and the
+    // input edges never bound — an input-consuming kernel could never
+    // dispatch under gpu_execute). Flow: begin_build() → declare inputs on
+    // the returned graph → build(inputs).
+    graph::Graph& begin_build();
+
     // Wire the AEGIS graph against `inputs` and compile. Returns false if
     // the graph contains a cycle (shouldn't happen in the AEGIS topology
-    // but the runner reports it cleanly anyway).
+    // but the runner reports it cleanly anyway). If begin_build() was not
+    // called since the last build, a fresh graph is created here (legacy
+    // flow — only valid when `inputs` carries no handles from graph()).
     bool build(const gpu::AegisSceneInputs& inputs);
 
     // Execute the compiled graph against the configured backend. Pre:
@@ -98,6 +111,7 @@ private:
     gpu::AegisStageRefs                      stages_;
     graph::CompileStats                      last_compile_;
     bool                                     built_ {false};
+    bool                                     graph_fresh_ {false};  // begin_build() called
 };
 
 // ---------------------------------------------------------------------------

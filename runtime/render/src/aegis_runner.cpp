@@ -88,12 +88,21 @@ bool aegis_config_equal(const gpu::AegisConfig& a, const gpu::AegisConfig& b) no
            a.features.direct_storage        == b.features.direct_storage;
 }
 
+graph::Graph& AegisPipelineRunner::begin_build() {
+    graph_ = graph::Graph::create();
+    graph_fresh_ = true;
+    return *graph_;
+}
+
 bool AegisPipelineRunner::build(const gpu::AegisSceneInputs& inputs) {
     if (!graph_ || !pipeline_) return false;
     // Fresh graph per build — the AEGIS topology is rebuilt every frame
-    // because resource handles change with the scene. Cheap: graph nodes
-    // are flat vectors, no allocator churn beyond the per-frame inputs.
-    graph_ = graph::Graph::create();
+    // because resource handles change with the scene. When the host used
+    // begin_build() (declaring its scene-input buffers on the new graph),
+    // consume that graph; otherwise create one now (legacy flow — valid
+    // only when `inputs` carries no handles minted from graph()).
+    if (!graph_fresh_) graph_ = graph::Graph::create();
+    graph_fresh_ = false;
     outputs_ = gpu::AegisOutputs{};
     stages_  = gpu::AegisStageRefs{};
     pipeline_->build(*graph_, inputs, outputs_, stages_);

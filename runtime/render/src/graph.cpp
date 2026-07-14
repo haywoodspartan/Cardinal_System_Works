@@ -407,6 +407,12 @@ void CpuBackend::execute(Graph& g) noexcept {
         const BufferDesc& bd = g.buffer(bh);
         if (bd.size_bytes > 0) {
             storage_[rid].assign(bd.size_bytes, 0u);
+            // Imported (host-fed) buffers seed their storage from the host
+            // bytes — without this every import read back as zeros and any
+            // input-consuming pass computed against a blank scene (caught by
+            // the GPU validation harness comparing CPU vs GPU).
+            if (const void* src = g.buffer_imported(bh))
+                cardinal::memcpy(storage_[rid].data(), src, bd.size_bytes);
         }
     }
 
@@ -463,13 +469,40 @@ void RhiBackend::reset() noexcept {
     stats_ = Stats{};
 }
 
+cardinal::rhi::Buffer* RhiBackend::gpu_buffer(const cardinal::string& name) const noexcept {
+    const auto it = buffer_cache_.find(name);
+    return (it != buffer_cache_.end()) ? it->second.buf.get() : nullptr;
+}
+
+void RhiBackend::make_copy_source(const cardinal::string& name) noexcept {
+    const auto slot_it = buffer_cache_.find(name);
+    if (slot_it == buffer_cache_.end() || !slot_it->second.buf || !sw_) return;
+    cardinal::rhi::Buffer* buf = slot_it->second.buf.get();
+    // Host-visible (imported / UPLOAD-heap) buffers take NO barrier: on D3D12
+    // they are pinned in GENERIC_READ — which already includes COPY_SOURCE —
+    // and a transition barrier on an UPLOAD-heap resource is invalid; they are
+    // never UAV-written either. Vulkan host-visible needs nothing extra.
+    if (slot_it->second.host_visible) return;
+    using RS = cardinal::rhi::Swapchain::ResourceState;
+    const auto it = final_use_.find(buf);
+    const BufUse use = (it != final_use_.end()) ? it->second : BufUse::Untouched;
+    if (use == BufUse::Uav) {
+        sw_->uav_barrier(buf);                            // flush the UAV writes
+        sw_->transition_buffer_state(buf, RS::UnorderedAccess, RS::CopySource);
+    } else if (use == BufUse::Srv) {
+        sw_->transition_buffer_state(buf, RS::ShaderResource, RS::CopySource);
+    }
+    // Untouched (never dispatched over this execute): D3D12 buffers implicitly
+    // promote COMMON -> COPY_SOURCE; Vulkan needs no state. Nothing to do.
+    // NOTE: single-readback contract — after this the buffer is accounted
+    // Untouched; a SECOND execute() on the same recording would need the
+    // buffer back in a shader state first (not a supported flow today).
+    final_use_[buf] = BufUse::Untouched;
+}
+
 void RhiBackend::execute(Graph& g) noexcept {
     events_.clear();
     if (!dev_ || !sw_) return;
-
-    // Lazy-grow the pipeline cache to cover every pass (id 1..N).
-    const usize need = g.pass_count() + 1;
-    if (pipeline_cache_.size() < need) pipeline_cache_.resize(need);
 
     const auto& order = g.execution_order();
 
@@ -504,14 +537,24 @@ void RhiBackend::execute(Graph& g) noexcept {
                 // Reuse the cached buffer for this resource unless it is new or
                 // its size changed (e.g. a swapchain resize). Only then create.
                 CachedBuffer& slot = buffer_cache_[bdesc.name];
-                if (!slot.buf || slot.size != sz) {
+                const bool wants_host = g.buffer_imported(h) != nullptr;
+                if (!slot.buf || slot.size != sz || slot.host_visible != wants_host) {
                     cardinal::rhi::BufferDesc bd{};
                     bd.size  = sz;
                     bd.usage = static_cast<u32>(cardinal::rhi::BufferUsage::Storage)
                              | static_cast<u32>(cardinal::rhi::BufferUsage::ShaderDeviceAddress);
-                    bd.cpu_writable = true;
+                    // Host-visible ONLY for imported (host-fed, SRV-read)
+                    // buffers. Transient buffers are pass outputs — on D3D12 a
+                    // UAV write requires a DEFAULT-heap resource (UPLOAD-heap
+                    // resources cannot carry ALLOW_UNORDERED_ACCESS; binding
+                    // one as a root UAV is illegal). Device-local is also the
+                    // fast path on Vulkan. The heap kind participates in the
+                    // reuse check so a name flipping imported<->transient can
+                    // never inherit a wrong-heap buffer.
+                    bd.cpu_writable = wants_host;
                     slot.buf  = dev_->create_buffer(bd);
                     slot.size = sz;
+                    slot.host_visible = wants_host;
                 }
                 if (slot.buf) {
                     // Imported (host) data can change every frame — re-upload it;
@@ -523,6 +566,15 @@ void RhiBackend::execute(Graph& g) noexcept {
             }
         }
     }
+
+    // Per-execute buffer hazard tracking for chained kernels. D3D12 buffers
+    // decay to COMMON at ExecuteCommandLists boundaries and implicitly promote
+    // on FIRST use within a list, but a UAV-write -> SRV-read chain inside one
+    // list needs an explicit transition, UAV -> UAV needs a UAV barrier, and
+    // Vulkan needs the equivalent memory barriers. Tracked per rhi::Buffer;
+    // persisted in final_use_ so make_copy_source knows each buffer's end state.
+    final_use_.clear();
+    auto& buf_use = final_use_;
 
     for (u32 pid : order) {
         const PassDesc& pd = g.pass(pid);
@@ -538,20 +590,25 @@ void RhiBackend::execute(Graph& g) noexcept {
         // Write/ReadWrite -> read-write UAV). When the pass carries no HLSL (or
         // it fails to compile), create_compute_pipeline returns null and we
         // fall through to the recording-only telemetry path — same as before.
-        if (gpu_execute_ && pd.kind == PassKind::Compute && !pipeline_cache_[pid] && pd.compute_hlsl) {
-            u32 srv = 0, uav = 0;
-            for (const auto& a : pd.accesses) {
-                if (a.mode == AccessMode::Read) ++srv; else ++uav;
+        CachedPipeline* cp = nullptr;
+        if (gpu_execute_ && pd.kind == PassKind::Compute && pd.compute_hlsl) {
+            cp = &pipeline_cache_[pd.name];
+            if (!cp->pipe && !cp->tried) {
+                cp->tried = true;
+                u32 srv = 0, uav = 0;
+                for (const auto& a : pd.accesses) {
+                    if (a.mode == AccessMode::Read) ++srv; else ++uav;
+                }
+                cardinal::rhi::ComputePipelineDesc cpd;
+                cpd.compute_shader       = dev_->compile_shader(
+                    cardinal::rhi::ShaderStage::Compute, pd.compute_hlsl, pd.compute_entry);
+                cpd.compute_entry        = pd.compute_entry;
+                cpd.push_constant_size   = pd.push_constant_size;
+                cpd.storage_buffer_slots = srv;
+                cpd.uav_slots            = uav;
+                cp->pipe = dev_->create_compute_pipeline(cpd);
+                if (cp->pipe) ++stats_.pipelines_compiled;
             }
-            cardinal::rhi::ComputePipelineDesc cpd;
-            cpd.compute_shader       = dev_->compile_shader(
-                cardinal::rhi::ShaderStage::Compute, pd.compute_hlsl, pd.compute_entry);
-            cpd.compute_entry        = pd.compute_entry;
-            cpd.push_constant_size   = pd.push_constant_size;
-            cpd.storage_buffer_slots = srv;
-            cpd.uav_slots            = uav;
-            pipeline_cache_[pid] = dev_->create_compute_pipeline(cpd);
-            if (pipeline_cache_[pid]) ++stats_.pipelines_compiled;
         }
 
         // Only dispatch when EVERY declared resource has a live backing buffer.
@@ -568,9 +625,31 @@ void RhiBackend::execute(Graph& g) noexcept {
         }
 
         const bool has_real_pipe =
-            (gpu_execute_ && all_bound && pd.kind == PassKind::Compute && pipeline_cache_[pid]);
+            (gpu_execute_ && all_bound && pd.kind == PassKind::Compute &&
+             pd.compute_hlsl && cp && cp->pipe);
         if (has_real_pipe) {
-            sw_->bind_pipeline(pipeline_cache_[pid].get());
+            // Hazard fences BEFORE the dispatch: transition each access's
+            // buffer to the use this pass makes of it, based on how the
+            // previous pass in this command stream left it.
+            for (const auto& a : pd.accesses) {
+                cardinal::rhi::Buffer* buf = buffers_[a.handle.id];
+                const BufUse want = (a.mode == AccessMode::Read) ? BufUse::Srv
+                                                                 : BufUse::Uav;
+                BufUse& cur = buf_use[buf];   // default Untouched
+                if (cur == BufUse::Untouched) {
+                    cur = want;               // first touch: implicit promotion
+                } else if (cur != want) {
+                    using RS = cardinal::rhi::Swapchain::ResourceState;
+                    sw_->transition_buffer_state(buf,
+                        cur  == BufUse::Uav ? RS::UnorderedAccess : RS::ShaderResource,
+                        want == BufUse::Uav ? RS::UnorderedAccess : RS::ShaderResource);
+                    cur = want;
+                } else if (want == BufUse::Uav) {
+                    sw_->uav_barrier(buf);    // UAV -> UAV (WAW / RAW) flush
+                }
+            }
+
+            sw_->bind_pipeline(cp->pipe.get());
             // GAP 3: upload the per-dispatch push block (the pass packed its
             // scalars — width/height/params — into pd.push_constants).
             if (!pd.push_constants.empty())
@@ -627,12 +706,17 @@ void ThreadedCpuBackend::execute(Graph& g) noexcept {
     const u32   waves   = g.wave_count();
     if (order.empty() || waves == 0) return;
 
-    // Allocate storage per resource.
+    // Allocate storage per resource (imported buffers seeded from the host
+    // bytes — mirrors CpuBackend, so both CPU backends agree on inputs).
     storage_.resize(g.resource_count() + 1);
     for (u32 rid = 1; rid <= g.resource_count(); ++rid) {
         ResourceHandle bh{ rid, ResourceKind::Buffer };
         const BufferDesc& bd = g.buffer(bh);
-        if (bd.size_bytes > 0) storage_[rid].assign(bd.size_bytes, 0u);
+        if (bd.size_bytes > 0) {
+            storage_[rid].assign(bd.size_bytes, 0u);
+            if (const void* src = g.buffer_imported(bh))
+                cardinal::memcpy(storage_[rid].data(), src, bd.size_bytes);
+        }
     }
 
     // Bucket passes by wave.

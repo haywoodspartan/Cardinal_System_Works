@@ -61,15 +61,51 @@ public:
         runner_ = AegisPipelineRunner::create(cfg, AegisBackendMode::Null);
 
         build_knobs();
+        cache_knob_indices();
+    }
+
+    // ---- Hot-knob index cache -------------------------------------------
+    // render() consults ~10 knobs EVERY frame; scanning the ~80-entry knobs_
+    // vector with string compares for each cost ~800 compares/frame. knobs_
+    // is only (re)built in build_knobs(), and per-frame writes mutate values
+    // in place (no resize), so indices resolved once stay valid.
+    struct KnobIdx {
+        int backend_mode {-1}, max_tier {-1}, max_tier_fp8 {-1},
+            max_tier_fp4 {-1}, async_compute {-1}, variable_rate_shading {-1},
+            bindless_resources {-1}, direct_storage {-1}, gpu_execute {-1},
+            view_mode {-1};
+    };
+    void cache_knob_indices() {
+        auto find = [&](const char* id) -> int {
+            for (cardinal::usize i = 0; i < knobs_.size(); ++i)
+                if (knobs_[i].id == id) return static_cast<int>(i);
+            return -1;
+        };
+        kidx_.backend_mode          = find("backend_mode");
+        kidx_.max_tier              = find("max_tier");
+        kidx_.max_tier_fp8          = find("max_tier_fp8");
+        kidx_.max_tier_fp4          = find("max_tier_fp4");
+        kidx_.async_compute         = find("async_compute");
+        kidx_.variable_rate_shading = find("variable_rate_shading");
+        kidx_.bindless_resources    = find("bindless_resources");
+        kidx_.direct_storage        = find("direct_storage");
+        kidx_.gpu_execute           = find("gpu_execute");
+        kidx_.view_mode             = find("view_mode");
+    }
+    bool kb(int idx) const {
+        return idx >= 0 && knobs_[static_cast<cardinal::usize>(idx)].kind == KnobKind::Bool
+             ? knobs_[static_cast<cardinal::usize>(idx)].b : false;
+    }
+    int ke(int idx, int dflt) const {
+        return idx >= 0 && knobs_[static_cast<cardinal::usize>(idx)].kind == KnobKind::Enum
+             ? knobs_[static_cast<cardinal::usize>(idx)].e : dflt;
     }
 
     // Read the backend_mode Knob value at the top of render() and swap
     // the runner's backend if the user changed it in the editor.
     void update_backend_from_knob() {
-        const Knob* k = nullptr;
-        for (auto& kn : knobs_) {
-            if (kn.id == "backend_mode") { k = &kn; break; }
-        }
+        const Knob* k = (kidx_.backend_mode >= 0)
+            ? &knobs_[static_cast<cardinal::usize>(kidx_.backend_mode)] : nullptr;
         if (!k || k->kind != KnobKind::Enum) return;
         if (k->e < 0 || k->e > 3) return;   // guard the int -> enum cast (4 backends)
         const auto desired = static_cast<AegisBackendMode>(k->e);
@@ -100,25 +136,16 @@ public:
     }
 
     // Read the precision + GPU-Feature knobs into an AegisFeatureRequest.
+    // Index-cached — this runs every frame via apply_config().
     AegisFeatureRequest read_request() const {
         AegisFeatureRequest r;
-        auto kbool = [&](const char* id) -> bool {
-            for (const auto& k : knobs_)
-                if (k.id == id && k.kind == KnobKind::Bool) return k.b;
-            return false;
-        };
-        auto kenum = [&](const char* id, int dflt) -> int {
-            for (const auto& k : knobs_)
-                if (k.id == id && k.kind == KnobKind::Enum) return k.e;
-            return dflt;
-        };
-        r.max_tier_want          = kenum("max_tier", 0);   // 0..3 = FP32/16/8/4
-        r.allow_fp8              = kbool("max_tier_fp8");
-        r.allow_fp4              = kbool("max_tier_fp4");
-        r.async_compute         = kbool("async_compute");
-        r.variable_rate_shading = kbool("variable_rate_shading");
-        r.bindless_resources    = kbool("bindless_resources");
-        r.direct_storage        = kbool("direct_storage");
+        r.max_tier_want         = ke(kidx_.max_tier, 0);   // 0..3 = FP32/16/8/4
+        r.allow_fp8             = kb(kidx_.max_tier_fp8);
+        r.allow_fp4             = kb(kidx_.max_tier_fp4);
+        r.async_compute         = kb(kidx_.async_compute);
+        r.variable_rate_shading = kb(kidx_.variable_rate_shading);
+        r.bindless_resources    = kb(kidx_.bindless_resources);
+        r.direct_storage        = kb(kidx_.direct_storage);
         return r;
     }
 
@@ -218,25 +245,24 @@ public:
         // when off (default) it stays recording-only telemetry while the
         // ForwardRenderer draws the screen (the stable path).
         if (rhi_backend_) {
-            bool want = false;
-            for (const auto& k : knobs_)
-                if (k.id == "gpu_execute" && k.kind == KnobKind::Bool) { want = k.b; break; }
-            rhi_backend_->set_gpu_execute(want);
+            rhi_backend_->set_gpu_execute(kb(kidx_.gpu_execute));
         }
 
-        // Run the AEGIS graph for telemetry. The runner manages its own
-        // graph + backend; we just hand it minimal inputs each frame.
+        // Run the AEGIS graph for telemetry. Inputs are declared on the graph
+        // build() actually consumes (begin_build) — declaring on the previous
+        // frame's graph left every handle dangling once build() swapped it.
         // The actual scene-derived buffer wiring (real triangle stream,
         // material palette, etc.) lands when RhiBackend can consume them.
+        graph::Graph& gr = runner_->begin_build();
         gpu::AegisSceneInputs in;
         in.triangle_count = 0;
-        in.tris         = runner_->graph().declare_buffer(graph::BufferDesc{"tris",  0, 0, true});
-        in.material_ids = runner_->graph().declare_buffer(graph::BufferDesc{"mids",  0, 0, true});
-        in.materials    = runner_->graph().declare_buffer(graph::BufferDesc{"mats",  0, 0, true});
-        in.lights       = runner_->graph().declare_buffer(graph::BufferDesc{"lts",   0, 0, true});
-        in.ambient      = runner_->graph().declare_buffer(graph::BufferDesc{"amb",  12, 0, true});
-        in.view_proj    = runner_->graph().declare_buffer(graph::BufferDesc{"vp",   64, 0, true});
-        in.camera_dir   = runner_->graph().declare_buffer(graph::BufferDesc{"dir",  12, 0, true});
+        in.tris         = gr.declare_buffer(graph::BufferDesc{"tris",  0, 0, true});
+        in.material_ids = gr.declare_buffer(graph::BufferDesc{"mids",  0, 0, true});
+        in.materials    = gr.declare_buffer(graph::BufferDesc{"mats",  0, 0, true});
+        in.lights       = gr.declare_buffer(graph::BufferDesc{"lts",   0, 0, true});
+        in.ambient      = gr.declare_buffer(graph::BufferDesc{"amb",  12, 0, true});
+        in.view_proj    = gr.declare_buffer(graph::BufferDesc{"vp",   64, 0, true});
+        in.camera_dir   = gr.declare_buffer(graph::BufferDesc{"dir",  12, 0, true});
         if (runner_->build(in)) runner_->execute();
 
         // Delegate the actual draw to the ForwardRenderer, honouring the
@@ -244,15 +270,9 @@ public:
         // (Solid / Wireframe / Polygons / Heightmap / Normals / RTX Preview).
         // When graph::RhiBackend ships its own raster output this fallthrough
         // goes away, but the view-mode contract stays the same.
-        scene::ViewMode vm = scene::ViewMode::Solid;
-        for (const auto& k : knobs_) {
-            if (k.id == "view_mode" && k.kind == KnobKind::Enum) {
-                const int e = (k.e < 0) ? 0 : (k.e > 5 ? 5 : k.e);
-                vm = static_cast<scene::ViewMode>(e);
-                break;
-            }
-        }
-        renderer_->render(scn, vm, aspect);
+        const int vm_e_raw = ke(kidx_.view_mode, 0);
+        const int vm_e     = (vm_e_raw < 0) ? 0 : (vm_e_raw > 5 ? 5 : vm_e_raw);
+        renderer_->render(scn, static_cast<scene::ViewMode>(vm_e), aspect);
     }
 
     void set_light_set(const scene::LightSet* lights) override {
@@ -618,6 +638,7 @@ private:
     cardinal::shared_ptr<scene::ForwardRenderer>      renderer_;
     cardinal::shared_ptr<AegisPipelineRunner>          runner_;
     cardinal::vector<Knob>                             knobs_;
+    KnobIdx                                            kidx_;   // hot-knob indices
     AegisBackendMode                                   current_mode_ {AegisBackendMode::Null};
     AegisDeviceSupport                                 dev_caps_ {};   // from on_caps
     cardinal::shared_ptr<graph::RhiBackend>            rhi_backend_;   // when mode==Rhi
