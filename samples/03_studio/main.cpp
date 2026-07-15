@@ -372,6 +372,11 @@ int main(int argc, char** argv) {
     // <exe-dir>/crashes/ so we can debug the "click X and Vulkan
     // asserts" class of bug from a real stack trace next time.
     cardinal::crash::install();
+    // Hang watchdog: freezes never reach the crash filter (Windows just logs
+    // Event 1002 "stopped interacting" with no dump — the 2026-07-15
+    // incident). The main loop pokes a heartbeat each frame; 10 silent
+    // seconds writes a full-thread dump of the still-frozen process.
+    cardinal::crash::watchdog_start(10);
 
 #if defined(_WIN32) && !defined(NDEBUG)
     // Diagnostics: log every abort path so when the user sees the CRT
@@ -2066,6 +2071,7 @@ int main(int argc, char** argv) {
 
     u64 reflex_frame = 1;
     while (!window->should_close() && !want_quit) {
+        cardinal::crash::watchdog_poke();   // heartbeat: loop is alive
         // Reflex sleep MUST come first — it's where the driver decides
         // when to begin the new frame for minimum input-to-photon
         // latency. Pacer's own sleep follows (honours user-side caps).
@@ -4892,6 +4898,7 @@ int main(int argc, char** argv) {
                     static_cast<cardinal::usize>(saved));
     }
 
+    cardinal::crash::watchdog_stop();   // teardown stalls are not hangs
     plg::Registry::instance().shutdown();
     // Drain async work + tear down the JobSystem before destroying everything
     // it might have referenced.

@@ -778,6 +778,29 @@ const char* TiledLightCullPass::hlsl_source() noexcept {
 // ============================================================================
 namespace {
 
+// Inverse of gpu_visbuf's oct_pack — decodes the snorm16x2 oct normal.
+// Both sides (this reference + the HLSL kernel) share the exact sequence.
+inline void oct_decode(cardinal::u32 packed,
+                       float& nx, float& ny, float& nz) noexcept {
+    const cardinal::i16 ix = static_cast<cardinal::i16>(packed & 0xFFFFu);
+    const cardinal::i16 iz = static_cast<cardinal::i16>(packed >> 16);
+    float ox = static_cast<float>(ix) / 32767.0f;
+    float oz = static_cast<float>(iz) / 32767.0f;
+    const float oy = 1.0f - cardinal::abs(ox) - cardinal::abs(oz);
+    if (oy < 0.0f) {
+        const float tx = (1.0f - cardinal::abs(oz)) * (ox >= 0.0f ? 1.0f : -1.0f);
+        const float tz = (1.0f - cardinal::abs(ox)) * (oz >= 0.0f ? 1.0f : -1.0f);
+        ox = tx; oz = tz;
+    }
+    const float l2 = ox * ox + oy * oy + oz * oz;
+    if (l2 > 1.0e-12f) {
+        const float inv = 1.0f / cardinal::sqrt(l2);
+        nx = ox * inv; ny = oy * inv; nz = oz * inv;
+    } else {
+        nx = 0.0f; ny = 1.0f; nz = 0.0f;
+    }
+}
+
 void resolve_record(rg::ExecutionContext& ec, void* uctx) noexcept {
     if (!uctx) return;
     auto* st = static_cast<VBufResolvePass::State*>(uctx);
@@ -788,6 +811,23 @@ void resolve_record(rg::ExecutionContext& ec, void* uctx) noexcept {
     const float* amb  = static_cast<const float*>(ec.map_buffer_read(st->in_ambient));
     float* rad = static_cast<float*>(ec.map_buffer_write(st->out_radiance));
     if (!prim || !matid || !mats || !amb || !rad) { ec.dispatch(0, 1, 1); return; }
+
+    // PBR mode: the inverse view-proj + camera-pos pair plus the full V-Buf /
+    // tile set. Any piece missing -> the legacy ambient-proxy shade.
+    const float* depth = static_cast<const float*>(ec.map_buffer_read(st->in_depth));
+    const cardinal::u32* norm = static_cast<const cardinal::u32*>(ec.map_buffer_read(st->in_normal));
+    const cardinal::u32* tl = static_cast<const cardinal::u32*>(ec.map_buffer_read(st->in_tile_lights));
+    const cardinal::u32* tc = static_cast<const cardinal::u32*>(ec.map_buffer_read(st->in_tile_counts));
+    const float* lts = static_cast<const float*>(ec.map_buffer_read(st->in_lights));
+    const float* ivp = st->in_inv_view_proj.is_valid()
+        ? static_cast<const float*>(ec.map_buffer_read(st->in_inv_view_proj)) : nullptr;
+    const float* cpos = st->in_camera_pos.is_valid()
+        ? static_cast<const float*>(ec.map_buffer_read(st->in_camera_pos)) : nullptr;
+    const bool pbr = ivp && cpos && depth && norm && tl && tc && lts;
+
+    constexpr float kPi = 3.14159265f;
+    const cardinal::u32 tiles_x = (W + kLightTileSize - 1) / kLightTileSize;
+
     const float ar = fzf(amb[0], 0.0f), ag = fzf(amb[1], 0.0f), ab = fzf(amb[2], 0.0f);
     cardinal::u32 shaded = 0, sky = 0;
     for (cardinal::u32 i = 0; i < W * H; ++i) {
@@ -801,11 +841,116 @@ void resolve_record(rg::ExecutionContext& ec, void* uctx) noexcept {
         const float base_r = m ? fzf(m[0], 0.5f) : 0.5f;
         const float base_g = m ? fzf(m[1], 0.5f) : 0.5f;
         const float base_b = m ? fzf(m[2], 0.5f) : 0.5f;
-        // Diffuse-only ambient shading proxy. Tile light loop deferred to
-        // the GPU compute commit.
-        rad[i * 3 + 0] = base_r * (ar + 1.0f);
-        rad[i * 3 + 1] = base_g * (ag + 1.0f);
-        rad[i * 3 + 2] = base_b * (ab + 1.0f);
+
+        if (!pbr) {
+            // Legacy diffuse-only ambient proxy (kept for hosts that don't
+            // feed the inverse matrix — and for byte-stable old telemetry).
+            rad[i * 3 + 0] = base_r * (ar + 1.0f);
+            rad[i * 3 + 1] = base_g * (ag + 1.0f);
+            rad[i * 3 + 2] = base_b * (ab + 1.0f);
+            ++shaded; continue;
+        }
+
+        float rough = m ? fzf(m[3], 0.5f) : 0.5f;
+        float metal = m ? fzf(m[4], 0.0f) : 0.0f;
+        if (rough < 0.04f) rough = 0.04f; if (rough > 1.0f) rough = 1.0f;
+        if (metal < 0.0f)  metal = 0.0f;  if (metal > 1.0f) metal = 1.0f;
+
+        // World position: pixel centre -> NDC -> inverse view-proj (row-major).
+        const cardinal::u32 px = i % W, py = i / W;
+        const float ndc_x = (2.0f * (static_cast<float>(px) + 0.5f) -
+                             static_cast<float>(W)) / static_cast<float>(W);
+        const float ndc_y = (static_cast<float>(H) -
+                             2.0f * (static_cast<float>(py) + 0.5f)) / static_cast<float>(H);
+        const float ndc_z = 2.0f * depth[i] - 1.0f;
+        float wx = ivp[0]  * ndc_x + ivp[1]  * ndc_y + ivp[2]  * ndc_z + ivp[3];
+        float wy = ivp[4]  * ndc_x + ivp[5]  * ndc_y + ivp[6]  * ndc_z + ivp[7];
+        float wz = ivp[8]  * ndc_x + ivp[9]  * ndc_y + ivp[10] * ndc_z + ivp[11];
+        const float ww = ivp[12] * ndc_x + ivp[13] * ndc_y + ivp[14] * ndc_z + ivp[15];
+        if (cardinal::abs(ww) > 1.0e-8f) { wx /= ww; wy /= ww; wz /= ww; }
+
+        float nx, ny, nz;
+        oct_decode(norm[i], nx, ny, nz);
+        float vx = cpos[0] - wx, vy = cpos[1] - wy, vz = cpos[2] - wz;
+        {
+            const float vl2 = vx * vx + vy * vy + vz * vz;
+            if (vl2 > 1.0e-12f) {
+                const float inv = 1.0f / cardinal::sqrt(vl2);
+                vx *= inv; vy *= inv; vz *= inv;
+            } else { vx = 0.0f; vy = 0.0f; vz = 1.0f; }
+        }
+
+        const cardinal::u32 tile = (py / kLightTileSize) * tiles_x + (px / kLightTileSize);
+        cardinal::u32 count = tc[tile];
+        if (count > kMaxLightsPerTile) count = kMaxLightsPerTile;
+
+        float lo_r = 0.0f, lo_g = 0.0f, lo_b = 0.0f;
+        for (cardinal::u32 e = 0; e < count; ++e) {
+            const float* L = lts + tl[tile * kMaxLightsPerTile + e] * 16;
+            const cardinal::u32 kind = static_cast<cardinal::u32>(L[0]);
+            float lx, ly, lz, att = 1.0f;
+            if (kind == 0u) {                       // directional: L = -dir
+                lx = -L[5]; ly = -L[6]; lz = -L[7];
+                const float ll2 = lx * lx + ly * ly + lz * lz;
+                if (ll2 > 1.0e-12f) {
+                    const float inv = 1.0f / cardinal::sqrt(ll2);
+                    lx *= inv; ly *= inv; lz *= inv;
+                } else { lx = 0.0f; ly = 1.0f; lz = 0.0f; }
+            } else {                                // point/spot
+                lx = L[2] - wx; ly = L[3] - wy; lz = L[4] - wz;
+                const float d2 = lx * lx + ly * ly + lz * lz;
+                const float d  = cardinal::sqrt(d2);
+                if (d < 1.0e-4f) continue;
+                const float range = L[12];
+                if (d >= range) continue;
+                const float fall = 1.0f - d / range;
+                att = (fall * fall) / (d2 > 1.0e-4f ? d2 : 1.0e-4f);
+                lx /= d; ly /= d; lz /= d;
+            }
+            const float ndl = nx * lx + ny * ly + nz * lz;
+            if (ndl <= 0.0f) continue;
+            float hx = lx + vx, hy = ly + vy, hz = lz + vz;
+            const float hl2 = hx * hx + hy * hy + hz * hz;
+            if (hl2 <= 1.0e-12f) continue;
+            {
+                const float inv = 1.0f / cardinal::sqrt(hl2);
+                hx *= inv; hy *= inv; hz *= inv;
+            }
+            float ndv = nx * vx + ny * vy + nz * vz;
+            if (ndv <= 0.0f) ndv = 1.0e-4f;
+            float ndh = nx * hx + ny * hy + nz * hz;
+            if (ndh < 0.0f) ndh = 0.0f;
+            float vdh = vx * hx + vy * hy + vz * hz;
+            if (vdh < 0.0f) vdh = 0.0f;
+
+            const float a  = rough * rough;
+            const float a2 = a * a;
+            const float dd = ndh * ndh * (a2 - 1.0f) + 1.0f;
+            const float D  = a2 / (kPi * dd * dd);
+            const float k  = (rough + 1.0f) * (rough + 1.0f) / 8.0f;
+            const float G  = (ndl / (ndl * (1.0f - k) + k)) *
+                             (ndv / (ndv * (1.0f - k) + k));
+            const float fres = cardinal::pow(1.0f - vdh, 5.0f);
+            const float spec_den = (4.0f * ndl * ndv > 1.0e-4f)
+                                 ? 4.0f * ndl * ndv : 1.0e-4f;
+            const float rad_r = L[8]  * L[11] * att;
+            const float rad_g = L[9]  * L[11] * att;
+            const float rad_b = L[10] * L[11] * att;
+            // Per-channel Fresnel (F0 = lerp(0.04, base, metal)).
+            const float f0r = 0.04f + (base_r - 0.04f) * metal;
+            const float f0g = 0.04f + (base_g - 0.04f) * metal;
+            const float f0b = 0.04f + (base_b - 0.04f) * metal;
+            const float Fr = f0r + (1.0f - f0r) * fres;
+            const float Fg = f0g + (1.0f - f0g) * fres;
+            const float Fb = f0b + (1.0f - f0b) * fres;
+            const float DG = D * G;
+            lo_r += (((1.0f - Fr) * (1.0f - metal)) * base_r / kPi + DG * Fr / spec_den) * rad_r * ndl;
+            lo_g += (((1.0f - Fg) * (1.0f - metal)) * base_g / kPi + DG * Fg / spec_den) * rad_g * ndl;
+            lo_b += (((1.0f - Fb) * (1.0f - metal)) * base_b / kPi + DG * Fb / spec_den) * rad_b * ndl;
+        }
+        rad[i * 3 + 0] = base_r * ar + lo_r;
+        rad[i * 3 + 1] = base_g * ag + lo_g;
+        rad[i * 3 + 2] = base_b * ab + lo_b;
         ++shaded;
     }
     st->pixels_shaded = shaded;
@@ -821,6 +966,7 @@ cardinal::shared_ptr<VBufResolvePass::State> VBufResolvePass::add_to_graph(
     rg::ResourceHandle in_norm, rg::ResourceHandle in_mats,
     rg::ResourceHandle in_tl, rg::ResourceHandle in_tc,
     rg::ResourceHandle in_lights, rg::ResourceHandle in_amb,
+    rg::ResourceHandle in_ivp, rg::ResourceHandle in_cpos,
     cardinal::u32 W, cardinal::u32 H, cardinal::u32 MC, cardinal::u32 LC)
 {
     auto st = cardinal::shared_ptr<State>(new State());
@@ -828,12 +974,22 @@ cardinal::shared_ptr<VBufResolvePass::State> VBufResolvePass::add_to_graph(
     st->in_normal = in_norm; st->in_materials = in_mats;
     st->in_tile_lights = in_tl; st->in_tile_counts = in_tc;
     st->in_lights = in_lights; st->in_ambient = in_amb;
+    st->in_inv_view_proj = in_ivp; st->in_camera_pos = in_cpos;
     st->width = W; st->height = H; st->material_count = MC; st->light_count = LC;
     rg::BufferDesc od; od.name = "resolve.rad"; od.size_bytes = W * H * 3 * sizeof(float);
     od.stride_bytes = sizeof(float);
     st->out_radiance = g.declare_buffer(od);
     rg::PassDesc pd;
     pd.name = "VBufResolvePass"; pd.kind = rg::PassKind::Compute;
+    // FIXED SRV LAYOUT: the PBR pair is ALWAYS declared (dummies + a push
+    // flag when absent) so t9/t10 never shift. CPU gates on the ORIGINAL
+    // handles in State; the kernel gates every t9/t10 read on the flag.
+    rg::ResourceHandle ivp_bind  = in_ivp;
+    rg::ResourceHandle cpos_bind = in_cpos;
+    if (!ivp_bind.is_valid())
+        ivp_bind  = g.declare_buffer(rg::BufferDesc{"resolve.noivp",  4, 4, true});
+    if (!cpos_bind.is_valid())
+        cpos_bind = g.declare_buffer(rg::BufferDesc{"resolve.nocpos", 4, 4, true});
     pd.accesses.push_back(rg::ResourceAccess{in_depth,      rg::AccessMode::Read,  0});
     pd.accesses.push_back(rg::ResourceAccess{in_prim,       rg::AccessMode::Read,  1});
     pd.accesses.push_back(rg::ResourceAccess{in_mat,        rg::AccessMode::Read,  2});
@@ -843,39 +999,65 @@ cardinal::shared_ptr<VBufResolvePass::State> VBufResolvePass::add_to_graph(
     pd.accesses.push_back(rg::ResourceAccess{in_tc,         rg::AccessMode::Read,  6});
     pd.accesses.push_back(rg::ResourceAccess{in_lights,     rg::AccessMode::Read,  7});
     pd.accesses.push_back(rg::ResourceAccess{in_amb,        rg::AccessMode::Read,  8});
-    pd.accesses.push_back(rg::ResourceAccess{st->out_radiance, rg::AccessMode::Write, 9});
+    pd.accesses.push_back(rg::ResourceAccess{ivp_bind,      rg::AccessMode::Read,  9});
+    pd.accesses.push_back(rg::ResourceAccess{cpos_bind,     rg::AccessMode::Read, 10});
+    pd.accesses.push_back(rg::ResourceAccess{st->out_radiance, rg::AccessMode::Write, 11});
     pd.record = resolve_record; pd.user_ctx = st.get();
     pd.dispatch_x = (W + 7) / 8; pd.dispatch_y = (H + 7) / 8;
     pd.compute_hlsl = VBufResolvePass::hlsl_source();
     pd.push_constant_size = 16;
-    pack_push(pd.push_constants, W, H, 0.0f, MC);
+    // b0 = { uint gW; uint gH; uint gMatCount; uint gFlags } — bit0 = PBR.
+    pd.push_constants.clear();
+    put_u32(pd.push_constants, W);
+    put_u32(pd.push_constants, H);
+    put_u32(pd.push_constants, MC);
+    put_u32(pd.push_constants,
+            (in_ivp.is_valid() && in_cpos.is_valid()) ? 1u : 0u);
     g.add_pass(cardinal::move(pd));
     return st;
 }
 
 const char* VBufResolvePass::hlsl_source() noexcept {
     return
-    "// Cardinal - VBufResolvePass.hlsl - per-pixel ambient-proxy shade.\n"
-    "// Mirrors resolve_record: sky pixels take ambient; hit pixels take\n"
-    "// material base * (ambient + 1). The tile-light loop arrives with the\n"
-    "// real lighting commit. 9 SRVs — declared in access order (t0..t8) even\n"
-    "// where unused, to keep the register layout stable.\n"
-    "ByteAddressBuffer   InDepth      : register(t0);  // unused (layout only)\n"
+    "// Cardinal - VBufResolvePass.hlsl - tile-lit Cook-Torrance PBR resolve\n"
+    "// (gFlags bit0), falling back to the ambient proxy without the inverse\n"
+    "// view-proj + camera-pos pair. Operation-for-operation mirror of\n"
+    "// resolve_record so the harness eps-compare holds.\n"
+    "ByteAddressBuffer   InDepth      : register(t0);  // f32 per pixel\n"
     "ByteAddressBuffer   InPrim       : register(t1);  // u32 per pixel\n"
     "ByteAddressBuffer   InMatId      : register(t2);  // u32 per pixel\n"
-    "ByteAddressBuffer   InNormal     : register(t3);  // unused (layout only)\n"
+    "ByteAddressBuffer   InNormal     : register(t3);  // oct snorm16x2 per pixel\n"
     "ByteAddressBuffer   InMaterials  : register(t4);  // 8 floats per material\n"
-    "ByteAddressBuffer   InTileLights : register(t5);  // unused (layout only)\n"
-    "ByteAddressBuffer   InTileCounts : register(t6);  // unused (layout only)\n"
-    "ByteAddressBuffer   InLights     : register(t7);  // unused (layout only)\n"
+    "ByteAddressBuffer   InTileLights : register(t5);  // 64 u32 per tile\n"
+    "ByteAddressBuffer   InTileCounts : register(t6);  // u32 per tile\n"
+    "ByteAddressBuffer   InLights     : register(t7);  // 16 floats per light\n"
     "ByteAddressBuffer   InAmbient    : register(t8);  // 3 floats\n"
+    "ByteAddressBuffer   InInvVP      : register(t9);  // 16 floats (or dummy)\n"
+    "ByteAddressBuffer   InCamPos     : register(t10); // 3 floats (or dummy)\n"
     "RWByteAddressBuffer OutRadiance  : register(u0);  // float3 per pixel\n"
-    "struct PushT { uint w; uint h; float p0; uint matCount; };\n"
+    "struct PushT { uint w; uint h; uint matCount; uint flags; };\n"
     "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
     "#define gW pc.w\n"
     "#define gH pc.h\n"
     "#define gMatCount pc.matCount\n"
+    "#define gFlags pc.flags\n"
+    "#define KPI 3.14159265\n"
     "float fz(float v, float fb) { return isfinite(v) ? v : fb; }\n"
+    "float3 oct_decode(uint p) {\n"
+    "  int ix = (int)(p << 16) >> 16;   // sign-extend low snorm16\n"
+    "  int iz = (int)p >> 16;           // sign-extend high snorm16\n"
+    "  float ox = (float)ix / 32767.0;\n"
+    "  float oz = (float)iz / 32767.0;\n"
+    "  float oy = 1.0 - abs(ox) - abs(oz);\n"
+    "  if (oy < 0.0) {\n"
+    "    float tx = (1.0 - abs(oz)) * (ox >= 0.0 ? 1.0 : -1.0);\n"
+    "    float tz = (1.0 - abs(ox)) * (oz >= 0.0 ? 1.0 : -1.0);\n"
+    "    ox = tx; oz = tz;\n"
+    "  }\n"
+    "  float l2 = ox*ox + oy*oy + oz*oz;\n"
+    "  if (l2 > 1.0e-12) { float inv = 1.0/sqrt(l2); return float3(ox,oy,oz)*inv; }\n"
+    "  return float3(0,1,0);\n"
+    "}\n"
     "[numthreads(8,8,1)]\n"
     "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
     "  if (tid.x >= gW || tid.y >= gH) return;\n"
@@ -883,19 +1065,92 @@ const char* VBufResolvePass::hlsl_source() noexcept {
     "  float3 ambr = asfloat(InAmbient.Load3(0));\n"
     "  float3 amb  = float3(fz(ambr.x,0.0), fz(ambr.y,0.0), fz(ambr.z,0.0));\n"
     "  uint pid = InPrim.Load(i*4u);\n"
-    "  float3 radv;\n"
     "  if (pid == 0xFFFFFFFFu) {\n"
-    "    radv = amb;\n"
-    "  } else {\n"
-    "    uint  mid  = InMatId.Load(i*4u);\n"
-    "    float3 base = float3(0.5, 0.5, 0.5);\n"
-    "    if (mid < gMatCount) {\n"
-    "      float3 m = asfloat(InMaterials.Load3(mid*32u));\n"
-    "      base = float3(fz(m.x,0.5), fz(m.y,0.5), fz(m.z,0.5));\n"
-    "    }\n"
-    "    radv = base * (amb + 1.0);\n"
+    "    OutRadiance.Store3(i*12u, asuint(amb));\n"
+    "    return;\n"
     "  }\n"
-    "  OutRadiance.Store3(i*12u, asuint(radv));\n"
+    "  uint  mid  = InMatId.Load(i*4u);\n"
+    "  float3 base = float3(0.5, 0.5, 0.5);\n"
+    "  float rough = 0.5, metal = 0.0;\n"
+    "  if (mid < gMatCount) {\n"
+    "    float3 m = asfloat(InMaterials.Load3(mid*32u));\n"
+    "    base  = float3(fz(m.x,0.5), fz(m.y,0.5), fz(m.z,0.5));\n"
+    "    rough = fz(asfloat(InMaterials.Load(mid*32u+12u)), 0.5);\n"
+    "    metal = fz(asfloat(InMaterials.Load(mid*32u+16u)), 0.0);\n"
+    "  }\n"
+    "  if ((gFlags & 1u) == 0u) {                    // legacy ambient proxy\n"
+    "    OutRadiance.Store3(i*12u, asuint(base * (amb + 1.0)));\n"
+    "    return;\n"
+    "  }\n"
+    "  rough = clamp(rough, 0.04, 1.0);\n"
+    "  metal = clamp(metal, 0.0, 1.0);\n"
+    "  uint px = i % gW, py = i / gW;\n"
+    "  float ndc_x = (2.0*((float)px + 0.5) - (float)gW) / (float)gW;\n"
+    "  float ndc_y = ((float)gH - 2.0*((float)py + 0.5)) / (float)gH;\n"
+    "  float ndc_z = 2.0*asfloat(InDepth.Load(i*4u)) - 1.0;\n"
+    "  float4 r0 = asfloat(InInvVP.Load4(0));\n"
+    "  float4 r1 = asfloat(InInvVP.Load4(16));\n"
+    "  float4 r2 = asfloat(InInvVP.Load4(32));\n"
+    "  float4 r3 = asfloat(InInvVP.Load4(48));\n"
+    "  float3 nv = float3(ndc_x, ndc_y, ndc_z);\n"
+    "  float wx = dot(r0.xyz, nv) + r0.w;\n"
+    "  float wy = dot(r1.xyz, nv) + r1.w;\n"
+    "  float wz = dot(r2.xyz, nv) + r2.w;\n"
+    "  float ww = dot(r3.xyz, nv) + r3.w;\n"
+    "  if (abs(ww) > 1.0e-8) { wx /= ww; wy /= ww; wz /= ww; }\n"
+    "  float3 W = float3(wx, wy, wz);\n"
+    "  float3 N = oct_decode(InNormal.Load(i*4u));\n"
+    "  float3 V = asfloat(InCamPos.Load3(0)) - W;\n"
+    "  { float vl2 = dot(V,V);\n"
+    "    if (vl2 > 1.0e-12) V *= 1.0/sqrt(vl2); else V = float3(0,0,1); }\n"
+    "  uint tiles_x = (gW + 15u) / 16u;\n"
+    "  uint tile = (py/16u)*tiles_x + (px/16u);\n"
+    "  uint count = min(InTileCounts.Load(tile*4u), 64u);\n"
+    "  float3 Lo = float3(0,0,0);\n"
+    "  [loop] for (uint e = 0u; e < count; ++e) {\n"
+    "    uint lb = InTileLights.Load((tile*64u + e)*4u) * 64u;\n"
+    "    uint kind = (uint)asfloat(InLights.Load(lb));\n"
+    "    float3 Ld; float att = 1.0;\n"
+    "    if (kind == 0u) {\n"
+    "      Ld = -asfloat(InLights.Load3(lb + 20u));\n"
+    "      float ll2 = dot(Ld, Ld);\n"
+    "      if (ll2 > 1.0e-12) Ld *= 1.0/sqrt(ll2); else Ld = float3(0,1,0);\n"
+    "    } else {\n"
+    "      Ld = asfloat(InLights.Load3(lb + 8u)) - W;\n"
+    "      float d2 = dot(Ld, Ld);\n"
+    "      float d  = sqrt(d2);\n"
+    "      if (d < 1.0e-4) continue;\n"
+    "      float range = asfloat(InLights.Load(lb + 48u));\n"
+    "      if (d >= range) continue;\n"
+    "      float fall = 1.0 - d/range;\n"
+    "      att = (fall*fall) / max(d2, 1.0e-4);\n"
+    "      Ld /= d;\n"
+    "    }\n"
+    "    float ndl = dot(N, Ld);\n"
+    "    if (ndl <= 0.0) continue;\n"
+    "    float3 Hv = Ld + V;\n"
+    "    float hl2 = dot(Hv, Hv);\n"
+    "    if (hl2 <= 1.0e-12) continue;\n"
+    "    Hv *= 1.0/sqrt(hl2);\n"
+    "    float ndv = dot(N, V);  if (ndv <= 0.0) ndv = 1.0e-4;\n"
+    "    float ndh = max(dot(N, Hv), 0.0);\n"
+    "    float vdh = max(dot(V, Hv), 0.0);\n"
+    "    float a  = rough*rough;\n"
+    "    float a2 = a*a;\n"
+    "    float dd = ndh*ndh*(a2 - 1.0) + 1.0;\n"
+    "    float D  = a2 / (KPI * dd * dd);\n"
+    "    float k  = (rough + 1.0)*(rough + 1.0) / 8.0;\n"
+    "    float G  = (ndl/(ndl*(1.0-k)+k)) * (ndv/(ndv*(1.0-k)+k));\n"
+    "    float fres = pow(1.0 - vdh, 5.0);\n"
+    "    float spec_den = max(4.0*ndl*ndv, 1.0e-4);\n"
+    "    float inten = asfloat(InLights.Load(lb + 44u));\n"
+    "    float3 lrad = asfloat(InLights.Load3(lb + 32u)) * inten * att;\n"
+    "    float3 F0 = 0.04 + (base - 0.04) * metal;\n"
+    "    float3 F  = F0 + (1.0 - F0) * fres;\n"
+    "    float DG  = D * G;\n"
+    "    Lo += (((1.0 - F) * (1.0 - metal)) * base / KPI + DG * F / spec_den) * lrad * ndl;\n"
+    "  }\n"
+    "  OutRadiance.Store3(i*12u, asuint(base * amb + Lo));\n"
     "}\n";
 }
 
@@ -1274,6 +1529,7 @@ void AegisPipeline::build(rg::Graph& g, const AegisSceneInputs& in,
                                               s.light_cull->out_tile_lights,
                                               s.light_cull->out_tile_counts,
                                               in.lights, in.ambient,
+                                              in.inv_view_proj, in.camera_pos,
                                               W, H, cfg_.material_count, cfg_.light_count);
     out.radiance_hdr = s.resolve->out_radiance;
 

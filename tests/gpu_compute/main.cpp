@@ -71,6 +71,8 @@ struct SceneData {
     std::vector<float> vp;          // 16 identity (row-major)
     std::vector<float> vp_prev;     // 16 identity
     std::vector<float> cam_dir;     // 3
+    std::vector<float> ivp;         // 16 identity (inverse of identity VP)
+    std::vector<float> cam_pos;     // 3 — drives the PBR view vector
     std::vector<u8>    ui;          // W*H*4
     std::vector<u8>    gizmo;       // W*H*4
 
@@ -116,14 +118,24 @@ struct SceneData {
         materials = { 0.8f, 0.2f, 0.1f, 0.5f, 0.5f, 0.0f, 0.0f, 0.0f,
                       0.1f, 0.9f, 0.3f, 0.2f, 0.8f, 0.0f, 0.0f, 0.0f };
         lights.assign(3 * 16, 0.0f);
-        lights[0 * 16 + 11] = 2.0f;      // light 0: on
-        lights[1 * 16 + 11] = 0.0f;      // light 1: off (skipped)
-        lights[2 * 16 + 11] = 1.0f;      // light 2: on
+        // Light 0: DIRECTIONAL, on. kind=0, dir, color, intensity.
+        lights[0 * 16 + 5]  = 0.2f;  lights[0 * 16 + 6] = -0.5f; lights[0 * 16 + 7] = -1.0f;
+        lights[0 * 16 + 8]  = 1.0f;  lights[0 * 16 + 9] = 0.9f;  lights[0 * 16 + 10] = 0.8f;
+        lights[0 * 16 + 11] = 2.0f;
+        // Light 1: off (intensity 0) — the tile cull skips it.
+        // Light 2: POINT, on. kind=1, pos, color, intensity, range.
+        lights[2 * 16 + 0]  = 1.0f;
+        lights[2 * 16 + 2]  = 0.5f;  lights[2 * 16 + 3] = 0.5f;  lights[2 * 16 + 4] = 1.5f;
+        lights[2 * 16 + 8]  = 0.4f;  lights[2 * 16 + 9] = 0.5f;  lights[2 * 16 + 10] = 1.0f;
+        lights[2 * 16 + 11] = 1.5f;
+        lights[2 * 16 + 12] = 25.0f;
         ambient = { 0.1f, 0.2f, 0.3f };
         vp.assign(16, 0.0f);
         vp[0] = vp[5] = vp[10] = vp[15] = 1.0f;   // identity: NDC passthrough
         vp_prev = vp;
         cam_dir = { 0.0f, 0.0f, 1.0f };
+        ivp = vp;                                  // inverse(identity) = identity
+        cam_pos = { 0.2f, 0.3f, 2.0f };            // in front of the NDC cube
         ui.assign(usize(W) * H * 4, 0);
         gizmo.assign(usize(W) * H * 4, 0);
         for (u32 x = 0; x < 6; ++x) {             // red UI strip, top-left
@@ -143,6 +155,8 @@ struct SceneData {
 enum class Cmp {
     Exact,        // byte-identical
     EpsF32,       // per-float |a-b| <= max(1e-5, 1e-5*|a|)
+    EpsPbr,       // per-float 5e-4 abs+rel — GGX pow/divide chains contract
+                  // differently under DXC fma; logic errors are >1e-2
     Byte1,        // per-byte |a-b| <= 1 (u8 quantisation of float math)
     Lane16,       // per-16-bit lane |a-b| <= 1 (oct-packed snorm16 normals)
     Meshlet,      // 48B records: [0..1] u32 exact, [2..7] f32 exact, [8..11] eps
@@ -191,6 +205,16 @@ bool compare_output(const Ref& r,
             if (!feq(as_f32(cpu, i), as_f32(gpu_bytes, i))) {
                 why = "float " + std::to_string(i); return false;
             }
+        return true;
+    case Cmp::EpsPbr:
+        for (usize i = 0; i < n / 4; ++i) {
+            const float a = as_f32(cpu, i), b = as_f32(gpu_bytes, i);
+            const float d = std::fabs(a - b);
+            const float m = std::fabs(a) > std::fabs(b) ? std::fabs(a) : std::fabs(b);
+            if (!(d <= 5e-4f + 5e-4f * m)) {
+                why = "float " + std::to_string(i); return false;
+            }
+        }
         return true;
     case Cmp::Lane16:
         for (usize i = 0; i < n / 4; ++i) {
@@ -327,6 +351,9 @@ void run_backend(rhi::Backend be, const char* be_name) {
                                     sd.ui.size(), 4);
             in.gizmo_overlay  = graph->import_buffer("in.giz",  sd.gizmo.data(),
                                     sd.gizmo.size(), 4);
+            // PBR pair: switches the resolve to tile-lit Cook-Torrance.
+            in.inv_view_proj  = graph->import_buffer("in.ivp",  sd.ivp.data(), 64, 4);
+            in.camera_pos     = graph->import_buffer("in.cpos", sd.cam_pos.data(), 12, 4);
         }
 
         gpu::AegisConfig cfg{};
@@ -366,7 +393,7 @@ void run_backend(rhi::Backend be, const char* be_name) {
             { "vbuf.normal",  st.vbuf->out_normal,               Cmp::Lane16    },
             { "vbuf.motion",  st.vbuf->out_motion,               Cmp::Exact     },
             { "vbuf.aux",     st.vbuf->out_aux,                  Cmp::Exact     },
-            { "resolve.rad",  st.resolve->out_radiance,          Cmp::EpsF32    },
+            { "resolve.rad",  st.resolve->out_radiance,          Cmp::EpsPbr    },
             { "tone.rgba",    st.tonemap->out_rgba,              Cmp::Byte1     },
             { "present.rgba", st.composite->out_presentation,    Cmp::Byte1     },
         };

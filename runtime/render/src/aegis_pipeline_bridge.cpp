@@ -279,6 +279,10 @@ public:
             in.ambient      = gr.import_buffer("amb", amb_data_, 12, 4);
             in.view_proj    = gr.import_buffer("vp",  vp_data_,  64, 4);
             in.camera_dir   = gr.import_buffer("dir", dir_data_, 12, 4);
+            // PBR pair: real inverse view-proj + camera position switch the
+            // V-Buf resolve from the ambient proxy to tile-lit Cook-Torrance.
+            in.inv_view_proj = gr.import_buffer("ivp",  ivp_data_,    64, 4);
+            in.camera_pos    = gr.import_buffer("cpos", campos_data_, 12, 4);
             runner_->build(in);
         }
 
@@ -293,8 +297,13 @@ public:
             for (int r = 0; r < 4; ++r)
                 for (int c = 0; c < 4; ++c)
                     vp_data_[r * 4 + c] = vp.m[c][r];
+            const auto ivp = vp.inverse();
+            for (int r = 0; r < 4; ++r)
+                for (int c = 0; c < 4; ++c)
+                    ivp_data_[r * 4 + c] = ivp.m[c][r];
             const scene::Vec3 eye = scn.camera().position;
             const scene::Vec3 tgt = scn.camera().target;
+            campos_data_[0] = eye.x; campos_data_[1] = eye.y; campos_data_[2] = eye.z;
             float fx = tgt.x - eye.x, fy = tgt.y - eye.y, fz = tgt.z - eye.z;
             const float len2 = fx * fx + fy * fy + fz * fz;
             if (len2 > 1.0e-12f) {
@@ -692,6 +701,8 @@ private:
     float amb_data_[3] {0.1f, 0.1f, 0.12f};
     float vp_data_[16] {};
     float dir_data_[3] {0.0f, 0.0f, 1.0f};
+    float ivp_data_[16] {};
+    float campos_data_[3] {};
 };
 
 }  // namespace

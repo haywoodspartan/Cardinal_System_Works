@@ -237,6 +237,11 @@ public:
         graph::ResourceHandle in_tile_counts;
         graph::ResourceHandle in_lights;         // PackedLight array
         graph::ResourceHandle in_ambient;        // 3 floats
+        // PBR pair (both valid => full tile-lit Cook-Torrance; either
+        // missing => the legacy ambient-proxy shade). Row-major like every
+        // AEGIS matrix input.
+        graph::ResourceHandle in_inv_view_proj;  // optional, 16 floats
+        graph::ResourceHandle in_camera_pos;     // optional, 3 floats
         graph::ResourceHandle out_radiance;      // W * H * 3 floats (HDR linear)
         cardinal::u32 width  {0};
         cardinal::u32 height {0};
@@ -257,6 +262,8 @@ public:
         graph::ResourceHandle in_tile_counts,
         graph::ResourceHandle in_lights,
         graph::ResourceHandle in_ambient,
+        graph::ResourceHandle in_inv_view_proj,   // pass {} for the proxy shade
+        graph::ResourceHandle in_camera_pos,      // pass {} for the proxy shade
         cardinal::u32 width, cardinal::u32 height,
         cardinal::u32 material_count,
         cardinal::u32 light_count);
@@ -389,6 +396,11 @@ struct AegisSceneInputs {
     graph::ResourceHandle restir_seeds;           // W*H u32
     graph::ResourceHandle restir_prev_reservoirs; // optional W*H * kReservoirBytes
     graph::ResourceHandle restir_prev_world_normal; // optional 3*W*H f32
+    // --- PBR resolve inputs (optional pair — both valid switches
+    //     VBufResolvePass from the ambient proxy to the full tile-lit
+    //     Cook-Torrance shade; row-major inverse of view_proj).
+    graph::ResourceHandle inv_view_proj;          // optional 16 f32
+    graph::ResourceHandle camera_pos;             // optional 3 f32
     cardinal::u32 triangle_count {0};
 };
 
