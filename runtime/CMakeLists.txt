@@ -52,6 +52,7 @@ add_subdirectory(sandbox)
 add_subdirectory(cppscript)
 add_subdirectory(script)
 add_subdirectory(blueprint)   # interoperable visual scripting (graph <-> source)
+add_subdirectory(ice)         # modern ICE: attribute streams + fast op dependency graph
 add_subdirectory(ui)
 add_subdirectory(engine)
 add_subdirectory(launcher)
