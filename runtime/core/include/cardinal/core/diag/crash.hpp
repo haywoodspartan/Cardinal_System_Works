@@ -72,4 +72,26 @@ std::string write_dump_now(const char* reason = "manual");
 // the host can surface "your last crash dump is at X" in the UI.
 std::string last_dump_path() noexcept;
 
+// ---------------------------------------------------------------------------
+// Hang watchdog — catches the failure crashes never report: the main loop
+// FREEZING (Windows "stopped interacting and was closed", Event 1002, no
+// dump, no stack — exactly the 2026-07-15 Studio incident). A background
+// thread checks a heartbeat the main loop pokes every frame; if no poke
+// lands for `stall_seconds`, it writes ONE full-thread minidump + log line
+// (via write_dump_now, so install()'s dump_dir/detail apply) and keeps the
+// process running — the frozen threads' stacks are in the dump.
+//
+//     cardinal::crash::install();
+//     cardinal::crash::watchdog_start(8);
+//     while (frame) { cardinal::crash::watchdog_poke(); ... }
+//     cardinal::crash::watchdog_stop();
+//
+// Single-fire per start; poke/stop are safe from any thread.
+// ---------------------------------------------------------------------------
+bool watchdog_start(u32 stall_seconds = 8);
+void watchdog_poke() noexcept;
+void watchdog_stop() noexcept;
+// True once the watchdog has fired since the last start (for tests/UI).
+bool watchdog_fired() noexcept;
+
 }  // namespace cardinal::crash

@@ -15,6 +15,7 @@
 #include <cardinal/core/platform.hpp>
 
 #include <atomic>
+#include <chrono>       // watchdog heartbeat timing
 #include <csignal>      // signal / raise / SIGABRT — abort()/assert path
 #include <cstdint>      // uintptr_t — _invalid_parameter_handler signature
 #include <cstdio>
@@ -22,6 +23,7 @@
 #include <cstring>
 #include <exception>    // std::set_terminate — uncaught / escaped exceptions
 #include <mutex>
+#include <thread>       // hang-watchdog background thread
 
 #if CARDINAL_PLATFORM_WINDOWS
 
@@ -462,6 +464,77 @@ std::string write_dump_now(const char* reason) {
 std::string last_dump_path() noexcept {
     std::lock_guard<std::mutex> lg(g_path_mtx);
     return g_last_dump_path;
+}
+
+// ---------------------------------------------------------------------------
+// Hang watchdog — see crash.hpp. Platform-neutral thread + heartbeat; the
+// dump write itself is the (Windows-implemented) write_dump_now.
+// ---------------------------------------------------------------------------
+namespace {
+
+std::atomic<bool>      g_wd_run{false};
+std::atomic<bool>      g_wd_fired{false};
+std::atomic<long long> g_wd_last_poke_ms{0};
+std::atomic<unsigned>  g_wd_stall_ms{8000};
+std::thread            g_wd_thread;
+
+long long wd_now_ms() noexcept {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void wd_loop() {
+    // Coarse 250 ms sampling — a hang detector doesn't need millisecond
+    // precision. Single fire per start: a frozen process's dump doesn't
+    // get better the second time.
+    while (g_wd_run.load(std::memory_order_relaxed)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        if (!g_wd_run.load(std::memory_order_relaxed)) break;
+        if (g_wd_fired.load(std::memory_order_relaxed)) continue;
+        const long long last  = g_wd_last_poke_ms.load(std::memory_order_relaxed);
+        const long long stall = wd_now_ms() - last;
+        if (stall > static_cast<long long>(
+                        g_wd_stall_ms.load(std::memory_order_relaxed))) {
+            cardinal::log::errorf("crash",
+                "HANG WATCHDOG: main loop silent for %lld ms — writing "
+                "full-thread dump (process left running)",
+                stall);
+            write_dump_now("hang watchdog: main loop stalled");
+            cardinal::log::errorf("crash", "hang dump: %s",
+                                  last_dump_path().c_str());
+            // Set AFTER the write: fired == "dump is on disk" (observers
+            // poll this; publishing early would race them into a half-
+            // written file). Single watchdog thread — no double-fire risk.
+            g_wd_fired.store(true, std::memory_order_release);
+        }
+    }
+}
+
+}  // namespace
+
+bool watchdog_start(u32 stall_seconds) {
+    bool expected = false;
+    if (!g_wd_run.compare_exchange_strong(expected, true)) return true;  // idempotent
+    if (stall_seconds == 0) stall_seconds = 1;
+    g_wd_stall_ms.store(stall_seconds * 1000u, std::memory_order_relaxed);
+    g_wd_fired.store(false, std::memory_order_relaxed);
+    g_wd_last_poke_ms.store(wd_now_ms(), std::memory_order_relaxed);
+    g_wd_thread = std::thread(&wd_loop);
+    return true;
+}
+
+void watchdog_poke() noexcept {
+    g_wd_last_poke_ms.store(wd_now_ms(), std::memory_order_relaxed);
+}
+
+void watchdog_stop() noexcept {
+    bool expected = true;
+    if (!g_wd_run.compare_exchange_strong(expected, false)) return;
+    if (g_wd_thread.joinable()) g_wd_thread.join();
+}
+
+bool watchdog_fired() noexcept {
+    return g_wd_fired.load(std::memory_order_relaxed);
 }
 
 }  // namespace cardinal::crash
