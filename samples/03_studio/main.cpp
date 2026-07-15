@@ -87,6 +87,7 @@ namespace cardinal::input {
 #include <cardinal/cui/context.hpp>         // Cardinal Slate (our own UI framework)
 #include <cardinal/cui/widgets.hpp>
 #include <cardinal/blueprint/blueprint.hpp> // interoperable visual scripting
+#include <cardinal/render/render_passes.hpp> // XSI-style passes & partitions
 #include <cardinal/vm/vm.hpp>               // run compiled blueprints
 #include <cardinal/window/window.hpp>
 
@@ -1247,6 +1248,38 @@ int main(int argc, char** argv) {
                                : std::string();
     };
 
+    // ----- XSI-style Render Passes & Partitions -----------------------------
+    // Softimage's signature workflow: named passes (Beauty/Wireframe/Matte...)
+    // whose partitions carry per-pass overrides (hide a group, flat-tint a
+    // group), previewed live through the CURRENT pass. Persisted per project.
+    namespace rpass = cardinal::render::rp;
+    rpass::PassSet render_passes  = rpass::make_default_pass_set();
+    bool           show_rpasses   = false;   // View > Render Passes
+    bool           rpass_preview  = false;   // apply current pass to viewports
+    auto render_passes_path = [&]() -> std::string {
+        return current_project ? (current_project->dirs().root + "/render_passes.txt")
+                               : std::string();
+    };
+    auto save_render_passes = [&]() {
+        const std::string path = render_passes_path();
+        if (path.empty()) return;
+        const cardinal::string text = render_passes.serialize();
+        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+        if (f) f.write(text.c_str(), static_cast<std::streamsize>(text.size()));
+    };
+    auto load_render_passes = [&]() {
+        const std::string path = render_passes_path();
+        if (path.empty()) return;
+        std::ifstream f(path, std::ios::binary);
+        if (!f) return;
+        std::string all, line;
+        while (std::getline(f, line)) { all += line; all += '\n'; }
+        bool ok = false;
+        rpass::PassSet loaded =
+            rpass::PassSet::deserialize(cardinal::string(all.c_str(), all.size()), &ok);
+        if (ok) render_passes = cardinal::move(loaded);
+    };
+
     auto register_imported_factory = [&](const std::string& key, const std::string& label,
                                          const std::string& matkey) {
         if (scn::AssetCatalog::instance().find(key.c_str()) != nullptr) return;
@@ -2031,6 +2064,12 @@ int main(int argc, char** argv) {
         // invalid for viewports not rendered below, so a pick over them is
         // rejected rather than silently using a stale/foreign projection).
         rendered_vp.assign(viewports.size(), cardinal::cmd::ViewProj{});
+        // XSI current-pass preview: apply the pass's partition overrides
+        // (visibility / matte tint) around the whole viewport render, then
+        // restore IMMEDIATELY after — before any actor writeback — so the
+        // authoritative scene state (and saves) never see the overrides.
+        rpass::Applied rpass_applied;
+        if (rpass_preview) rpass_applied = render_passes.apply(scene);
         for (int i = 0; i < static_cast<int>(viewports.size()); ++i) {
             const auto& vps = viewports[i];
             if (!vps.show)      continue;
@@ -2076,6 +2115,7 @@ int main(int argc, char** argv) {
                 rendered_vp[static_cast<usize>(i)] =
                     { scene.camera().view(), scene.camera().proj(aspect_i), true };
         }
+        if (rpass_applied.active) render_passes.restore(scene, rpass_applied);
         // NOTE: set_viewport_camera does NOT re-derive aspect — it just
         // stores the view/proj it is given. The per-panel overlay camera
         // is set inside the viewport-panel draw loop below (each panel
@@ -2195,11 +2235,14 @@ int main(int argc, char** argv) {
                     open_save_as_modal = true;
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Save Project", nullptr, false, have_proj))
+                if (ImGui::MenuItem("Save Project", nullptr, false, have_proj)) {
                     current_project->save();
+                    save_render_passes();
+                }
                 if (ImGui::MenuItem("Save All (Project + World)", "Ctrl+Shift+S", false, have_proj)) {
                     save_world_now();
                     if (current_project) current_project->save();
+                    save_render_passes();
                 }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Open World", nullptr, false, have_proj)) {
@@ -2227,6 +2270,7 @@ int main(int argc, char** argv) {
                                 imported_mesh_cache->clear();
                                 imported_by_source.clear();
                                 load_imported_manifest();   // re-register imported meshes first
+                                load_render_passes();
                                 cardinal::string werr;
                                 cardinal::serial::load_world(game, wp, true, &werr);
                             }
@@ -2330,6 +2374,7 @@ int main(int argc, char** argv) {
                 ImGui::MenuItem("Code Sandbox",        nullptr, &show_cppscript);
                 ImGui::Separator();
                 ImGui::MenuItem("Render Pipeline",     nullptr, &show_pipeline);
+                ImGui::MenuItem("Render Passes",       nullptr, &show_rpasses);
                 ImGui::MenuItem("Memory && Budgets",   nullptr, &show_memory);
                 ImGui::MenuItem("Profiler",            nullptr, &show_profiler);
                 ImGui::MenuItem("Virtual Textures",    nullptr, &show_vt);
@@ -3313,7 +3358,10 @@ int main(int argc, char** argv) {
                 const bool ctrl = io.KeyCtrl || io.KeySuper;
                 if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {                  // Ctrl+(Shift+)S
                     save_world_now();
-                    if (io.KeyShift && current_project) current_project->save();       // Save All
+                    if (io.KeyShift && current_project) {                              // Save All
+                        current_project->save();
+                        save_render_passes();
+                    }
                 }
                 if (ctrl && ImGui::IsKeyPressed(ImGuiKey_C, false)) copy_entity();     // Ctrl+C
                 if (ctrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) paste_entity();    // Ctrl+V
@@ -3515,6 +3563,110 @@ int main(int argc, char** argv) {
         if (!any_maximized && show_stats)    studio->draw_stats_panel("Stats", &show_stats);
         if (!any_maximized && show_options)
             cardinal::ui::panels::options_panel::draw("Options / Settings", &show_options);
+
+        // Render Passes — XSI-style passes & partitions. Radio = current pass;
+        // preview applies its overrides to the live viewports. Partitions are
+        // built from the viewport/outliner selection.
+        if (!any_maximized && show_rpasses) {
+            if (ImGui::Begin("Render Passes", &show_rpasses)) {
+                ImGui::Checkbox("Preview current pass", &rpass_preview);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Save")) save_render_passes();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Writes render_passes.txt into the project");
+                ImGui::Separator();
+
+                static char new_pass_name[64] = "";
+                static char new_part_name[64] = "";
+                std::string remove_pass_name;
+
+                auto& plist = render_passes.passes();
+                for (int pi = 0; pi < static_cast<int>(plist.size()); ++pi) {
+                    auto& pd = plist[static_cast<size_t>(pi)];
+                    ImGui::PushID(pi);
+                    if (ImGui::RadioButton("##cur", render_passes.current_index() == pi))
+                        render_passes.set_current(pi);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Current pass");
+                    ImGui::SameLine();
+                    ImGui::Checkbox("##en", &pd.enabled);
+                    ImGui::SameLine();
+                    const bool open = ImGui::TreeNode("pass", "%s  [%s]",
+                        pd.name.c_str(), scn::view_mode_name(pd.view_mode));
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("x")) remove_pass_name = pd.name.c_str();
+                    if (open) {
+                        int vm = static_cast<int>(pd.view_mode);
+                        ImGui::SetNextItemWidth(150.0f);
+                        if (ImGui::Combo("View Mode", &vm,
+                                "Solid\0Wireframe\0Polygons\0Heightmap\0Normals\0RTX Preview\0"))
+                            pd.view_mode = static_cast<scn::ViewMode>(vm);
+
+                        for (auto& part : pd.partitions) {
+                            ImGui::PushID(part.name.c_str());
+                            if (ImGui::TreeNode("part", "%s  (%d entities)",
+                                    part.name.c_str(),
+                                    static_cast<int>(part.entities.size()))) {
+                                ImGui::Checkbox("Override visibility",
+                                                &part.ovr.override_visibility);
+                                if (part.ovr.override_visibility) {
+                                    ImGui::SameLine();
+                                    ImGui::Checkbox("Visible", &part.ovr.visible);
+                                }
+                                ImGui::Checkbox("Override tint", &part.ovr.override_tint);
+                                if (part.ovr.override_tint) {
+                                    float col[3] = { part.ovr.tint.x,
+                                                     part.ovr.tint.y,
+                                                     part.ovr.tint.z };
+                                    ImGui::SetNextItemWidth(180.0f);
+                                    if (ImGui::ColorEdit3("Tint", col))
+                                        part.ovr.tint = { col[0], col[1], col[2] };
+                                }
+                                if (ImGui::SmallButton("Assign selection") &&
+                                    !selection.empty()) {
+                                    for (u32 sid : selection) pd.assign(sid, part.name);
+                                }
+                                ImGui::SameLine();
+                                if (ImGui::SmallButton("Unassign selection")) {
+                                    for (u32 sid : selection) pd.unassign(sid);
+                                }
+                                ImGui::TreePop();
+                            }
+                            ImGui::PopID();
+                        }
+
+                        ImGui::SetNextItemWidth(150.0f);
+                        ImGui::InputText("##newpart", new_part_name, sizeof(new_part_name));
+                        ImGui::SameLine();
+                        const bool can_part = new_part_name[0] != '\0' && !selection.empty();
+                        if (!can_part) ImGui::BeginDisabled();
+                        if (ImGui::SmallButton("+ Partition from selection")) {
+                            for (u32 sid : selection)
+                                pd.assign(sid, new_part_name);
+                            new_part_name[0] = '\0';
+                        }
+                        if (!can_part) {
+                            ImGui::EndDisabled();
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip("Name the partition and select entities first");
+                        }
+                        ImGui::TreePop();
+                    }
+                    ImGui::PopID();
+                }
+                if (!remove_pass_name.empty())
+                    render_passes.remove_pass(remove_pass_name.c_str());
+
+                ImGui::Separator();
+                ImGui::SetNextItemWidth(150.0f);
+                ImGui::InputText("##newpass", new_pass_name, sizeof(new_pass_name));
+                ImGui::SameLine();
+                if (ImGui::SmallButton("+ Add Pass") && new_pass_name[0] != '\0') {
+                    render_passes.add_pass(new_pass_name);
+                    new_pass_name[0] = '\0';
+                }
+            }
+            ImGui::End();
+        }
 
         // Blueprint — interoperable visual scripting. Left: the editable SOURCE
         // (bound to blueprint::Document — typing re-derives the graph live).
@@ -3747,6 +3899,7 @@ int main(int argc, char** argv) {
                 imported_mesh_cache->clear();
                 imported_by_source.clear();
                 load_imported_manifest();   // re-register imported meshes so the world resolves
+                load_render_passes();       // project-scoped XSI pass set
                 std::string werr;
                 const auto ls = cardinal::serial::load_world(
                     game, world_path, /*replace_existing=*/true, &werr);

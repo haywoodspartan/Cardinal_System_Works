@@ -17,6 +17,7 @@ add_library(cardinal_render STATIC
     src/gpu_color.cpp
     src/frame_pacer.cpp
     src/aegis_pipeline_bridge.cpp
+    src/render_passes.cpp
     include/cardinal/render/pipeline.hpp
     include/cardinal/render/tex.hpp
     include/cardinal/render/tess.hpp
