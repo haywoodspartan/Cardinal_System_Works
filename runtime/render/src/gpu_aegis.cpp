@@ -606,7 +606,8 @@ cardinal::shared_ptr<DrawIndirectGenPass::State> DrawIndirectGenPass::add_to_gra
     pd.accesses.push_back(rg::ResourceAccess{st->out_commands, rg::AccessMode::Write, 2});
     pd.accesses.push_back(rg::ResourceAccess{st->out_count,    rg::AccessMode::Write, 3});
     pd.record = indirect_record; pd.user_ctx = st.get();
-    // GPU: ONE thread does the whole compaction (see kernel note).
+    // GPU: ONE workgroup (256 threads) sweeps the stream with an LDS scan —
+    // order-preserving compaction, chunked over ceil(N/256) (see kernel).
     pd.dispatch_x = 1;
     pd.compute_hlsl = DrawIndirectGenPass::hlsl_source();
     pd.push_constant_size = 16;
@@ -616,13 +617,16 @@ cardinal::shared_ptr<DrawIndirectGenPass::State> DrawIndirectGenPass::add_to_gra
 }
 
 const char* DrawIndirectGenPass::hlsl_source() noexcept {
+    // ORDER-PRESERVING PARALLEL COMPACTION — a hand-rolled single-workgroup
+    // Hillis-Steele inclusive scan in groupshared memory. 256 threads sweep
+    // the visibility stream in chunks; each chunk's scan assigns every
+    // visible meshlet the exact slot the CPU's serial loop would (ascending
+    // i), so the harness's byte-exact CmdPrefix compare still holds while the
+    // work runs 256-wide with coalesced loads. s_base carries the running
+    // total across chunks; thread 0 publishes the final count — the pass is
+    // fully self-contained (no pre-clear dispatch, no cross-group atomics).
     return
-    "// Cardinal - DrawIndirectGenPass.hlsl - visibility -> dense command list.\n"
-    "// DELIBERATELY single-threaded: a serial scan emits commands in the same\n"
-    "// order as the CPU reference (bit-exact validation) and initialises the\n"
-    "// count itself — no cross-group atomic ordering, no pre-clear pass.\n"
-    "// Meshlet counts are small (tris/64); a prefix-sum compaction is the\n"
-    "// optimisation slice once the pipeline is validated end-to-end.\n"
+    "// Cardinal - DrawIndirectGenPass.hlsl - LDS-scan stream compaction.\n"
     "ByteAddressBuffer   InVis      : register(t0);   // 1 byte per meshlet\n"
     "ByteAddressBuffer   InMeshlets : register(t1);   // 48B records\n"
     "RWByteAddressBuffer OutCmds    : register(u0);   // 16B IndirectDrawCmd\n"
@@ -630,20 +634,40 @@ const char* DrawIndirectGenPass::hlsl_source() noexcept {
     "struct PushT { uint n; uint p0; uint p1; uint p2; };\n"
     "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
     "#define gN pc.n\n"
-    "[numthreads(1,1,1)]\n"
-    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
-    "  if (tid.x != 0u) return;\n"
-    "  uint emitted = 0u;\n"
-    "  [loop] for (uint i = 0u; i < gN; ++i) {\n"
-    "    uint vis = (InVis.Load((i/4u)*4u) >> ((i%4u)*8u)) & 0xFFu;\n"
-    "    if (vis == 0u) continue;\n"
-    "    uint mb = i*48u;\n"
-    "    uint first = InMeshlets.Load(mb+0);\n"
-    "    uint cnt   = InMeshlets.Load(mb+4);\n"
-    "    OutCmds.Store4(emitted*16u, uint4(first, cnt, i, 0u));\n"
-    "    ++emitted;\n"
+    "groupshared uint s_scan[256];\n"
+    "groupshared uint s_base;\n"
+    "[numthreads(256,1,1)]\n"
+    "void CSMain(uint3 gtid : SV_GroupThreadID){\n"
+    "  uint tid = gtid.x;               // NO early returns: barriers below\n"
+    "  if (tid == 0u) s_base = 0u;      // groupshared starts undefined\n"
+    "  uint chunks = (gN + 255u) / 256u;\n"
+    "  [loop] for (uint c = 0u; c < chunks; ++c) {\n"
+    "    uint i = c*256u + tid;\n"
+    "    uint v = 0u;\n"
+    "    if (i < gN) {\n"
+    "      // Guard the LOAD itself: root descriptors have no bounds checking.\n"
+    "      v = (InVis.Load((i/4u)*4u) >> ((i%4u)*8u)) & 0xFFu;\n"
+    "      if (v != 0u) v = 1u;         // any nonzero byte = visible-once\n"
+    "    }\n"
+    "    s_scan[tid] = v;\n"
+    "    GroupMemoryBarrierWithGroupSync();   // publish stores (+ s_base on c==0)\n"
+    "    [unroll] for (uint off = 1u; off < 256u; off <<= 1u) {\n"
+    "      uint t = (tid >= off) ? s_scan[tid - off] : 0u;\n"
+    "      GroupMemoryBarrierWithGroupSync();  // all reads before any write\n"
+    "      s_scan[tid] += t;\n"
+    "      GroupMemoryBarrierWithGroupSync();\n"
+    "    }\n"
+    "    if (v != 0u) {\n"
+    "      uint slot = s_base + s_scan[tid] - 1u;   // inclusive scan -> 0-based\n"
+    "      uint mb = i*48u;\n"
+    "      OutCmds.Store4(slot*16u,\n"
+    "                     uint4(InMeshlets.Load(mb+0), InMeshlets.Load(mb+4), i, 0u));\n"
+    "    }\n"
+    "    GroupMemoryBarrierWithGroupSync();   // writes done before s_base bump\n"
+    "    if (tid == 0u) s_base += s_scan[255];\n"
+    "    GroupMemoryBarrierWithGroupSync();\n"
     "  }\n"
-    "  OutCount.Store(0, emitted);\n"
+    "  if (tid == 0u) OutCount.Store(0, s_base);\n"
     "}\n";
 }
 

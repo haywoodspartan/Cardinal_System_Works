@@ -451,6 +451,25 @@ void run_backend(rhi::Backend be, const char* be_name) {
 
         // Backend (and its GPU buffers) can die now — the fence retired.
         backend.reset();
+
+        // ---- Productized async routing smoke --------------------------------
+        // The manual recorder path above validates NUMERICS; this validates
+        // the PRODUCTION plumbing: a swapchain-less RhiBackend given the
+        // async ComputeQueue records + submits the whole graph internally
+        // (set_async_queue), and its destructor drains in-flight work.
+        if (with_opt) {
+            auto abackend = rg::RhiBackend::create(*dev);
+            abackend->set_gpu_execute(true);
+            abackend->set_async_queue(queue.get());
+            abackend->execute(*graph);
+            u32 areal = 0;
+            for (const auto& ev : abackend->events())
+                if (ev.real_dispatch) ++areal;
+            CHECK(areal >= 10u);                    // every kernel routed async
+            abackend.reset();                       // dtor drain must not hang
+            cardinal::log::infof("gputest",
+                "%s async routing: %u real dispatches via ComputeQueue", be_name, areal);
+        }
     }
 }
 

@@ -353,7 +353,10 @@ private:
 // ---------------------------------------------------------------------------
 }  // namespace cardinal::render::graph
 
-namespace cardinal::rhi { class Device; class Swapchain; class Pipeline; class Buffer; }
+namespace cardinal::rhi {
+class Device; class Swapchain; class Pipeline; class Buffer;
+class ComputeQueue; class Fence;
+}
 
 namespace cardinal::render::graph {
 
@@ -361,11 +364,28 @@ class RhiBackend : public Backend {
 public:
     static cardinal::shared_ptr<RhiBackend> create(cardinal::rhi::Device& dev,
                                                    cardinal::rhi::Swapchain& sw);
+    // Swapchain-less form: telemetry-only until an async ComputeQueue is
+    // attached (set_async_queue) — the queue's recorder then becomes the
+    // dispatch target. Used when no window/swapchain exists.
+    static cardinal::shared_ptr<RhiBackend> create(cardinal::rhi::Device& dev);
+
+    ~RhiBackend() override;
 
     void execute(Graph& g) noexcept override;
 
+    // Route GPU execution onto the async compute queue: execute() records the
+    // whole compute graph via q->submit (the recorder is a Swapchain), so the
+    // AEGIS graph runs CONCURRENTLY with the graphics queue's frame. The
+    // queue pointer is non-owning and must outlive this backend. Attaching,
+    // detaching (nullptr) and destruction all DRAIN in-flight work first —
+    // buffer_cache_ buffers and per-frame imported uploads must never race a
+    // live submission. No-op re-set of the same queue is free.
+    void set_async_queue(cardinal::rhi::ComputeQueue* q) noexcept;
+
     struct PassEvent {
-        cardinal::string name;
+        // Points at the PassDesc's name; valid until the graph is rebuilt
+        // (the AEGIS graph is persistent across frames — see AegisPipelineRunner).
+        const char*      name {""};
         PassKind         kind;
         u32              dispatch_x {0}, dispatch_y{0}, dispatch_z{0};
         bool             real_dispatch {false};   // true when create_compute_pipeline succeeded
@@ -404,8 +424,17 @@ public:
 private:
     RhiBackend() = default;
 
+    // The recording body — dispatches onto `target` (main swapchain OR an
+    // async recorder). Null target = recording-only telemetry.
+    void execute_on(cardinal::rhi::Swapchain* target, Graph& g) noexcept;
+    // Fence-wait any in-flight async submission (attach/detach/reset/dtor).
+    void drain_async_() noexcept;
+
     cardinal::rhi::Device*    dev_ {nullptr};
     cardinal::rhi::Swapchain* sw_  {nullptr};
+    cardinal::rhi::ComputeQueue*          async_q_ {nullptr};   // non-owning
+    cardinal::unique_ptr<cardinal::rhi::Fence> async_fence_;    // drain sync
+    u64                                    async_fence_value_ {0};
     // Pass NAME → compiled compute pipeline (lazy, cached across executes).
     // Keyed by name, not pass id: the graph is rebuilt per frame and pass ids
     // SHIFT when the topology changes (ReSTIR / MotionVector wire in

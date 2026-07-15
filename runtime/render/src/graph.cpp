@@ -461,7 +461,36 @@ cardinal::shared_ptr<RhiBackend> RhiBackend::create(cardinal::rhi::Device& dev,
     return b;
 }
 
+cardinal::shared_ptr<RhiBackend> RhiBackend::create(cardinal::rhi::Device& dev) {
+    auto b = cardinal::shared_ptr<RhiBackend>(new RhiBackend());
+    b->dev_ = &dev;
+    return b;
+}
+
+RhiBackend::~RhiBackend() {
+    // The cache buffers die with us — never while a submission may read them.
+    drain_async_();
+}
+
+void RhiBackend::drain_async_() noexcept {
+    if (async_q_ == nullptr || async_fence_ == nullptr) return;
+    // An empty submission serialises behind any in-flight one (both backends
+    // CPU-wait the previous submission at the top of submit), then signals.
+    const u64 v = ++async_fence_value_;
+    async_q_->submit(nullptr, nullptr, async_fence_.get(), v);
+    async_fence_->wait_cpu(v, 0);
+}
+
+void RhiBackend::set_async_queue(cardinal::rhi::ComputeQueue* q) noexcept {
+    if (q == async_q_) return;
+    drain_async_();                    // detach/switch: old work must retire
+    async_q_ = q;
+    if (async_q_ != nullptr && async_fence_ == nullptr && dev_ != nullptr)
+        async_fence_ = dev_->create_fence(0);
+}
+
 void RhiBackend::reset() noexcept {
+    drain_async_();                    // buffers are about to be destroyed
     events_.clear();
     pipeline_cache_.clear();
     buffers_.clear();
@@ -475,6 +504,11 @@ cardinal::rhi::Buffer* RhiBackend::gpu_buffer(const cardinal::string& name) cons
 }
 
 void RhiBackend::make_copy_source(const cardinal::string& name) noexcept {
+    // Async mode records on the queue's recorder inside submit(); barriers
+    // issued here would land on the WRONG command stream. The supported
+    // readback flow constructs the backend over the recorder itself
+    // (tests/gpu_compute) — synchronous mode only.
+    if (async_q_ != nullptr) return;
     const auto slot_it = buffer_cache_.find(name);
     if (slot_it == buffer_cache_.end() || !slot_it->second.buf || !sw_) return;
     cardinal::rhi::Buffer* buf = slot_it->second.buf.get();
@@ -501,8 +535,31 @@ void RhiBackend::make_copy_source(const cardinal::string& name) noexcept {
 }
 
 void RhiBackend::execute(Graph& g) noexcept {
+    if (dev_ == nullptr) { events_.clear(); return; }
+
+    // Async lane: record + submit the whole compute graph onto the async
+    // ComputeQueue — it runs concurrently with the graphics queue's frame.
+    // submit() records SYNCHRONOUSLY on this thread (events/stats stay
+    // valid) and CPU-waits the previous submission first, so the per-frame
+    // imported-buffer uploads inside execute_on can't race frame N-1's reads.
+    if (gpu_execute_ && async_q_ != nullptr && async_fence_ != nullptr) {
+        struct Ctx { RhiBackend* self; Graph* g; } cx{ this, &g };
+        async_q_->submit(
+            [](cardinal::rhi::Swapchain* rec, void* user) noexcept {
+                auto* c = static_cast<Ctx*>(user);
+                c->self->execute_on(rec, *c->g);
+            },
+            &cx, async_fence_.get(), ++async_fence_value_);
+        return;
+    }
+
+    execute_on(sw_, g);
+}
+
+void RhiBackend::execute_on(cardinal::rhi::Swapchain* target, Graph& g) noexcept {
     events_.clear();
-    if (!dev_ || !sw_) return;
+    cardinal::rhi::Swapchain* sw_saved = sw_;
+    sw_ = target;   // make_copy_source + helpers see the live target
 
     const auto& order = g.execution_order();
 
@@ -517,7 +574,7 @@ void RhiBackend::execute(Graph& g) noexcept {
     // D3D12's allocator — and (b) could dispatch with partially-bound
     // descriptors. So unless explicitly enabled, fall through to recording-only
     // telemetry (NullBackend-equivalent cost) below.
-    if (gpu_execute_) {
+    if (gpu_execute_ && sw_ != nullptr) {
         // GAP 2: (re)build the ResourceHandle.id -> rhi::Buffer map when a pass
         // carries a kernel. (Persistent-id caching across frames is the perf
         // follow-up before this is enabled for real workloads.)
@@ -579,7 +636,7 @@ void RhiBackend::execute(Graph& g) noexcept {
     for (u32 pid : order) {
         const PassDesc& pd = g.pass(pid);
         PassEvent ev;
-        ev.name = pd.name;
+        ev.name = pd.name.c_str();   // interned — no per-pass heap string per frame
         ev.kind = pd.kind;
         ev.dispatch_x = pd.dispatch_x;
         ev.dispatch_y = pd.dispatch_y;
@@ -615,7 +672,7 @@ void RhiBackend::execute(Graph& g) noexcept {
         // Dispatching a compute pipeline with unbound root SRV/UAV descriptors
         // is a device-removed hard-crash on D3D12 (and undefined on Vulkan), so
         // a pass whose buffers aren't all present falls back to recording-only.
-        bool all_bound = gpu_execute_;
+        bool all_bound = gpu_execute_ && sw_ != nullptr;
         if (all_bound) {
             for (const auto& a : pd.accesses) {
                 if (a.handle.id >= buffers_.size() || !buffers_[a.handle.id]) {
@@ -674,6 +731,8 @@ void RhiBackend::execute(Graph& g) noexcept {
         }
         events_.push_back(cardinal::move(ev));
     }
+
+    sw_ = sw_saved;
 }
 
 // =============================================================================

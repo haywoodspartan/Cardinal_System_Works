@@ -91,6 +91,9 @@ bool aegis_config_equal(const gpu::AegisConfig& a, const gpu::AegisConfig& b) no
 graph::Graph& AegisPipelineRunner::begin_build() {
     graph_ = graph::Graph::create();
     graph_fresh_ = true;
+    built_ = false;   // the retained graph is now empty/uncompiled — anyone
+                      // consulting is_built() must see "rebuild required"
+                      // even if the caller bails before build()
     return *graph_;
 }
 

@@ -64,6 +64,13 @@ public:
     // execute; stages() reflects per-pass stats.
     void execute();
 
+    // True when a compiled graph is retained and executable. False after
+    // create(), reconfigure(), or begin_build() (until the next successful
+    // build). Hosts keep the graph PERSISTENT by rebuilding only when this
+    // is false — the AEGIS topology is static for a given config, so a
+    // per-frame rebuild is ~100 heap alloc/free pairs of pure waste.
+    bool is_built() const noexcept { return built_; }
+
     const gpu::AegisOutputs&    outputs() const noexcept { return outputs_; }
     const gpu::AegisStageRefs&  stages()  const noexcept { return stages_; }
     gpu::AegisConfig            config()  const noexcept { return cfg_; }

@@ -28,6 +28,7 @@
 #include <cardinal/render/gpu_aegis.hpp>
 #include <cardinal/scene/renderer.hpp>
 #include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/std/cmath.hpp>   // cardinal::sqrt (camera_dir normalize)
 #include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::render {
@@ -246,24 +247,65 @@ public:
         // ForwardRenderer draws the screen (the stable path).
         if (rhi_backend_) {
             rhi_backend_->set_gpu_execute(kb(kidx_.gpu_execute));
+            // Async-compute lane: when the resolved config carries
+            // async_compute (device-supported AND requested), the whole AEGIS
+            // compute graph is recorded + submitted on the dedicated async
+            // queue — concurrent with this frame's graphics work. The queue
+            // member is declared ABOVE rhi_backend_ so it destructs AFTER the
+            // backend's drain (set_async_queue holds a non-owning pointer).
+            const bool want_async = runner_->config().features.async_compute;
+            if (want_async && async_queue_ == nullptr && dev_ != nullptr)
+                async_queue_ = dev_->create_async_compute_queue();
+            rhi_backend_->set_async_queue(
+                want_async ? async_queue_.get() : nullptr);
         }
 
-        // Run the AEGIS graph for telemetry. Inputs are declared on the graph
-        // build() actually consumes (begin_build) — declaring on the previous
-        // frame's graph left every handle dangling once build() swapped it.
-        // The actual scene-derived buffer wiring (real triangle stream,
-        // material palette, etc.) lands when RhiBackend can consume them.
-        graph::Graph& gr = runner_->begin_build();
-        gpu::AegisSceneInputs in;
-        in.triangle_count = 0;
-        in.tris         = gr.declare_buffer(graph::BufferDesc{"tris",  0, 0, true});
-        in.material_ids = gr.declare_buffer(graph::BufferDesc{"mids",  0, 0, true});
-        in.materials    = gr.declare_buffer(graph::BufferDesc{"mats",  0, 0, true});
-        in.lights       = gr.declare_buffer(graph::BufferDesc{"lts",   0, 0, true});
-        in.ambient      = gr.declare_buffer(graph::BufferDesc{"amb",  12, 0, true});
-        in.view_proj    = gr.declare_buffer(graph::BufferDesc{"vp",   64, 0, true});
-        in.camera_dir   = gr.declare_buffer(graph::BufferDesc{"dir",  12, 0, true});
-        if (runner_->build(in)) runner_->execute();
+        // PERSISTENT GRAPH: the AEGIS topology is static for a given config,
+        // so the graph is built ONCE and retained — reconfigure() (resize /
+        // precision / feature change) invalidates it via is_built(). Only the
+        // imported camera bytes below change per frame; every backend re-reads
+        // imports at execute. NOTE: the AegisSceneInputs SHAPE (triangle_count,
+        // which optional handles are valid) is baked at build — if this bridge
+        // ever feeds real scene streams, it must force a rebuild when the
+        // shape changes (set a dirty flag; see aegis_runner.hpp is_built()).
+        if (!runner_->is_built()) {
+            graph::Graph& gr = runner_->begin_build();
+            gpu::AegisSceneInputs in;
+            in.triangle_count = 0;
+            in.tris         = gr.declare_buffer(graph::BufferDesc{"tris",  0, 0, true});
+            in.material_ids = gr.declare_buffer(graph::BufferDesc{"mids",  0, 0, true});
+            in.materials    = gr.declare_buffer(graph::BufferDesc{"mats",  0, 0, true});
+            in.lights       = gr.declare_buffer(graph::BufferDesc{"lts",   0, 0, true});
+            in.ambient      = gr.import_buffer("amb", amb_data_, 12, 4);
+            in.view_proj    = gr.import_buffer("vp",  vp_data_,  64, 4);
+            in.camera_dir   = gr.import_buffer("dir", dir_data_, 12, 4);
+            runner_->build(in);
+        }
+
+        // Fresh camera bytes every frame. AEGIS passes read the matrix
+        // ROW-major (4 consecutive floats = one row, w-row at [12..15]);
+        // cardinal Mat4 storage is COLUMN-major (m[col][row]) — transpose on
+        // pack. A raw memcpy would compile and silently mis-cull (identity
+        // matrices in tests are transpose-symmetric and hide it).
+        {
+            const float safe_aspect = (aspect > 0.001f) ? aspect : 1.0f;
+            const auto vp = scn.camera().proj(safe_aspect) * scn.camera().view();
+            for (int r = 0; r < 4; ++r)
+                for (int c = 0; c < 4; ++c)
+                    vp_data_[r * 4 + c] = vp.m[c][r];
+            const scene::Vec3 eye = scn.camera().position;
+            const scene::Vec3 tgt = scn.camera().target;
+            float fx = tgt.x - eye.x, fy = tgt.y - eye.y, fz = tgt.z - eye.z;
+            const float len2 = fx * fx + fy * fy + fz * fz;
+            if (len2 > 1.0e-12f) {
+                const float inv = 1.0f / cardinal::sqrt(len2);
+                dir_data_[0] = fx * inv; dir_data_[1] = fy * inv; dir_data_[2] = fz * inv;
+            } else {
+                dir_data_[0] = 0.0f; dir_data_[1] = 0.0f; dir_data_[2] = 1.0f;
+            }
+        }
+
+        runner_->execute();
 
         // Delegate the actual draw to the ForwardRenderer, honouring the
         // per-viewport view mode the Studio pushed into our "view_mode" knob
@@ -641,7 +683,15 @@ private:
     KnobIdx                                            kidx_;   // hot-knob indices
     AegisBackendMode                                   current_mode_ {AegisBackendMode::Null};
     AegisDeviceSupport                                 dev_caps_ {};   // from on_caps
+    // Async lane BEFORE the backend: members destruct in reverse order, and
+    // the RhiBackend dtor drains through this queue (non-owning pointer).
+    cardinal::unique_ptr<cardinal::rhi::ComputeQueue>  async_queue_;
     cardinal::shared_ptr<graph::RhiBackend>            rhi_backend_;   // when mode==Rhi
+    // Persistent host storage for the graph's imported camera inputs — the
+    // graph keeps raw pointers into these across frames (persistent graph).
+    float amb_data_[3] {0.1f, 0.1f, 0.12f};
+    float vp_data_[16] {};
+    float dir_data_[3] {0.0f, 0.0f, 1.0f};
 };
 
 }  // namespace

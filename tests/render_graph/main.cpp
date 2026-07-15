@@ -4524,6 +4524,63 @@ void test_rhi_surface_covers_aegis_features() {
     CHECK(bhd.cbv_count == 65536u);
 }
 
+// ---- persistent graph: build once, execute many, imports stay live --------
+void test_aegis_runner_persistent_graph() {
+    namespace rd  = cardinal::render;
+    namespace gpu = cardinal::render::gpu;
+
+    gpu::AegisConfig cfg{};
+    cfg.width = 8; cfg.height = 8;
+    auto runner = rd::AegisPipelineRunner::create(cfg, rd::AegisBackendMode::Cpu);
+    CHECK(!runner->is_built());                       // nothing built yet
+
+    // begin_build hands out the graph build() will consume; declaring inputs
+    // on it keeps every handle valid for the LIFETIME of the retained graph.
+    float ambient[3] = { 0.25f, 0.5f, 0.75f };
+    rg::Graph& gr = runner->begin_build();
+    CHECK(!runner->is_built());                       // fresh graph = not built
+    gpu::AegisSceneInputs in;
+    in.triangle_count = 0;
+    in.tris         = gr.declare_buffer(rg::BufferDesc{"tris", 0, 0, true});
+    // NON-zero mids/mats: VBufResolve's CPU record bails when any of its
+    // mapped buffers is empty, and the sky-ambient probe below needs it to run.
+    in.material_ids = gr.declare_buffer(rg::BufferDesc{"mids", 4, 4, true});
+    in.materials    = gr.declare_buffer(rg::BufferDesc{"mats", 32, 4, true});
+    in.lights       = gr.declare_buffer(rg::BufferDesc{"lts",  0, 0, true});
+    in.ambient      = gr.import_buffer("amb", ambient, 12, 4);
+    in.view_proj    = gr.declare_buffer(rg::BufferDesc{"vp",  64, 0, true});
+    in.camera_dir   = gr.declare_buffer(rg::BufferDesc{"dir", 12, 0, true});
+    CHECK(runner->build(in));
+    CHECK(runner->is_built());
+
+    // Execute twice WITHOUT rebuilding — same graph, same handles. Sky pixels
+    // of resolve.rad take the ambient verbatim, so mutating the host bytes
+    // between executes proves imports are re-read at every execute.
+    auto sky_r = [&]() -> float {
+        const auto rad = runner->read_buffer(runner->stages().resolve->out_radiance);
+        if (rad.size() < 4) return -1.0f;
+        return *reinterpret_cast<const float*>(rad.data());
+    };
+    runner->execute();
+    {
+        const float r0 = sky_r();
+        CHECK(r0 > 0.249f && r0 < 0.251f);
+    }
+    ambient[0] = 0.9f;                                // host mutates the import
+    runner->execute();                                // NO rebuild
+    CHECK(runner->is_built());
+    {
+        const float r0 = sky_r();
+        CHECK(r0 > 0.899f && r0 < 0.901f);            // fresh bytes flowed
+    }
+
+    // reconfigure invalidates the retained graph (host must rebuild).
+    gpu::AegisConfig cfg2 = runner->config();
+    cfg2.width = 16;
+    runner->reconfigure(cfg2);
+    CHECK(!runner->is_built());
+}
+
 void test_rhi_backend_factory_requires_device() {
     // RhiBackend::create() needs a real rhi::Device + Swapchain. Pin
     // the API surface — construction WITHOUT them is impossible because
@@ -4745,6 +4802,7 @@ int main() {
     test_color_dof_hlsl_nonempty();
     test_engine_studio_aegis_path_contract();
     test_rhi_surface_covers_aegis_features();
+    test_aegis_runner_persistent_graph();
     test_rhi_backend_factory_requires_device();
     test_frame_telemetry_rename_back_compat();
     test_wave_decomposition_diamond();
