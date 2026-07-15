@@ -10,6 +10,7 @@
 
 #include <cardinal/cui/context.hpp>
 #include <cardinal/cui/widgets.hpp>
+#include <cardinal/cui/bind.hpp>
 #include <cardinal/core/diag/log.hpp>
 
 namespace {
@@ -586,6 +587,140 @@ void test_tabs_pages() {
     CHECK(lbl->visible() && !btn->visible() && changes == 1);
 }
 
+// ---- Stack flex-grow: leftover main-axis space split by weight -------------
+void test_stack_flex() {
+    ui::Ui u;
+    auto stack = cardinal::make_unique<ui::Stack>(ui::Axis::Vertical, 0.0f);
+    auto* top  = stack->add(cardinal::make_unique<ui::Label>("top"));
+    auto* fill = stack->add_flex(cardinal::make_unique<ui::ScrollPanel>(), 1.0f);
+    auto* bot  = stack->add(cardinal::make_unique<ui::Label>("bottom"));
+    u.set_root(cardinal::move(stack));
+    u.layout({ 200.0f, 300.0f });
+
+    const float lh = ui::line_height(14.0f);
+    CHECK(ap(top->rect().height(), lh));
+    CHECK(ap(bot->rect().height(), lh));
+    CHECK(ap(fill->rect().height(), 300.0f - 2.0f * lh));   // absorbs leftover
+    CHECK(ap(fill->rect().top(), lh));
+    CHECK(ap(bot->rect().top(), 300.0f - lh));               // pinned to bottom
+
+    // Two flex children split leftover by weight (1 : 3).
+    ui::Ui u2;
+    auto s2 = cardinal::make_unique<ui::Stack>(ui::Axis::Vertical, 0.0f);
+    auto* lbl = s2->add(cardinal::make_unique<ui::Label>("x"));
+    auto* a   = s2->add_flex(cardinal::make_unique<ui::ScrollPanel>(), 1.0f);
+    auto* b   = s2->add_flex(cardinal::make_unique<ui::ScrollPanel>(), 3.0f);
+    u2.set_root(cardinal::move(s2));
+    u2.layout({ 100.0f, 100.0f + lh });
+    (void)lbl;
+    CHECK(ap(a->rect().height(), 25.0f));
+    CHECK(ap(b->rect().height(), 75.0f));
+}
+
+// ---- ScrollPanel::scroll_to_end + TextField::set_caret ---------------------
+void test_scroll_end_and_caret() {
+    ui::Ui u;
+    auto sp = cardinal::make_unique<ui::ScrollPanel>(0.0f);
+    for (int i = 0; i < 20; ++i)
+        sp->add(cardinal::make_unique<ui::Label>("row"));
+    auto* p = static_cast<ui::ScrollPanel*>(u.set_root(cardinal::move(sp)));
+    u.layout({ 100.0f, 100.0f });
+    const float lh = ui::line_height(14.0f);
+    p->scroll_to_end();
+    u.layout({ 100.0f, 100.0f });                    // arrange clamps
+    CHECK(ap(p->scroll(), 20.0f * lh - 100.0f));
+
+    ui::TextField tf("hello");
+    tf.set_caret(2);   CHECK(tf.caret() == 2u);
+    tf.set_caret(999); CHECK(tf.caret() == 5u);      // clamped to size
+}
+
+// ---- NumberField<T>: parse / clamp / canonicalise / refresh ----------------
+void test_number_field() {
+    ui::Ui u;
+    int bound = 7;
+    auto stack = cardinal::make_unique<ui::Stack>(ui::Axis::Vertical, 4.0f);
+    auto* nf = static_cast<ui::NumberField<int>*>(stack->add(
+        cardinal::make_unique<ui::NumberField<int>>(&bound, 0, 100)));
+    u.set_root(cardinal::move(stack));
+    u.layout({ 300.0f, 100.0f });
+    CHECK(nf->text() == cardinal::string("7"));      // ctor refresh
+
+    const ui::Vec2 c = nf->rect().center();
+    ui::InputState in{};
+    in.mouse = c;              u.update_input(in);
+    in.mouse_down = true;      u.update_input(in);   // focus
+    in.mouse_down = false;     u.update_input(in);
+    CHECK(u.is_focused(nf));
+
+    auto key = [&](auto&& fill) {
+        ui::InputState k{}; k.mouse = c; fill(k); u.update_input(k);
+    };
+    key([](ui::InputState& k) { k.text = "2"; });    // "7" -> "72"
+    CHECK(bound == 7);                               // not live: no adopt yet
+    key([](ui::InputState& k) { k.key_enter = true; });
+    CHECK(bound == 72);
+    CHECK(nf->text() == cardinal::string("72"));
+
+    // Clamp on commit: append digits to exceed max -> 100.
+    key([](ui::InputState& k) { k.text = "99"; });   // "7299"
+    key([](ui::InputState& k) { k.key_enter = true; });
+    CHECK(bound == 100);
+    CHECK(nf->text() == cardinal::string("100"));    // canonicalised
+
+    // External mutation + refresh.
+    bound = 42;
+    nf->refresh();
+    CHECK(nf->text() == cardinal::string("42"));
+
+    // Float field, live mode: value tracks every keystroke.
+    ui::Ui uf;
+    float fbound = 0.5f;
+    auto* ff = static_cast<ui::NumberField<float>*>(
+        uf.set_root(cardinal::make_unique<ui::NumberField<float>>(
+            &fbound, 0.0f, 10.0f, /*live=*/true)));
+    uf.layout({ 300.0f, 60.0f });
+    const ui::Vec2 fc = ff->rect().center();
+    ui::InputState fin{};
+    fin.mouse = fc;            uf.update_input(fin);
+    fin.mouse_down = true;     uf.update_input(fin);
+    fin.mouse_down = false;    uf.update_input(fin);
+    ui::InputState fk{}; fk.mouse = fc; fk.text = "2";   // "0.5" -> "0.52"
+    uf.update_input(fk);
+    CHECK(ap(fbound, 0.52f, 1e-4f));
+}
+
+// ---- EnumCombo<E>: dropdown selection writes the bound enum ----------------
+void test_enum_combo() {
+    enum class Mode : int { A = 0, B, C };
+    ui::Ui u;
+    Mode bound = Mode::B;
+    auto* ec = static_cast<ui::EnumCombo<Mode>*>(
+        u.set_root(cardinal::make_unique<ui::EnumCombo<Mode>>(
+            &bound, cardinal::vector<cardinal::string>{ "A", "B", "C" })));
+    u.layout({ 300.0f, 200.0f });
+    CHECK(ec->selected() == 1);                      // ctor refresh from value
+
+    auto click_at = [&](ui::Vec2 p) {
+        ui::InputState in{};
+        in.mouse = p;              u.update_input(in);
+        in.mouse_down = true;      u.update_input(in);
+        in.mouse_down = false;     u.update_input(in);
+    };
+    const float header_h = ui::line_height(14.0f) + 8.0f;
+    const ui::Vec2 hp{ ec->rect().left() + 10.0f, ec->rect().top() + header_h * 0.5f };
+    click_at(hp);                                    // open
+    CHECK(ec->open());
+    u.layout({ 300.0f, 200.0f });
+    click_at({ ec->rect().left() + 10.0f,
+               ec->rect().top() + header_h + 2.5f * 22.0f });   // row 2 = "C"
+    CHECK(!ec->open());
+    CHECK(bound == Mode::C);
+    bound = Mode::A;
+    ec->refresh();
+    CHECK(ec->selected() == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -606,6 +741,10 @@ int main() {
     test_combo_dropdown();
     test_menubar();
     test_tabs_pages();
+    test_stack_flex();
+    test_scroll_end_and_caret();
+    test_number_field();
+    test_enum_combo();
 
     if (g_fail == 0) {
         cardinal::log::infof("cuitest", "OK  %d checks passed", g_checks);

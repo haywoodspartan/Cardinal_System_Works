@@ -20,18 +20,29 @@
 
 namespace cardinal::cui {
 
-// Linear container.
+// Linear container. Children are measured at their natural size; FLEX
+// children (add_flex) instead share the leftover main-axis space by weight —
+// the missing primitive for panel layouts like "scrollback fills everything
+// above the input row". Weights ride a parallel vector (same pattern as
+// Canvas slots_); plain add() children default to weight 0 (natural size).
 class Stack : public Widget {
 public:
     explicit Stack(Axis axis, float spacing = 4.0f, Align cross = Align::Stretch)
         : axis_(axis), spacing_(spacing), cross_(cross) {}
+    // Add `child` with a flex-grow weight (> 0). It receives
+    // leftover * weight / total_weight of the main axis at arrange time.
+    Widget* add_flex(cardinal::unique_ptr<Widget> child, float weight);
     Vec2 measure(const Constraints& c) override;
     void arrange(const Rect& r) override;
     void paint(PaintContext& ctx) override { paint_children(ctx); }
 private:
+    float weight_of(usize i) const noexcept {
+        return (i < flex_.size()) ? flex_[i] : 0.0f;
+    }
     Axis  axis_;
     float spacing_;
     Align cross_;
+    cardinal::vector<float> flex_;   // parallel to children_ (missing = 0)
 };
 
 // Filled, padded, bordered container (single logical child — usually a Stack).
@@ -135,6 +146,9 @@ public:
     bool scrollable() const noexcept override { return true; }
     void on_scroll(float delta) override;
     float scroll() const noexcept { return scroll_; }
+    // Pin the view to the bottom (consoles/logs after an append). The huge
+    // value is clamped to the real max in the next arrange().
+    void scroll_to_end() noexcept { scroll_ = 1.0e9f; }
 private:
     float spacing_;
     float scroll_{0.0f};      // how far down the content is scrolled (>= 0)
@@ -163,6 +177,7 @@ public:
         if (caret_ > text_.size()) caret_ = text_.size();
     }
     usize caret() const noexcept { return caret_; }
+    void  set_caret(usize c) noexcept { caret_ = c > text_.size() ? text_.size() : c; }
     void set_placeholder(cardinal::string p) { placeholder_ = cardinal::move(p); }
     void set_on_change(cardinal::function<void(const cardinal::string&)> f) {
         on_change_ = cardinal::move(f);

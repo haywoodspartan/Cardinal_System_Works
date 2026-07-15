@@ -14,14 +14,27 @@ inline float clamp01(float t) noexcept { return t < 0.0f ? 0.0f : (t > 1.0f ? 1.
 // -----------------------------------------------------------------------------
 // Stack
 // -----------------------------------------------------------------------------
+Widget* Stack::add_flex(cardinal::unique_ptr<Widget> child, float weight) {
+    // Pad weights for any plain add()ed children so indices stay aligned
+    // (same parallel-vector pattern as Canvas slots_).
+    while (flex_.size() < children_.size()) flex_.push_back(0.0f);
+    Widget* raw = add(cardinal::move(child));
+    flex_.push_back(weight > 0.0f ? weight : 0.0f);
+    return raw;
+}
+
 Vec2 Stack::measure(const Constraints& c) {
+    // Flex children contribute their CROSS size but no main-axis size — they
+    // absorb leftover space at arrange time instead of growing the stack.
     float main = 0.0f, cross = 0.0f;
     int n = 0;
-    for (auto& ch : children_) {
+    for (usize i = 0; i < children_.size(); ++i) {
+        auto& ch = children_[i];
         if (!ch || !ch->visible()) continue;
         const Vec2 s = ch->measure(c);
-        if (axis_ == Axis::Vertical) { main += s.y; cross = maxf(cross, s.x); }
-        else                         { main += s.x; cross = maxf(cross, s.y); }
+        const bool flex = weight_of(i) > 0.0f;
+        if (axis_ == Axis::Vertical) { if (!flex) main += s.y; cross = maxf(cross, s.x); }
+        else                         { if (!flex) main += s.x; cross = maxf(cross, s.y); }
         ++n;
     }
     if (n > 1) main += spacing_ * static_cast<float>(n - 1);
@@ -35,25 +48,49 @@ Vec2 Stack::measure(const Constraints& c) {
 
 void Stack::arrange(const Rect& r) {
     rect_ = r;
-    float cursor = (axis_ == Axis::Vertical) ? r.top() : r.left();
-    for (auto& ch : children_) {
+
+    // First pass: fixed (natural) sizes + total flex weight.
+    float fixed = 0.0f, total_w = 0.0f;
+    int   n = 0;
+    for (usize i = 0; i < children_.size(); ++i) {
+        auto& ch = children_[i];
         if (!ch || !ch->visible()) continue;
+        ++n;
+        const float w = weight_of(i);
+        if (w > 0.0f) { total_w += w; continue; }
         const Vec2 s = ch->measure(Constraints::loose(r.width(), r.height()));
+        fixed += (axis_ == Axis::Vertical) ? s.y : s.x;
+    }
+    const float spacing_total = (n > 1) ? spacing_ * static_cast<float>(n - 1) : 0.0f;
+    const float extent   = (axis_ == Axis::Vertical) ? r.height() : r.width();
+    float       leftover = extent - fixed - spacing_total;
+    if (leftover < 0.0f) leftover = 0.0f;
+
+    float cursor = (axis_ == Axis::Vertical) ? r.top() : r.left();
+    for (usize i = 0; i < children_.size(); ++i) {
+        auto& ch = children_[i];
+        if (!ch || !ch->visible()) continue;
+        const float fw   = weight_of(i);
+        const Vec2  s    = ch->measure(Constraints::loose(r.width(), r.height()));
+        const float grow = (fw > 0.0f && total_w > 0.0f)
+                         ? leftover * (fw / total_w) : 0.0f;
         Rect cr;
         if (axis_ == Axis::Vertical) {
+            const float mh = (fw > 0.0f) ? grow : s.y;
             float w = (cross_ == Align::Stretch) ? r.width() : s.x;
             float x = r.left();
             if      (cross_ == Align::Center) x = r.left() + (r.width() - w) * 0.5f;
             else if (cross_ == Align::End)    x = r.right() - w;
-            cr = { { x, cursor }, { w, s.y } };
-            cursor += s.y + spacing_;
+            cr = { { x, cursor }, { w, mh } };
+            cursor += mh + spacing_;
         } else {
+            const float mw = (fw > 0.0f) ? grow : s.x;
             float h = (cross_ == Align::Stretch) ? r.height() : s.y;
             float y = r.top();
             if      (cross_ == Align::Center) y = r.top() + (r.height() - h) * 0.5f;
             else if (cross_ == Align::End)    y = r.bottom() - h;
-            cr = { { cursor, y }, { s.x, h } };
-            cursor += s.x + spacing_;
+            cr = { { cursor, y }, { mw, h } };
+            cursor += mw + spacing_;
         }
         ch->arrange(cr);
     }

@@ -763,6 +763,85 @@ int main(int argc, char** argv) {
         slate_ui.set_root(cardinal::move(panel));
     }
 
+    // ----- Console (cui) — the first REAL Studio panel on Cardinal Slate ----
+    // Same contract as the ImGui console (scrollback + prefix autocomplete +
+    // two-tier CVar->Lua REPL), composed purely from core cui widgets: a
+    // flex ScrollPanel (log ListView) absorbing all height above an in-flow
+    // suggestions ListView and the TextField input row.
+    bool show_console_cui = false;
+    cardinal::cui::Ui           ccon_ui;
+    cardinal::cui::ScrollPanel* ccon_scroll = nullptr;
+    cardinal::cui::ListView*    ccon_log    = nullptr;
+    cardinal::cui::ListView*    ccon_sug    = nullptr;
+    cardinal::cui::TextField*   ccon_in     = nullptr;
+    std::vector<std::string>    ccon_lines;
+    auto ccon_refresh_log = [&]() {
+        cardinal::vector<cardinal::string> items;
+        for (const auto& l : ccon_lines)
+            items.push_back(cardinal::string(l.c_str(), l.size()));
+        ccon_log->set_items(cardinal::move(items));
+        ccon_scroll->scroll_to_end();
+    };
+    {
+        using namespace cardinal::cui;
+        auto panel  = cardinal::make_unique<Panel>(ccon_ui.theme().panel_bg, Edges::all(6.0f));
+        auto stack  = cardinal::make_unique<Stack>(Axis::Vertical, 4.0f);
+        auto scroll = cardinal::make_unique<ScrollPanel>(0.0f);
+        ccon_log    = static_cast<ListView*>(scroll->add(cardinal::make_unique<ListView>()));
+        ccon_scroll = static_cast<ScrollPanel*>(
+            stack->add_flex(cardinal::move(scroll), 1.0f));
+        ccon_sug    = static_cast<ListView*>(stack->add(cardinal::make_unique<ListView>()));
+        ccon_sug->set_visible(false);
+        auto field  = cardinal::make_unique<TextField>(cardinal::string{}, 200.0f);
+        field->set_placeholder("command (Tab completes, Enter runs)...");
+        ccon_in     = static_cast<TextField*>(stack->add(cardinal::move(field)));
+        panel->add(cardinal::move(stack));
+        ccon_ui.set_root(cardinal::move(panel));
+
+        ccon_lines.push_back("Cardinal Slate console - cvars/commands + Lua REPL");
+
+        ccon_in->set_on_change([&](const cardinal::string& t) {
+            if (t.empty()) { ccon_sug->clear_items(); ccon_sug->set_visible(false); return; }
+            auto s = cv::Registry::instance().complete(t.c_str(), 8);
+            const bool have = !s.empty();
+            ccon_sug->set_items(cardinal::move(s));
+            ccon_sug->set_visible(have);
+        });
+        ccon_sug->set_on_select([&](int i) {
+            if (i < 0 || i >= static_cast<int>(ccon_sug->items().size())) return;
+            ccon_in->set_text(ccon_sug->items()[static_cast<cardinal::usize>(i)]);
+            ccon_in->set_caret(ccon_in->text().size());
+        });
+        ccon_in->set_on_submit([&](const cardinal::string& line) {
+            if (line.empty()) return;
+            ccon_lines.push_back("> " + std::string(line.c_str()));
+            std::string acc;
+            cv::Output sink([&](const std::string& s) {
+                if (!acc.empty()) acc += '\n';
+                acc += s;
+            });
+            std::string out;
+            if (cv::Registry::instance().execute(line.c_str(), sink)) out = acc;
+            else out = lua->repl_eval(line.c_str());
+            std::string cur;
+            for (char ch : out) {
+                if (ch == '\n') {
+                    if (!cur.empty()) ccon_lines.push_back(cur);
+                    cur.clear();
+                } else cur += ch;
+            }
+            if (!cur.empty()) ccon_lines.push_back(cur);
+            while (ccon_lines.size() > 400)
+                ccon_lines.erase(ccon_lines.begin());
+            ccon_in->set_text(cardinal::string{});
+            ccon_in->set_caret(0);
+            ccon_sug->clear_items();
+            ccon_sug->set_visible(false);
+            ccon_refresh_log();
+        });
+        ccon_refresh_log();
+    }
+
     // Fly camera replaces the demo orbit. It only takes input when the
     // Viewport panel is hovered (gated below).
     scn::FlyCamera fly_cam;
@@ -2368,6 +2447,7 @@ int main(int argc, char** argv) {
                 ImGui::MenuItem("Stats",               nullptr, &show_stats);
                 ImGui::MenuItem("Log",                 nullptr, &show_log);
                 ImGui::MenuItem("Console",             nullptr, &show_console);
+                ImGui::MenuItem("Console (cui)",       nullptr, &show_console_cui);
                 ImGui::MenuItem("Options / Settings",  nullptr, &show_options);
                 ImGui::MenuItem("Cardinal Slate (preview)", nullptr, &show_slate_preview);
                 ImGui::MenuItem("Blueprint",                nullptr, &show_blueprint);
@@ -3837,6 +3917,52 @@ int main(int argc, char** argv) {
                 cardinal::ui::cui_render(dl, ImGui::GetWindowDrawList(),
                                          { origin.x, origin.y });
                 ImGui::Dummy(avail);   // reserve the painted region for sizing
+            }
+            ImGui::End();
+        }
+
+        // Console (cui) — the ImGui window is just a host surface; everything
+        // inside is Cardinal Slate (layout, input, autocomplete, painting).
+        if (!any_maximized && show_console_cui) {
+            if (ImGui::Begin("Console (cui)", &show_console_cui)) {
+                const ImVec2 origin = ImGui::GetCursorScreenPos();
+                const ImVec2 avail  = ImGui::GetContentRegionAvail();
+                const cardinal::cui::Vec2 size{ avail.x, avail.y > 1.0f ? avail.y : 1.0f };
+                ccon_ui.layout(size);
+
+                const ImVec2 m = ImGui::GetMousePos();
+                cardinal::cui::InputState in;
+                in.mouse      = { m.x - origin.x, m.y - origin.y };
+                in.mouse_down = ImGui::IsWindowHovered() &&
+                                ImGui::IsMouseDown(ImGuiMouseButton_Left);
+                if (ImGui::IsWindowFocused() && ccon_ui.focused() != nullptr) {
+                    ImGuiIO& kio = ImGui::GetIO();
+                    for (ImWchar wc : kio.InputQueueCharacters)
+                        if (wc >= 32 && wc < 127)
+                            in.text += static_cast<char>(wc);
+                    in.key_backspace = ImGui::IsKeyPressed(ImGuiKey_Backspace);
+                    in.key_delete    = ImGui::IsKeyPressed(ImGuiKey_Delete);
+                    in.key_left      = ImGui::IsKeyPressed(ImGuiKey_LeftArrow);
+                    in.key_right     = ImGui::IsKeyPressed(ImGuiKey_RightArrow);
+                    in.key_home      = ImGui::IsKeyPressed(ImGuiKey_Home);
+                    in.key_end       = ImGui::IsKeyPressed(ImGuiKey_End);
+                    in.key_enter     = ImGui::IsKeyPressed(ImGuiKey_Enter);
+                    in.key_escape    = ImGui::IsKeyPressed(ImGuiKey_Escape);
+                    // Tab accepts the first suggestion (host-side; cui's
+                    // InputState carries no tab edge on purpose).
+                    if (ImGui::IsKeyPressed(ImGuiKey_Tab) &&
+                        ccon_sug->visible() && !ccon_sug->items().empty()) {
+                        ccon_in->set_text(ccon_sug->items()[0]);
+                        ccon_in->set_caret(ccon_in->text().size());
+                    }
+                }
+                ccon_ui.update_input(in);
+
+                cardinal::cui::DrawList dl;
+                ccon_ui.paint(dl);
+                cardinal::ui::cui_render(dl, ImGui::GetWindowDrawList(),
+                                         { origin.x, origin.y });
+                ImGui::Dummy(avail);
             }
             ImGui::End();
         }
