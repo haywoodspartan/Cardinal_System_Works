@@ -362,6 +362,7 @@ void run_backend(rhi::Backend be, const char* be_name) {
         cfg.material_count = 2;
         cfg.light_count    = 3;
         cfg.exposure       = 1.0f;
+        cfg.adaptive_shading_rate = with_opt;   // A: quad-rate resolve kernel, B: full-rate
         auto pipeline = gpu::AegisPipeline::create(cfg);
         gpu::AegisOutputs   out;
         gpu::AegisStageRefs st;

@@ -17,6 +17,7 @@
 // =============================================================================
 
 #include <cardinal/render/gpu_visbuf.hpp>
+#include <cardinal/render/gpu_aegis.hpp>
 #include <cardinal/render/graph.hpp>
 #include <cardinal/rhi/rhi.hpp>
 #include <cardinal/core/diag/log.hpp>
@@ -204,6 +205,108 @@ double time_frames(rhi::Device& dev, rhi::ComputeQueue& q, Built& b, u32 frames)
     return ms / static_cast<double>(frames);
 }
 
+// ---- full AEGIS pipeline: adaptive 2x2 shading rate off vs on ----------------
+// A facet-heavy scene (a few hundred LARGE triangles, several point lights) is
+// where the resolve dominates and quads are mostly uniform; the small-triangle
+// raster scene above is its worst case (edge quads everywhere). Both are
+// timed through the production async lane.
+struct FacetScene {
+    u32 W, H, T;
+    std::vector<float> tris, mats, lights, amb, vp, ivp, dir, cpos;
+    std::vector<u32>   mids;
+    FacetScene(u32 w, u32 h, u32 t) : W(w), H(h), T(t) {
+        u32 s = 0x1234567u;
+        auto rnd = [&]() { s = s * 1664525u + 1013904223u; return static_cast<float>(s >> 8) / 16777216.0f; };
+        tris.resize(usize(T) * 9); mids.resize(T);
+        for (u32 i = 0; i < T; ++i) {
+            float* v = tris.data() + usize(i) * 9;
+            const float sz = 0.15f + 0.35f * rnd();
+            const float cx = -1.0f + 2.0f * rnd(), cy = -1.0f + 2.0f * rnd(), z = 0.05f + 0.9f * rnd();
+            v[0] = cx - sz; v[1] = cy - sz; v[2] = z;  v[3] = cx + sz; v[4] = cy - sz; v[5] = z;  v[6] = cx; v[7] = cy + sz; v[8] = z;
+            mids[i] = i % 2;
+        }
+        mats   = { 0.8f,0.3f,0.2f,0.6f, 0.0f,0,0,0,  0.2f,0.4f,0.9f,0.2f, 0.8f,0,0,0 };
+        lights.assign(16 * 6, 0.0f);
+        for (u32 l = 0; l < 6; ++l) {
+            float* L = lights.data() + l * 16;
+            L[0] = (l == 0) ? 0.0f : 1.0f;                       // 1 directional + 5 point
+            L[2] = -0.8f + 0.4f * static_cast<float>(l); L[3] = 0.3f; L[4] = 1.2f;    // in front of the +z facets
+            L[5] = 0.3f; L[6] = -0.5f; L[7] = -1.0f;
+            L[8] = 1.0f; L[9] = 0.9f; L[10] = 0.8f; L[11] = 2.0f; L[12] = 4.0f;
+        }
+        amb  = { 0.05f, 0.05f, 0.06f };
+        vp   = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
+        ivp  = vp;
+        dir  = { 0, 0, 1 };
+        cpos = { 0.1f, 0.2f, 2.0f };
+    }
+};
+
+struct BuiltPipeline {
+    cardinal::shared_ptr<rg::Graph> graph;
+    gpu::AegisOutputs   out;
+    gpu::AegisStageRefs st;
+};
+
+BuiltPipeline build_pipeline(FacetScene& sc, bool adaptive) {
+    BuiltPipeline b;
+    b.graph = rg::Graph::create();
+    auto& g = *b.graph;
+    gpu::AegisSceneInputs in;
+    in.triangle_count = sc.T;
+    in.tris          = g.import_buffer("in.tris", sc.tris.data(),   sc.tris.size() * 4, 4);
+    in.material_ids  = g.import_buffer("in.mids", sc.mids.data(),   sc.mids.size() * 4, 4);
+    in.materials     = g.import_buffer("in.mats", sc.mats.data(),   sc.mats.size() * 4, 4);
+    in.lights        = g.import_buffer("in.lts",  sc.lights.data(), sc.lights.size() * 4, 4);
+    in.ambient       = g.import_buffer("in.amb",  sc.amb.data(),    12, 4);
+    in.view_proj     = g.import_buffer("in.vp",   sc.vp.data(),     64, 4);
+    in.camera_dir    = g.import_buffer("in.dir",  sc.dir.data(),    12, 4);
+    in.inv_view_proj = g.import_buffer("in.ivp",  sc.ivp.data(),    64, 4);
+    in.camera_pos    = g.import_buffer("in.cpos", sc.cpos.data(),   12, 4);
+    gpu::AegisConfig cfg;
+    cfg.width = sc.W; cfg.height = sc.H; cfg.material_count = 2; cfg.light_count = 6;
+    cfg.adaptive_shading_rate = adaptive;
+    auto pipeline = gpu::AegisPipeline::create(cfg);
+    pipeline->build(g, in, b.out, b.st);
+    g.mark_output(b.out.presentation);
+    CHECK(g.compile());
+    return b;
+}
+
+void bench_pipeline(rhi::Device& dev, rhi::ComputeQueue& q, const char* be_name) {
+    FacetScene sc(960, 540, 300);
+    BuiltPipeline full = build_pipeline(sc, false);
+    BuiltPipeline quad = build_pipeline(sc, true);
+    auto time_pipe = [&](BuiltPipeline& b, u32 frames) {
+        auto backend = rg::RhiBackend::create(dev);
+        backend->set_gpu_execute(true);
+        backend->set_async_queue(&q);
+        backend->execute(*b.graph);
+        backend->set_async_queue(nullptr);
+        backend->set_async_queue(&q);
+        const auto t0 = std::chrono::steady_clock::now();
+        for (u32 i = 0; i < frames; ++i) backend->execute(*b.graph);
+        backend->set_async_queue(nullptr);
+        const auto t1 = std::chrono::steady_clock::now();
+        u32 real = 0;
+        for (const auto& ev : backend->events()) if (ev.real_dispatch) ++real;
+        backend.reset();
+        return std::pair<double, u32>(std::chrono::duration<double, std::milli>(t1 - t0).count() / frames, real);
+    };
+    const auto f = time_pipe(full, 20);
+    const auto a = time_pipe(quad, 20);
+    CHECK(f.second >= 12u && a.second >= 12u);      // every authored kernel really dispatched
+    // CPU-side quad statistics for the same scene (the CpuBackend runs the
+    // reference record, which reports coarse/fine quad counts).
+    auto cpu = rg::CpuBackend::create();
+    cpu->execute(*quad.graph);
+    const u32 qc = quad.st.resolve->quads_coarse, qf = quad.st.resolve->quads_fine;
+    cardinal::log::infof("aegisbench",
+        "%s  %ux%u  %u facets, 6 lights, full AEGIS graph :  full-rate %.2f ms/frame   quad-rate %.2f ms/frame   speedup %.2fx   (%u coarse / %u fine quads = %.0f%% of pixels at 1/4 rate)",
+        be_name, sc.W, sc.H, sc.T, f.first, a.first, a.first > 0.0 ? f.first / a.first : 0.0,
+        qc, qf, 100.0 * static_cast<double>(qc) / static_cast<double>(qc + qf ? qc + qf : 1));
+}
+
 void run_backend(rhi::Backend be, const char* be_name) {
     rhi::DeviceDesc dd{}; dd.backend = be;
     auto dev = rhi::create_device(dd);
@@ -301,6 +404,8 @@ void run_backend(rhi::Backend be, const char* be_name) {
         "%s  %ux%u  %u tris :  brute %.2f ms/frame   binned %.2f ms/frame   speedup %.1fx",
         be_name, sc.W, sc.H, sc.T, ms_brute, ms_binned,
         ms_binned > 0.0 ? ms_brute / ms_binned : 0.0);
+
+    bench_pipeline(*dev, *queue, be_name);
 }
 
 }  // namespace

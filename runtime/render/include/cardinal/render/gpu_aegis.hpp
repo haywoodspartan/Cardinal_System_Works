@@ -247,9 +247,17 @@ public:
         cardinal::u32 height {0};
         cardinal::u32 material_count {0};
         cardinal::u32 light_count {0};
+        // Content-adaptive 2x2 shading rate (see add_to_graph). One thread per
+        // QUAD: a quad whose four pixels resolved to the SAME triangle is
+        // shaded once at its top-left pixel and replicated; any quad crossing
+        // a triangle edge / the sky / the viewport border is shaded per pixel.
+        // Geometry edges therefore stay full-rate; only flat facets coarsen.
+        bool          quad_rate {false};
         // Stats:
-        cardinal::u32 pixels_shaded {0};
+        cardinal::u32 pixels_shaded {0};     // incl. replicated pixels in quad mode
         cardinal::u32 pixels_sky    {0};
+        cardinal::u32 quads_coarse  {0};     // quad mode: quads shaded once
+        cardinal::u32 quads_fine    {0};     // quad mode: quads shaded per pixel
     };
     static cardinal::shared_ptr<State> add_to_graph(
         graph::Graph& g,
@@ -266,7 +274,8 @@ public:
         graph::ResourceHandle in_camera_pos,      // pass {} for the proxy shade
         cardinal::u32 width, cardinal::u32 height,
         cardinal::u32 material_count,
-        cardinal::u32 light_count);
+        cardinal::u32 light_count,
+        bool quad_rate = false);                  // 2x2 adaptive shading rate
     static const char* hlsl_source() noexcept;
 };
 
@@ -379,6 +388,15 @@ struct AegisConfig {
     // exists for A/B benchmarking and as an escape hatch.
     bool          binned_raster {true};
     cardinal::u32 bin_capacity  {256};     // tri ids per 16×16 tile before overflow fallback
+    // Content-adaptive 2×2 shading rate in the V-Buf resolve: flat facets are
+    // shaded once per quad, triangle edges / sky / borders per pixel. Cuts the
+    // Cook-Torrance work up to 4× on facet interiors without touching edges —
+    // shading-rate reduction rather than resolution reduction (no upscaler).
+    // OPT-IN: it is an approximation (one sample per uniform quad), and on
+    // tests/aegis_bench (960×540, 6 lights) the resolve is not the bottleneck
+    // so the measured whole-graph gain was within noise (1.0–1.1×). It pays
+    // when the resolve dominates (many lights per tile, high resolution).
+    bool          adaptive_shading_rate {false};
 };
 
 struct AegisSceneInputs {

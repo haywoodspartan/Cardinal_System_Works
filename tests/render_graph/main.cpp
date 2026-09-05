@@ -3298,6 +3298,91 @@ void test_visbuf_binned_random_scenes() {
     CHECK(total_entries  > 0u);
 }
 
+// Adaptive 2x2 shading rate: on a quad whose four pixels share a triangle the
+// quad-rate resolve equals the full-rate value at the quad's top-left pixel
+// (bit-exact) replicated to all four; on every other quad it equals full-rate
+// per pixel. Big facets coarsen, the small triangle's edge quads stay fine.
+void test_resolve_quad_rate_semantics() {
+    constexpr cardinal::u32 W = 40, H = 30;
+    cardinal::vector<float> tris = {
+        // big facet covering most of the screen (z 0.5)
+        -1.5f, -1.5f, 0.5f,  1.5f, -1.5f, 0.5f,  0.0f, 1.8f, 0.5f,
+        // small near triangle in the middle (z 0.2) — makes mixed quads
+        -0.12f, -0.1f, 0.2f,  0.13f, -0.1f, 0.2f,  0.0f, 0.17f, 0.2f,
+    };
+    const cardinal::u32 M = 2;
+    cardinal::vector<cardinal::u32> mids = { 0u, 1u };
+    cardinal::vector<float> mats = { 0.8f,0.3f,0.2f,0.6f, 0.0f,0,0,0,  0.2f,0.4f,0.9f,0.2f, 0.8f,0,0,0 };
+    // One point light above-front + one directional. PackedLight: [0]=kind,
+    // [2..4]=pos, [5..7]=dir, [8..10]=colour, [11]=intensity, [12]=range.
+    cardinal::vector<float> lts(32, 0.0f);
+    lts[0] = 1.0f; lts[2] = 0.3f; lts[3] = 0.4f; lts[4] = 1.5f; lts[8] = 1; lts[9] = 0.9f; lts[10] = 0.8f; lts[11] = 3.0f; lts[12] = 10.0f;
+    lts[16] = 0.0f; lts[21] = 0.3f; lts[22] = -0.5f; lts[23] = -1.0f; lts[24] = 1; lts[25] = 1; lts[26] = 1; lts[27] = 1.0f;
+    cardinal::vector<float> amb = { 0.05f, 0.05f, 0.06f };
+    cardinal::vector<float> vp  = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
+    cardinal::vector<float> ivp = vp;
+    cardinal::vector<float> dir = { 0, 0, 1 };
+    cardinal::vector<float> cpos = { 0.1f, 0.2f, 2.0f };    // in front of the +z-facing facets
+    cardinal::vector<cardinal::u8> rad[2], prim[2];
+    cardinal::u32 coarse = 0, fine = 0;
+    for (int mode = 0; mode < 2; ++mode) {
+        auto g = rg::Graph::create();
+        gpu::AegisSceneInputs in;
+        in.triangle_count = M;
+        in.tris         = g->import_buffer("in.tris", tris.data(), tris.size() * 4, 4);
+        in.material_ids = g->import_buffer("in.mids", mids.data(), mids.size() * 4, 4);
+        in.materials    = g->import_buffer("in.mats", mats.data(), mats.size() * 4, 4);
+        in.lights       = g->import_buffer("in.lts",  lts.data(),  lts.size() * 4, 4);
+        in.ambient      = g->import_buffer("in.amb",  amb.data(),  12, 4);
+        in.view_proj    = g->import_buffer("in.vp",   vp.data(),   64, 4);
+        in.camera_dir   = g->import_buffer("in.dir",  dir.data(),  12, 4);
+        in.inv_view_proj = g->import_buffer("in.ivp", ivp.data(),  64, 4);
+        in.camera_pos    = g->import_buffer("in.cpos", cpos.data(), 12, 4);
+        gpu::AegisConfig cfg;
+        cfg.width = W; cfg.height = H; cfg.material_count = 2; cfg.light_count = 2;
+        cfg.adaptive_shading_rate = (mode == 1);
+        auto pipeline = gpu::AegisPipeline::create(cfg);
+        gpu::AegisOutputs o; gpu::AegisStageRefs st;
+        pipeline->build(*g, in, o, st);
+        CHECK(g->compile());
+        auto b = rg::CpuBackend::create();
+        b->execute(*g);
+        CHECK(st.resolve->quad_rate == (mode == 1));
+        CHECK(st.resolve->pixels_shaded + st.resolve->pixels_sky == W * H);
+        rad[mode]  = b->buffer_contents(o.radiance_hdr);
+        prim[mode] = b->buffer_contents(o.vbuf_prim);
+        if (mode == 1) { coarse = st.resolve->quads_coarse; fine = st.resolve->quads_fine; }
+        else CHECK(st.resolve->quads_coarse == 0u && st.resolve->quads_fine == 0u);
+    }
+    CHECK(prim[0] == prim[1]);                         // raster untouched by the resolve mode
+    CHECK(coarse > 0u && fine > 0u);
+    CHECK(coarse + fine == ((W + 1) / 2) * ((H + 1) / 2));
+    const float* r0 = reinterpret_cast<const float*>(rad[0].data());
+    const float* r1 = reinterpret_cast<const float*>(rad[1].data());
+    const cardinal::u32* pp = reinterpret_cast<const cardinal::u32*>(prim[0].data());
+    cardinal::u32 checked_coarse = 0, checked_fine = 0, bad = 0;
+    for (cardinal::u32 qy = 0; qy < H / 2; ++qy)
+        for (cardinal::u32 qx = 0; qx < W / 2; ++qx) {
+            const cardinal::u32 i00 = (qy * 2) * W + qx * 2;
+            const cardinal::u32 idx[4] = { i00, i00 + 1, i00 + W, i00 + W + 1 };
+            const bool uniform = pp[i00] != gpu::kInvalidPrimId && pp[idx[1]] == pp[i00]
+                              && pp[idx[2]] == pp[i00] && pp[idx[3]] == pp[i00];
+            for (cardinal::u32 k = 0; k < 4; ++k)
+                for (int c = 0; c < 3; ++c) {
+                    const float expect = uniform ? r0[i00 * 3 + c] : r0[idx[k] * 3 + c];
+                    if (r1[idx[k] * 3 + c] != expect) ++bad;
+                }
+            if (uniform) ++checked_coarse; else ++checked_fine;
+        }
+    CHECK(bad == 0u);
+    CHECK(checked_coarse == coarse && checked_fine == fine);
+    // The coarse quads really differ from full rate somewhere (the point light's
+    // per-pixel falloff), i.e. the mode is not a no-op.
+    bool any_diff = false;
+    for (cardinal::usize i = 0; i < rad[0].size(); ++i) if (rad[0][i] != rad[1][i]) { any_diff = true; break; }
+    CHECK(any_diff);
+}
+
 // The full AEGIS pipeline in both raster modes yields identical V-Buf bytes.
 void test_aegis_pipeline_binned_matches_brute() {
     cardinal::vector<float> tris;
@@ -4985,6 +5070,7 @@ int main() {
     test_visbuf_binned_matches_brute();
     test_visbuf_binned_random_scenes();
     test_aegis_pipeline_binned_matches_brute();
+    test_resolve_quad_rate_semantics();
     test_hiz_build_two_mips_max_reduction();
     test_hiz_build_uniform_depth();
     test_hiz_build_nan_inputs_safe();
