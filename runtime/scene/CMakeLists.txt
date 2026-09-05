@@ -6,8 +6,10 @@ add_library(cardinal_scene STATIC
     src/assets.cpp
     src/light.cpp
     src/scene_vgeom.cpp
+    src/skin.cpp
     include/cardinal/scene/math.hpp
     include/cardinal/scene/scene.hpp
+    include/cardinal/scene/skin.hpp
     include/cardinal/scene/renderer.hpp
     include/cardinal/scene/fly_camera.hpp
     include/cardinal/scene/terrain.hpp

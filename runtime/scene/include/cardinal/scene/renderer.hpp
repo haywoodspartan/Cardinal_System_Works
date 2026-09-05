@@ -31,6 +31,7 @@ struct FrameStats {
     u32 entities_culled{0};     // failed frustum cull (visible but off-screen)
     u32 work_items{0};          // EntityWork count after entity-splitting
     u32 vertices_emitted{0};    // total verts in cpu_verts_ this frame
+    u32 skinned_vertices{0};    // verts that went through the LBS skin step
     u32 draw_calls{0};          // GPU draw submissions this frame (== work_items today)
     u32 pc_pushes{0};           // push-constant writes (skipped when consecutive draws share MVP)
 

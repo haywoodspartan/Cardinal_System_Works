@@ -15,6 +15,7 @@ add_library(cardinal_render STATIC
     src/gpu_restir.cpp
     src/gpu_postvol.cpp
     src/gpu_color.cpp
+    src/gpu_skin.cpp
     src/frame_pacer.cpp
     src/aegis_pipeline_bridge.cpp
     src/render_passes.cpp
@@ -35,6 +36,7 @@ add_library(cardinal_render STATIC
     include/cardinal/render/gpu_restir.hpp
     include/cardinal/render/gpu_postvol.hpp
     include/cardinal/render/gpu_color.hpp
+    include/cardinal/render/gpu_skin.hpp
     include/cardinal/render/frame_pacer.hpp)
 
 # Engine-wide precompiled header lives in cardinal::core. Every render/

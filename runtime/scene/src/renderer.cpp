@@ -974,6 +974,7 @@ public:
 
         work_list_.clear();
         vgeom_cuts_.clear();
+        skin_palettes_.clear();
         usize total_out = 0;
 
         // We need a stable index for each vgeom cut so the EntityWork
@@ -1061,6 +1062,23 @@ public:
             const u32 tris_total = vc / 3;
             if (tris_total == 0) continue;
 
+            // Skinned entity: build the joint palette ONCE here (serial
+            // phase) so every chunk's worker just reads it. Palettes for
+            // all skinned entities live back-to-back in skin_palettes_;
+            // the work item carries an offset (not a pointer — the vector
+            // may still grow while we walk the candidates).
+            u32 pal_first = 0, pal_count = 0;
+            if (e.skeleton != nullptr && e.mesh->skinned()) {
+                skin::compute_palette(*e.skeleton, e.pose,
+                                      skin_scratch_global_, skin_scratch_palette_);
+                pal_first = static_cast<u32>(skin_palettes_.size());
+                pal_count = static_cast<u32>(skin_scratch_palette_.size());
+                skin_palettes_.insert(skin_palettes_.end(),
+                                      skin_scratch_palette_.begin(),
+                                      skin_scratch_palette_.end());
+                stats_.skinned_vertices += vc;
+            }
+
             // Split into sub-chunks of kSplitTriThreshold triangles each.
             // Single-chunk entities (cubes, spheres, gameplay actors)
             // fall through with one EntityWork like before — the
@@ -1068,11 +1086,13 @@ public:
             for (u32 base = 0; base < tris_total; base += kSplitTriThreshold) {
                 const u32 tris = cardinal::min(kSplitTriThreshold, tris_total - base);
                 EntityWork w{};
-                w.entity     = &e;
-                w.tri_first  = base;
-                w.tri_count  = tris;
-                w.out_offset = total_out;
-                w.tri_offset = static_cast<u32>(total_out / verts_per_tri);
+                w.entity        = &e;
+                w.tri_first     = base;
+                w.tri_count     = tris;
+                w.out_offset    = total_out;
+                w.tri_offset    = static_cast<u32>(total_out / verts_per_tri);
+                w.palette_first = pal_first;
+                w.palette_count = pal_count;
                 work_list_.push_back(w);
                 total_out += static_cast<usize>(tris) * verts_per_tri;
             }
@@ -1109,6 +1129,16 @@ public:
                 : e.mesh->cpu_vertices();
             const Mat4 model = e.transform.matrix();
 
+            // Skinning inputs (legacy path only — vgeom cluster slices carry
+            // no influence stream, so a skinned mesh with vgeom enabled
+            // renders at bind pose). Palette pointer is stable here: the
+            // serial phase finished growing skin_palettes_ before fan-out.
+            const Mat4* pal = (w.palette_count != 0 && w.src_override == nullptr)
+                ? skin_palettes_.data() + w.palette_first : nullptr;
+            const skin::Influence* infl = (pal != nullptr)
+                ? e.mesh->skin_influences() : nullptr;
+            if (infl == nullptr) pal = nullptr;
+
             // World-space normal transform (uniform-scale heuristic). Used
             // for the COLOR computation only — the model-pos vertex output
             // gets its MVP applied in the vertex shader via push constant.
@@ -1133,8 +1163,20 @@ public:
             for (u32 t = 0; t < w.tri_count; ++t) {
                 const u32 i = (w.tri_first + t) * 3;
                 Vec3 wp[3]; Vec3 wn[3]; Vec3 col[3];
+                // Skinned copy of the triangle's three source verts. For a
+                // rigid mesh this is a plain copy; for a skinned one the
+                // position + normal are LBS-deformed by the entity palette
+                // before the (unchanged) model transform below.
+                Vertex sv[3];
                 for (int k = 0; k < 3; ++k) {
-                    const Vertex& v = src[i + k];
+                    sv[k] = src[i + k];
+                    if (pal != nullptr)
+                        skin::skin_point(infl[i + k], pal, w.palette_count,
+                                         src[i + k].position, src[i + k].normal,
+                                         sv[k].position, sv[k].normal);
+                }
+                for (int k = 0; k < 3; ++k) {
+                    const Vertex& v = sv[k];
                     // World-pos still needed for lighting + the Heightmap
                     // / Normals view modes that read positions. The shader
                     // reconstructs w=1 from the 12-byte vertex stream.
@@ -1150,9 +1192,9 @@ public:
                 // normal by model 3x3 for world_normal varying. Color
                 // is the CPU-computed base color (CPU lighting path
                 // still active; GPU lighting comes next iteration).
-                const Vertex& v0 = src[i + 0];
-                const Vertex& v1 = src[i + 1];
-                const Vertex& v2 = src[i + 2];
+                const Vertex& v0 = sv[0];
+                const Vertex& v1 = sv[1];
+                const Vertex& v2 = sv[2];
                 if (wire) {
                     cpu_verts_[out++] = { v0.position, v0.normal, col[0], v0.texcoord };
                     cpu_verts_[out++] = { v1.position, v1.normal, col[1], v1.texcoord };
@@ -1722,8 +1764,18 @@ private:
         u32           tri_count{0};    // number of triangles in this work item
         usize         out_offset{0};   // index into cpu_verts_
         u32           tri_offset{0};   // global triangle id base (Polygons hue)
+        // Skinning: [palette_first, +palette_count) into skin_palettes_.
+        // palette_count == 0 => rigid.
+        u32           palette_first{0};
+        u32           palette_count{0};
     };
     cardinal::vector<EntityWork>        work_list_;
+    // Joint palettes (global * inverse_bind) for every skinned entity drawn
+    // this frame, back-to-back; built in the serial phase, read by workers.
+    // The two scratch vectors keep compute_palette allocation-free once warm.
+    cardinal::vector<Mat4>              skin_palettes_;
+    cardinal::vector<Mat4>              skin_scratch_global_;
+    cardinal::vector<Mat4>              skin_scratch_palette_;
     // Per-frame scratch for vgeom selection — kept as a member so we
     // don't churn the heap each frame. One SelectOutput per vgeom-
     // enabled entity, reused across frames.

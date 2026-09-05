@@ -20,6 +20,7 @@
 #include <cardinal/core/std/containers.hpp>
 #include <cardinal/core/std/utility.hpp>
 #include <cardinal/scene/math.hpp>
+#include <cardinal/scene/skin.hpp>
 
 namespace cardinal::rhi { class Device; class Buffer; class Texture; }
 
@@ -90,11 +91,24 @@ public:
     const cardinal::string& name() const noexcept     { return name_; }
     void set_name(cardinal::string n) { name_ = cardinal::move(n); }
 
+    // ---- Skinning -------------------------------------------------------
+    // Attach per-vertex joint influences (one per CPU-shadow vertex, same
+    // de-indexed order as cpu_vertices()). A count mismatch is rejected
+    // (logged) and leaves the mesh rigid. The forward renderer skins the
+    // CPU shadow through Entity::skeleton/pose each frame when present.
+    bool set_skin(cardinal::vector<skin::Influence> influences);
+    void clear_skin() { skin_.clear(); }
+    bool skinned() const noexcept { return !skin_.empty(); }
+    const skin::Influence* skin_influences() const noexcept {
+        return skin_.empty() ? nullptr : skin_.data();
+    }
+
 private:
     Mesh() = default;
     cardinal::unique_ptr<rhi::Buffer> vbuf_;
     u32                          vcount_{0};
     cardinal::vector<Vertex>          cpu_;
+    cardinal::vector<skin::Influence> skin_;   // empty = rigid
     cardinal::string                  name_;
     mutable Vec3                 bs_center_{};
     mutable float                bs_radius_{0.0f};
@@ -159,6 +173,14 @@ public:
     Vec3                  tint{1, 1, 1};
     Material              material{};
     bool                  visible{true};
+
+    // Skinning. `skeleton` pairs with a Mesh that carries influences; `pose`
+    // holds per-joint LOCAL transforms (empty = bind pose = rigid render).
+    // The renderer builds the palette (global * inverse_bind) per frame and
+    // deforms the mesh's CPU shadow before the transform pass. Shared so
+    // many entities can wear one rig.
+    cardinal::shared_ptr<skin::Skeleton> skeleton;
+    skin::Pose                           pose;
 
     // Parent-child hierarchy. parent_id == 0 means "this entity is a root"
     // (root entities have no parent). Children inherit nothing transform-wise

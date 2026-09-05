@@ -49,6 +49,18 @@ cardinal::shared_ptr<Mesh> Mesh::from_vertices(rhi::Device& dev, const Vertex* v
     return m;
 }
 
+bool Mesh::set_skin(cardinal::vector<skin::Influence> influences) {
+    if (influences.size() != static_cast<usize>(vcount_)) {
+        cardinal::log::errorf("scene",
+            "Mesh::set_skin: %zu influences for %u vertices — ignored",
+            static_cast<size_t>(influences.size()), vcount_);
+        return false;
+    }
+    for (auto& in : influences) in = skin::normalized(in);
+    skin_ = cardinal::move(influences);
+    return true;
+}
+
 // Box centred on origin, ±size/2 on each axis. 36 vertices (no indexing).
 cardinal::shared_ptr<Mesh> Mesh::make_box(rhi::Device& dev, float size) {
     const float h = size * 0.5f;
