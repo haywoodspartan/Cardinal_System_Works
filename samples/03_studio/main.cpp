@@ -1320,6 +1320,10 @@ int main(int argc, char** argv) {
     // an in-memory pointer that dies with the session).
     auto imported_mesh_cache =
         std::make_shared<std::unordered_map<std::string, cardinal::shared_ptr<scn::Mesh>>>();
+    // key -> skeleton for skinned imported meshes (parallel to the mesh cache;
+    // absent = rigid). Entities spawned from the key share one rig.
+    auto imported_skel_cache =
+        std::make_shared<std::unordered_map<std::string, cardinal::shared_ptr<scn::skin::Skeleton>>>();
     // key -> GPU albedo texture, shared across spawns + the reload-safe factory.
     auto imported_tex_cache =
         std::make_shared<std::unordered_map<std::string, cardinal::shared_ptr<rhi::Texture>>>();
@@ -1375,9 +1379,10 @@ int main(int argc, char** argv) {
         d.kind     = scn::AssetKind::Primitive;
         auto reg   = asset_registry;          // shared ownership (reload-safe)
         auto cache = imported_mesh_cache;
+        auto skelcache = imported_skel_cache;
         auto texcache = imported_tex_cache;
         std::string kc = key, lc = label, mk = matkey;
-        d.factory = [reg, cache, texcache, kc, lc, mk](const scn::AssetSpawnContext& ctx)
+        d.factory = [reg, cache, skelcache, texcache, kc, lc, mk](const scn::AssetSpawnContext& ctx)
                         -> scn::AssetSpawnResult {
             if (ctx.scene == nullptr || ctx.device == nullptr) return {};
             cardinal::shared_ptr<scn::Mesh> mesh;
@@ -1386,8 +1391,13 @@ int main(int argc, char** argv) {
             if (!mesh) {
                 auto ma = reg->load_mesh(cardinal::string(kc.c_str()));
                 if (ma && !ma->vertices.empty() && !ma->indices.empty()) {
+                    // De-index vertices AND (when skinned) their influences
+                    // together so the two streams stay parallel.
+                    const bool skinned = ma->skinned();
                     std::vector<scn::Vertex> verts;
+                    cardinal::vector<scn::skin::Influence> infl;
                     verts.reserve(ma->indices.size());
+                    if (skinned) infl.reserve(ma->indices.size());
                     for (cardinal::u32 idx : ma->indices) {
                         if (idx >= ma->vertices.size()) continue;
                         const auto& mv = ma->vertices[idx];
@@ -1395,17 +1405,24 @@ int main(int argc, char** argv) {
                         v.position = mv.position; v.normal = mv.normal; v.color = mv.color;
                         v.texcoord = mv.texcoord;
                         verts.push_back(v);
+                        if (skinned) infl.push_back(ma->influences[idx]);
                     }
                     if (!verts.empty()) {
                         mesh = scn::Mesh::from_vertices(
                             *ctx.device, verts.data(), static_cast<cardinal::u32>(verts.size()));
-                        if (mesh) (*cache)[kc] = mesh;
+                        if (mesh) {
+                            if (skinned && mesh->set_skin(std::move(infl)))
+                                (*skelcache)[kc] =
+                                    std::make_shared<scn::skin::Skeleton>(ma->skeleton);
+                            (*cache)[kc] = mesh;
+                        }
                     }
                 }
             }
             if (!mesh) return {};
             auto& e = ctx.scene->add_entity(lc);
             e.mesh  = mesh;
+            if (auto sit = skelcache->find(kc); sit != skelcache->end()) e.skeleton = sit->second;
             e.transform.translation = ctx.position;
             e.tint  = { 0.80f, 0.80f, 0.82f };
             // Apply the imported material's base color + PBR scalars, if linked.
@@ -2353,6 +2370,7 @@ int main(int argc, char** argv) {
                                                        p->info().startup_world;
                                 asset_registry->clear_mounts();   // switching projects
                                 imported_mesh_cache->clear();
+                                imported_skel_cache->clear();
                                 imported_by_source.clear();
                                 load_imported_manifest();   // re-register imported meshes first
                                 load_render_passes();
@@ -3136,7 +3154,9 @@ int main(int argc, char** argv) {
 
             int spawned = 0;
             for (const auto& im : isc.meshes) {
-                cardinal::asset::MeshAsset ma = cardinal::import::to_asset_mesh(im);
+                // (scene, mesh) overload carries the skin + skeleton so a
+                // skinned glTF persists whole through the mesh codec.
+                cardinal::asset::MeshAsset ma = cardinal::import::to_asset_mesh(isc, im);
                 if (ma.vertices.empty() || ma.indices.empty()) continue;
 
                 const std::string base =
@@ -3195,19 +3215,27 @@ int main(int argc, char** argv) {
                 // Fallback (no project open / persist failed): session-only mesh.
                 const std::string key =
                     "imported/" + base + "." + std::to_string(import_counter++);
+                const bool skinned = ma.skinned();
                 std::vector<scn::Vertex> verts;
+                cardinal::vector<scn::skin::Influence> infl;
                 verts.reserve(ma.indices.size());
+                if (skinned) infl.reserve(ma.indices.size());
                 for (cardinal::u32 idx : ma.indices) {
                     if (idx >= ma.vertices.size()) continue;
                     const auto& mv = ma.vertices[idx];
                     scn::Vertex v;
                     v.position = mv.position; v.normal = mv.normal; v.color = mv.color;
+                    v.texcoord = mv.texcoord;
                     verts.push_back(v);
+                    if (skinned) infl.push_back(ma.influences[idx]);
                 }
                 if (verts.empty()) continue;
                 auto mesh = scn::Mesh::from_vertices(
                     *device, verts.data(), static_cast<cardinal::u32>(verts.size()));
                 if (!mesh) continue;
+                cardinal::shared_ptr<scn::skin::Skeleton> skel_cap;
+                if (skinned && mesh->set_skin(std::move(infl)))
+                    skel_cap = std::make_shared<scn::skin::Skeleton>(ma.skeleton);
                 scn::AssetDesc d{};
                 d.id       = key;
                 d.label    = base;
@@ -3218,11 +3246,12 @@ int main(int argc, char** argv) {
                 std::string label_cap = base;
                 auto        reg_cap   = asset_registry;
                 std::string mk_cap    = matkey;
-                d.factory = [mesh_cap, label_cap, reg_cap, mk_cap](const scn::AssetSpawnContext& ctx)
+                d.factory = [mesh_cap, skel_cap, label_cap, reg_cap, mk_cap](const scn::AssetSpawnContext& ctx)
                                 -> scn::AssetSpawnResult {
                     if (ctx.scene == nullptr) return {};
                     auto& e = ctx.scene->add_entity(label_cap);
                     e.mesh  = mesh_cap;
+                    if (skel_cap) e.skeleton = skel_cap;
                     e.transform.translation = ctx.position;
                     e.tint  = { 0.80f, 0.80f, 0.82f };
                     if (!mk_cap.empty()) {
@@ -4029,6 +4058,7 @@ int main(int argc, char** argv) {
                 // caches so assets resolve from THIS project only.
                 asset_registry->clear_mounts();
                 imported_mesh_cache->clear();
+                                imported_skel_cache->clear();
                 imported_by_source.clear();
                 load_imported_manifest();   // re-register imported meshes so the world resolves
                 load_render_passes();       // project-scoped XSI pass set
