@@ -385,6 +385,7 @@ void run_backend(rhi::Backend be, const char* be_name) {
             { "sse.lod",      st.sse->out_lod,                   Cmp::Exact     },
             { "draw.count",   st.indirect_gen->out_count,        Cmp::Exact     },
             { "draw.cmds",    st.indirect_gen->out_commands,     Cmp::CmdPrefix },
+            { "bin.counts",   st.bin->out_bin_counts,            Cmp::Exact     },
             { "tile.counts",  st.light_cull->out_tile_counts,    Cmp::Exact     },
             { "tile.lights",  st.light_cull->out_tile_lights,    Cmp::TilePrefix},
             { "vbuf.depth",   st.vbuf->out_depth,                Cmp::EpsF32    },

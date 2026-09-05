@@ -61,6 +61,72 @@ namespace cardinal::render::gpu {
 constexpr cardinal::u32 kInvalidPrimId = 0xFFFFFFFFu;
 constexpr cardinal::u32 kInvalidMatId  = 0xFFFFFFFFu;
 
+// ---------------------------------------------------------------------------
+// TriangleBinPass — screen-tile binning + triangle setup for the V-Buffer.
+//
+// The reference rasterizer is O(pixels × triangles): every pixel thread
+// walks the whole triangle stream. This pass turns that into
+// O(pixels × triangles-in-my-tile):
+//
+//   clear  : one thread per tile  → bin_counts[tile] = 0
+//   bin    : one thread per tri   → project + set up ONCE (screen-space
+//            verts, 1/area, bbox, material / oct-normal / aux) into a 64-byte
+//            setup record, then append the triangle id to every kVisTileSize²
+//            tile its bbox touches (InterlockedAdd on the tile's count).
+//
+// Fixed-capacity bins keep the buffer size static for the persistent graph:
+// a tile whose count exceeds `bin_capacity` is marked OVERFLOWED and the
+// raster kernel falls back to walking every setup record for that tile —
+// slower, never wrong. Bin order is non-deterministic on the GPU (atomics),
+// so the binned raster resolves winners by (depth, then LOWER triangle id),
+// which is exactly what the reference's ascending-order strict-< scan
+// produces — the V-Buffer stays byte-identical whichever path runs.
+//
+// Setup record (16 dwords):
+//   [0..5] px0 py0 px1 py1 px2 py2   [6..8] pz0 pz1 pz2   [9] inv_area
+//   [10] flags (bit0 valid, bit1 area>0)  [11] mat_id  [12] oct normal
+//   [13] aux  [14] bbox min (x0 | y0<<16)  [15] bbox max, exclusive (x1 | y1<<16)
+// ---------------------------------------------------------------------------
+constexpr cardinal::u32 kVisTileSize        = 16;   // px per bin tile (square)
+constexpr cardinal::u32 kDefaultBinCapacity = 256;  // tri ids per tile before overflow
+constexpr cardinal::u32 kSetupRecordDwords  = 16;
+
+class TriangleBinPass {
+public:
+    struct State {
+        graph::ResourceHandle in_tris;          // M × 9 f32 world-space
+        graph::ResourceHandle in_mat_ids;       // M × u32
+        graph::ResourceHandle in_matrix;        // 16 f32 row-major VP
+        graph::ResourceHandle in_aux_per_tri;   // optional M × u32
+        graph::ResourceHandle out_setup;        // M × 64 B setup records
+        graph::ResourceHandle out_bin_counts;   // tiles × u32 (raw append count)
+        graph::ResourceHandle out_bins;         // tiles × bin_capacity × u32 tri ids
+        cardinal::u32 width  {0};
+        cardinal::u32 height {0};
+        cardinal::u32 triangle_count {0};
+        cardinal::u32 tiles_x {0}, tiles_y {0};
+        cardinal::u32 bin_capacity {kDefaultBinCapacity};
+        // Stats (CPU record):
+        cardinal::u32 tris_binned    {0};   // passed setup, appended to ≥1 tile
+        cardinal::u32 tris_rejected  {0};   // behind / offscreen / degenerate
+        cardinal::u32 bin_entries    {0};   // total (tri, tile) pairs
+        cardinal::u32 overflow_tiles {0};   // tiles whose count exceeded capacity
+        cardinal::u32 tiles_rejected {0};   // bbox tiles skipped by the conservative edge test
+    };
+    // Adds TWO passes (clear, bin). `bin_capacity` is clamped to ≥ 1.
+    static cardinal::shared_ptr<State> add_to_graph(
+        graph::Graph& g,
+        graph::ResourceHandle in_tris,
+        graph::ResourceHandle in_mat_ids,
+        graph::ResourceHandle in_matrix,
+        graph::ResourceHandle in_aux_per_tri,    // pass {} for no aux channel
+        cardinal::u32 width, cardinal::u32 height,
+        cardinal::u32 triangle_count,
+        cardinal::u32 bin_capacity = kDefaultBinCapacity);
+    static const char* hlsl_clear_source() noexcept;   // TriangleBinClearPass kernel
+    static const char* hlsl_source() noexcept;         // TriangleBinPass kernel
+};
+
 class VisibilityBufferPass {
 public:
     struct State {
@@ -76,15 +142,24 @@ public:
         graph::ResourceHandle out_motion;       // currently always zero — host wires
                                                 // prev-MVP to fill in a follow-up commit
         graph::ResourceHandle out_aux;
+        // Binned inputs (all valid ⇔ `binned`): from TriangleBinPass.
+        graph::ResourceHandle in_setup;
+        graph::ResourceHandle in_bin_counts;
+        graph::ResourceHandle in_bins;
 
         cardinal::u32 width  {0};
         cardinal::u32 height {0};
         cardinal::u32 triangle_count {0};
+        cardinal::u32 bin_capacity {0};
+        cardinal::u32 tiles_x {0};
+        bool          binned {false};
         // Stats:
-        cardinal::u32 fragments_drawn        {0};
-        cardinal::u32 triangles_offscreen    {0};
+        cardinal::u32 fragments_drawn        {0};   // brute: accepted fragments (incl. overwrites); binned: covered pixels
+        cardinal::u32 triangles_offscreen    {0};   // brute: behind/offscreen; binned: all setup-rejected tris
+        cardinal::u32 overflow_tiles         {0};   // binned path: tiles that fell back to every record
     };
 
+    // Reference (brute) raster: per pixel, walk every triangle.
     static cardinal::shared_ptr<State> add_to_graph(
         graph::Graph& g,
         graph::ResourceHandle in_tris,
@@ -93,8 +168,19 @@ public:
         graph::ResourceHandle in_aux_per_tri,    // pass {} for no aux channel
         cardinal::u32 width, cardinal::u32 height,
         cardinal::u32 triangle_count);
+    // Binned raster: per pixel, walk only the triangles binned into its
+    // kVisTileSize² tile (falls back to every setup record on overflow).
+    // `bins` must have been added to the same graph for the same W/H/M.
+    // Output bytes are identical to the reference form.
+    static cardinal::shared_ptr<State> add_to_graph(
+        graph::Graph& g,
+        const TriangleBinPass::State& bins,
+        graph::ResourceHandle in_aux_per_tri,    // same handle given to the bin pass
+        cardinal::u32 width, cardinal::u32 height,
+        cardinal::u32 triangle_count);
 
-    static const char* hlsl_source() noexcept;
+    static const char* hlsl_source() noexcept;          // reference kernel
+    static const char* hlsl_source_binned() noexcept;   // binned kernel
 };
 
 // ---------------------------------------------------------------------------

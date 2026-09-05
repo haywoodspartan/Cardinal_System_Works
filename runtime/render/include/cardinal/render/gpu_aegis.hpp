@@ -374,6 +374,11 @@ struct AegisConfig {
     PrecisionCaps caps;                    // FP32 / FP16 / FP8 / FP4 tier support
     GeometryTier  max_tier {GeometryTier::Fp4};
     AegisFeatures features;                // async / VRS / bindless / DirectStorage
+    // Tile-binned visibility raster (TriangleBinPass → binned V-Buf kernel).
+    // Output bytes are identical to the brute per-pixel-loop reference; false
+    // exists for A/B benchmarking and as an escape hatch.
+    bool          binned_raster {true};
+    cardinal::u32 bin_capacity  {256};     // tri ids per 16×16 tile before overflow fallback
 };
 
 struct AegisSceneInputs {
@@ -427,6 +432,7 @@ struct AegisStageRefs {
     cardinal::shared_ptr<HiZBuildPass::State>           hiz;
     cardinal::shared_ptr<DrawIndirectGenPass::State>    indirect_gen;
     cardinal::shared_ptr<AdaptiveGeometryPass::State>   adaptive;
+    cardinal::shared_ptr<TriangleBinPass::State>        bin;     // null when binned_raster == false
     cardinal::shared_ptr<VisibilityBufferPass::State>   vbuf;
     cardinal::shared_ptr<TiledLightCullPass::State>     light_cull;
     cardinal::shared_ptr<ReSTIRSamplePass::State>       restir_sample;

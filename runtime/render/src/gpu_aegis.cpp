@@ -1479,9 +1479,18 @@ void AegisPipeline::build(rg::Graph& g, const AegisSceneInputs& in,
     s.adaptive = AdaptiveGeometryPass::add_to_graph(g, in.tris, M, cfg_.caps, cfg_.max_tier);
     selected_tier_ = s.adaptive->selected_tier;
 
-    // Block 6 — V-Buffer
-    s.vbuf = VisibilityBufferPass::add_to_graph(g, in.tris, in.material_ids, in.view_proj,
-                                                {}, W, H, M);
+    // Block 6 — V-Buffer. Binned: TriangleBinClear + TriangleBin set every
+    // triangle up ONCE and append it to the 16×16 tiles it touches, then the
+    // per-pixel kernel walks only its tile's list (O(px × tris-in-tile) vs the
+    // reference's O(px × tris)). Same bytes either way.
+    if (cfg_.binned_raster) {
+        s.bin  = TriangleBinPass::add_to_graph(g, in.tris, in.material_ids, in.view_proj,
+                                               {}, W, H, M, cfg_.bin_capacity);
+        s.vbuf = VisibilityBufferPass::add_to_graph(g, *s.bin, {}, W, H, M);
+    } else {
+        s.vbuf = VisibilityBufferPass::add_to_graph(g, in.tris, in.material_ids, in.view_proj,
+                                                    {}, W, H, M);
+    }
     out.vbuf_depth  = s.vbuf->out_depth;
     out.vbuf_prim   = s.vbuf->out_prim_id;
     out.vbuf_mat    = s.vbuf->out_mat_id;

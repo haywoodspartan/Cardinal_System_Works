@@ -2,6 +2,7 @@
 
 #include <cardinal/core/std/cmath.hpp>
 #include <cardinal/core/std/algorithm.hpp>
+#include <cardinal/core/std/cstring.hpp>
 #include <cardinal/core/std/utility.hpp>
 
 namespace cardinal::render::gpu {
@@ -332,10 +333,10 @@ const char* VisibilityBufferPass::hlsl_source() noexcept {
     "    float3 v0 = asfloat(InTris.Load3(b+0));\n"
     "    float3 v1 = asfloat(InTris.Load3(b+12));\n"
     "    float3 v2 = asfloat(InTris.Load3(b+24));\n"
-    "    float sx[3], sy[3], sz[3], sw[3];\n"
+    "    precise float sx[3], sy[3], sz[3], sw[3];\n"
     "    [unroll] for (uint k = 0u; k < 3u; ++k) {\n"
     "      float3 p = (k == 0u) ? v0 : ((k == 1u) ? v1 : v2);\n"
-    "      float cw = dot(r3.xyz, p) + r3.w;\n"
+    "      precise float cw = dot(r3.xyz, p) + r3.w;\n"
     "      sw[k] = cw;\n"
     "      if (abs(cw) < 1.0e-8 || !isfinite(cw) || cw <= 0.0) {\n"
     "        sx[k] = 0.0; sy[k] = 0.0; sz[k] = 1.0e30;\n"
@@ -350,7 +351,7 @@ const char* VisibilityBufferPass::hlsl_source() noexcept {
     "    if (sx[0] >  1.0 && sx[1] >  1.0 && sx[2] >  1.0) continue;\n"
     "    if (sy[0] < -1.0 && sy[1] < -1.0 && sy[2] < -1.0) continue;\n"
     "    if (sy[0] >  1.0 && sy[1] >  1.0 && sy[2] >  1.0) continue;\n"
-    "    float px[3], py[3], pz[3];\n"
+    "    precise float px[3], py[3], pz[3];\n"
     "    [unroll] for (uint k2 = 0u; k2 < 3u; ++k2) {\n"
     "      px[k2] = sx[k2]*hw + hw;\n"
     "      py[k2] = hh - sy[k2]*hh;\n"
@@ -386,6 +387,643 @@ const char* VisibilityBufferPass::hlsl_source() noexcept {
     "    bestMat  = InMatIds.Load(t*4u);\n"
     "    bestNrm  = oct_pack(nrm);\n"
     "    bestAux  = (gHasAux != 0u) ? InAux.Load(t*4u) : t;\n"
+    "  }\n"
+    "  OutDepth.Store(pix*4u, asuint(bestZ));\n"
+    "  OutPrim.Store (pix*4u, bestPrim);\n"
+    "  OutMat.Store  (pix*4u, bestMat);\n"
+    "  OutNrm.Store  (pix*4u, bestNrm);\n"
+    "  OutMV.Store   (pix*4u, 0u);\n"
+    "  OutAux.Store  (pix*4u, bestAux);\n"
+    "}\n";
+}
+
+// =============================================================================
+// TriangleBinPass — tile binning + triangle setup (see gpu_visbuf.hpp).
+// =============================================================================
+namespace {
+
+// One triangle's screen-space setup, mirroring visbuf_record's projection
+// op-for-op so the binned raster reproduces the reference depth bit-exactly.
+struct TriSetup {
+    float px[3], py[3], pz[3];
+    float inv_area;
+    cardinal::u32 flags;     // bit0 valid, bit1 area > 0
+    cardinal::u32 mid, nrm, aux;
+    int x0, y0, x1, y1;      // bbox, x1/y1 exclusive
+    bool offscreen;          // rejected by the behind/offscreen test (stats)
+};
+
+inline void setup_tri(const float* v, const float* m, cardinal::u32 W, cardinal::u32 H,
+                      cardinal::u32 t, const cardinal::u32* mat_ids,
+                      const cardinal::u32* aux_in, TriSetup& o) noexcept {
+    o = TriSetup{};
+    const float hw = 0.5f * static_cast<float>(W);
+    const float hh = 0.5f * static_cast<float>(H);
+    float sx[3], sy[3], sz[3], sw[3];
+    for (int k = 0; k < 3; ++k) {
+        const float x = fzf(v[k * 3 + 0], 0.0f);
+        const float y = fzf(v[k * 3 + 1], 0.0f);
+        const float z = fzf(v[k * 3 + 2], 0.0f);
+        const float cx = m[0]  * x + m[1]  * y + m[2]  * z + m[3];
+        const float cy = m[4]  * x + m[5]  * y + m[6]  * z + m[7];
+        const float cz = m[8]  * x + m[9]  * y + m[10] * z + m[11];
+        const float cw = m[12] * x + m[13] * y + m[14] * z + m[15];
+        sw[k] = cw;
+        if (cardinal::abs(cw) < 1.0e-8f || !isf(cw) || cw <= 0.0f) {
+            sx[k] = 0; sy[k] = 0; sz[k] = 1.0e30f;
+        } else {
+            sx[k] = cx / cw; sy[k] = cy / cw; sz[k] = cz / cw;
+        }
+    }
+    const bool any_behind = (sw[0] <= 0.0f) || (sw[1] <= 0.0f) || (sw[2] <= 0.0f);
+    const bool all_left   = sx[0] < -1.0f && sx[1] < -1.0f && sx[2] < -1.0f;
+    const bool all_right  = sx[0] >  1.0f && sx[1] >  1.0f && sx[2] >  1.0f;
+    const bool all_below  = sy[0] < -1.0f && sy[1] < -1.0f && sy[2] < -1.0f;
+    const bool all_above  = sy[0] >  1.0f && sy[1] >  1.0f && sy[2] >  1.0f;
+    if (any_behind || all_left || all_right || all_below || all_above) {
+        o.offscreen = true; return;
+    }
+    for (int k = 0; k < 3; ++k) {
+        o.px[k] = sx[k] * hw + hw;
+        o.py[k] = hh - sy[k] * hh;
+        o.pz[k] = 0.5f * (sz[k] + 1.0f);
+    }
+    float min_x = o.px[0], max_x = o.px[0];
+    if (o.px[1] < min_x) min_x = o.px[1]; if (o.px[1] > max_x) max_x = o.px[1];
+    if (o.px[2] < min_x) min_x = o.px[2]; if (o.px[2] > max_x) max_x = o.px[2];
+    float min_y = o.py[0], max_y = o.py[0];
+    if (o.py[1] < min_y) min_y = o.py[1]; if (o.py[1] > max_y) max_y = o.py[1];
+    if (o.py[2] < min_y) min_y = o.py[2]; if (o.py[2] > max_y) max_y = o.py[2];
+    o.x0 = static_cast<int>(min_x);     if (o.x0 < 0) o.x0 = 0;
+    o.x1 = static_cast<int>(max_x) + 1; if (o.x1 > static_cast<int>(W)) o.x1 = static_cast<int>(W);
+    o.y0 = static_cast<int>(min_y);     if (o.y0 < 0) o.y0 = 0;
+    o.y1 = static_cast<int>(max_y) + 1; if (o.y1 > static_cast<int>(H)) o.y1 = static_cast<int>(H);
+    if (o.x0 >= o.x1 || o.y0 >= o.y1) { o.offscreen = true; return; }
+    const float area = edge_fn(o.px[0], o.py[0], o.px[1], o.py[1], o.px[2], o.py[2]);
+    if (cardinal::abs(area) < 1.0e-6f) return;          // degenerate: invalid, not "offscreen"
+    o.inv_area = 1.0f / area;
+    o.flags    = 1u | (area > 0.0f ? 2u : 0u);
+    o.mid      = mat_ids ? mat_ids[t] : t;
+    o.aux      = aux_in  ? aux_in[t]  : t;
+    const float ux = v[3] - v[0], uy = v[4] - v[1], uz = v[5] - v[2];
+    const float vx = v[6] - v[0], vy = v[7] - v[1], vz = v[8] - v[2];
+    float nx = uy * vz - uz * vy;
+    float ny = uz * vx - ux * vz;
+    float nz = ux * vy - uy * vx;
+    const float nl = cardinal::sqrt(nx * nx + ny * ny + nz * nz);
+    if (nl > 1.0e-8f) { nx /= nl; ny /= nl; nz /= nl; }
+    else              { nx = 0; ny = 1; nz = 0; }
+    o.nrm = oct_pack(nx, ny, nz);
+}
+
+inline void store_setup(cardinal::u32* rec, const TriSetup& s) noexcept {
+    float f[10] = { s.px[0], s.py[0], s.px[1], s.py[1], s.px[2], s.py[2],
+                    s.pz[0], s.pz[1], s.pz[2], s.inv_area };
+    for (int i = 0; i < 10; ++i) cardinal::memcpy(rec + i, &f[i], 4);
+    rec[10] = s.flags; rec[11] = s.mid; rec[12] = s.nrm; rec[13] = s.aux;
+    rec[14] = static_cast<cardinal::u32>(s.x0) | (static_cast<cardinal::u32>(s.y0) << 16);
+    rec[15] = static_cast<cardinal::u32>(s.x1) | (static_cast<cardinal::u32>(s.y1) << 16);
+}
+
+inline void load_setup(const cardinal::u32* rec, TriSetup& s) noexcept {
+    float f[10];
+    for (int i = 0; i < 10; ++i) cardinal::memcpy(&f[i], rec + i, 4);
+    s.px[0] = f[0]; s.py[0] = f[1]; s.px[1] = f[2]; s.py[1] = f[3];
+    s.px[2] = f[4]; s.py[2] = f[5]; s.pz[0] = f[6]; s.pz[1] = f[7]; s.pz[2] = f[8];
+    s.inv_area = f[9];
+    s.flags = rec[10]; s.mid = rec[11]; s.nrm = rec[12]; s.aux = rec[13];
+    s.x0 = static_cast<int>(rec[14] & 0xFFFFu); s.y0 = static_cast<int>(rec[14] >> 16);
+    s.x1 = static_cast<int>(rec[15] & 0xFFFFu); s.y1 = static_cast<int>(rec[15] >> 16);
+    s.offscreen = false;
+}
+
+// Conservative tile-vs-triangle overlap over the tile's PIXEL-CENTRE
+// rectangle (∩ the tri bbox). The edge function is affine, so its extreme
+// over a rectangle sits at a corner; a tile whose four corners are all
+// outside one edge (beyond a float-rounding margin) has no covered pixel and
+// is not binned. The margin scales with the edge length × viewport extent
+// (the magnitude of the terms whose rounding could flip a sign), so it is
+// strictly conservative: the raster's own inside test stays the arbiter.
+inline bool tile_may_overlap(const TriSetup& s, int rx0, int ry0, int rx1, int ry1,
+                             float extent) noexcept {
+    const float cx0 = static_cast<float>(rx0) + 0.5f, cy0 = static_cast<float>(ry0) + 0.5f;
+    const float cx1 = static_cast<float>(rx1 - 1) + 0.5f, cy1 = static_cast<float>(ry1 - 1) + 0.5f;
+    const bool pos = (s.flags & 2u) != 0u;
+    for (int e = 0; e < 3; ++e) {
+        const int a = (e + 1) % 3, b = (e + 2) % 3;     // edge (a→b) opposite vertex e
+        const float ax = s.px[a], ay = s.py[a], bx = s.px[b], by = s.py[b];
+        const float e00 = edge_fn(ax, ay, bx, by, cx0, cy0);
+        const float e10 = edge_fn(ax, ay, bx, by, cx1, cy0);
+        const float e01 = edge_fn(ax, ay, bx, by, cx0, cy1);
+        const float e11 = edge_fn(ax, ay, bx, by, cx1, cy1);
+        const float eps = 1.0e-5f * (cardinal::abs(bx - ax) + cardinal::abs(by - ay)) * extent;
+        const float mx = cardinal::max(cardinal::max(e00, e10), cardinal::max(e01, e11));
+        const float mn = cardinal::min(cardinal::min(e00, e10), cardinal::min(e01, e11));
+        if (pos  && mx < -eps) return false;
+        if (!pos && mn >  eps) return false;
+    }
+    return true;
+}
+
+void bin_clear_record(rg::ExecutionContext& ec, void* uctx) noexcept {
+    if (!uctx) return;
+    auto* st = static_cast<TriangleBinPass::State*>(uctx);
+    auto* counts = static_cast<cardinal::u32*>(ec.map_buffer_write(st->out_bin_counts));
+    const cardinal::u32 tiles = st->tiles_x * st->tiles_y;
+    if (!counts) { ec.dispatch(0, 1, 1); return; }
+    for (cardinal::u32 i = 0; i < tiles; ++i) counts[i] = 0u;
+    ec.dispatch((tiles + 63) / 64, 1, 1);
+}
+
+void bin_record(rg::ExecutionContext& ec, void* uctx) noexcept {
+    if (!uctx) return;
+    auto* st = static_cast<TriangleBinPass::State*>(uctx);
+    const cardinal::u32 W = st->width, H = st->height, T = st->triangle_count;
+    const float* tris = static_cast<const float*>(ec.map_buffer_read(st->in_tris));
+    const cardinal::u32* mat_ids = static_cast<const cardinal::u32*>(ec.map_buffer_read(st->in_mat_ids));
+    const float* mat = static_cast<const float*>(ec.map_buffer_read(st->in_matrix));
+    const cardinal::u32* aux_in = st->in_aux_per_tri.is_valid()
+        ? static_cast<const cardinal::u32*>(ec.map_buffer_read(st->in_aux_per_tri)) : nullptr;
+    auto* setup  = static_cast<cardinal::u32*>(ec.map_buffer_write(st->out_setup));
+    auto* counts = static_cast<cardinal::u32*>(ec.map_buffer_write(st->out_bin_counts));
+    auto* bins   = static_cast<cardinal::u32*>(ec.map_buffer_write(st->out_bins));
+    st->tris_binned = st->tris_rejected = st->bin_entries = st->overflow_tiles = 0;
+    st->tiles_rejected = 0;
+    if (!setup || !counts || !bins || W == 0 || H == 0) { ec.dispatch(0, 1, 1); return; }
+    const cardinal::u32 cap = st->bin_capacity;
+    float m[16];
+    for (int i = 0; i < 16; ++i) m[i] = mat ? fzf(mat[i], (i % 5 == 0) ? 1.0f : 0.0f)
+                                            : ((i % 5 == 0) ? 1.0f : 0.0f);
+    for (cardinal::u32 t = 0; t < T; ++t) {
+        TriSetup s;
+        if (tris) setup_tri(tris + t * 9, m, W, H, t, mat_ids, aux_in, s);
+        else      s = TriSetup{};
+        store_setup(setup + static_cast<cardinal::usize>(t) * kSetupRecordDwords, s);
+        if (!(s.flags & 1u)) { ++st->tris_rejected; continue; }
+        ++st->tris_binned;
+        const cardinal::u32 tx0 = static_cast<cardinal::u32>(s.x0) / kVisTileSize;
+        const cardinal::u32 tx1 = static_cast<cardinal::u32>(s.x1 - 1) / kVisTileSize;
+        const cardinal::u32 ty0 = static_cast<cardinal::u32>(s.y0) / kVisTileSize;
+        const cardinal::u32 ty1 = static_cast<cardinal::u32>(s.y1 - 1) / kVisTileSize;
+        const float extent = static_cast<float>(W + H);
+        for (cardinal::u32 ty = ty0; ty <= ty1; ++ty)
+            for (cardinal::u32 tx = tx0; tx <= tx1; ++tx) {
+                // Tile ∩ bbox rectangle, then the conservative edge reject.
+                const int rx0 = cardinal::max(static_cast<int>(tx * kVisTileSize), s.x0);
+                const int ry0 = cardinal::max(static_cast<int>(ty * kVisTileSize), s.y0);
+                const int rx1 = cardinal::min(static_cast<int>((tx + 1) * kVisTileSize), s.x1);
+                const int ry1 = cardinal::min(static_cast<int>((ty + 1) * kVisTileSize), s.y1);
+                if (rx0 >= rx1 || ry0 >= ry1) continue;
+                if (!tile_may_overlap(s, rx0, ry0, rx1, ry1, extent)) { ++st->tiles_rejected; continue; }
+                const cardinal::u32 tile = ty * st->tiles_x + tx;
+                const cardinal::u32 idx  = counts[tile]++;
+                ++st->bin_entries;
+                if (idx < cap) bins[static_cast<cardinal::usize>(tile) * cap + idx] = t;
+            }
+    }
+    const cardinal::u32 tiles = st->tiles_x * st->tiles_y;
+    for (cardinal::u32 i = 0; i < tiles; ++i) if (counts[i] > cap) ++st->overflow_tiles;
+    ec.dispatch((T + 63) / 64, 1, 1);
+}
+
+}  // namespace
+
+cardinal::shared_ptr<TriangleBinPass::State> TriangleBinPass::add_to_graph(
+    rg::Graph& g,
+    rg::ResourceHandle in_tris,
+    rg::ResourceHandle in_mat_ids,
+    rg::ResourceHandle in_matrix,
+    rg::ResourceHandle in_aux_per_tri,
+    cardinal::u32 width, cardinal::u32 height,
+    cardinal::u32 triangle_count,
+    cardinal::u32 bin_capacity)
+{
+    auto st = cardinal::shared_ptr<State>(new State());
+    st->in_tris        = in_tris;
+    st->in_mat_ids     = in_mat_ids;
+    st->in_matrix      = in_matrix;
+    st->in_aux_per_tri = in_aux_per_tri;
+    st->width          = width;
+    st->height         = height;
+    st->triangle_count = triangle_count;
+    st->tiles_x        = (width  + kVisTileSize - 1) / kVisTileSize;
+    st->tiles_y        = (height + kVisTileSize - 1) / kVisTileSize;
+    st->bin_capacity   = bin_capacity == 0 ? 1u : bin_capacity;
+    const cardinal::usize tiles = static_cast<cardinal::usize>(st->tiles_x) * st->tiles_y;
+    const cardinal::usize T     = triangle_count == 0 ? 1u : triangle_count;   // never a 0-byte buffer
+    auto decl = [&](const char* nm, cardinal::usize bytes, cardinal::u32 stride) {
+        rg::BufferDesc d; d.name = nm; d.size_bytes = bytes; d.stride_bytes = stride;
+        return g.declare_buffer(d);
+    };
+    st->out_setup      = decl("bin.setup",  T * kSetupRecordDwords * 4u, kSetupRecordDwords * 4u);
+    st->out_bin_counts = decl("bin.counts", (tiles == 0 ? 1u : tiles) * 4u, 4u);
+    st->out_bins       = decl("bin.ids",    (tiles == 0 ? 1u : tiles) * st->bin_capacity * 4u, 4u);
+
+    rg::ResourceHandle aux_bind = in_aux_per_tri;
+    if (!aux_bind.is_valid())
+        aux_bind = g.declare_buffer(rg::BufferDesc{"bin.noaux", 4, 4, true});
+
+    auto push_u32 = [](rg::PassDesc& pd, cardinal::u32 x) {
+        for (int k = 0; k < 4; ++k)
+            pd.push_constants.push_back(static_cast<cardinal::u8>((x >> (8 * k)) & 0xFF));
+    };
+    {
+        rg::PassDesc pd;
+        pd.name = "TriangleBinClearPass";
+        pd.kind = rg::PassKind::Compute;
+        pd.accesses.push_back(rg::ResourceAccess{st->out_bin_counts, rg::AccessMode::Write, 0});
+        pd.record     = bin_clear_record;
+        pd.user_ctx   = st.get();
+        pd.dispatch_x = static_cast<cardinal::u32>((tiles + 63) / 64);
+        pd.compute_hlsl = TriangleBinPass::hlsl_clear_source();
+        pd.push_constant_size = 16;
+        push_u32(pd, static_cast<cardinal::u32>(tiles)); push_u32(pd, 0u); push_u32(pd, 0u); push_u32(pd, 0u);
+        g.add_pass(cardinal::move(pd));
+    }
+    {
+        rg::PassDesc pd;
+        pd.name = "TriangleBinPass";
+        pd.kind = rg::PassKind::Compute;
+        // t0 tris, t1 mat ids, t2 matrix, t3 aux (or dummy); u0 setup, u1 counts, u2 bins.
+        pd.accesses.push_back(rg::ResourceAccess{in_tris,            rg::AccessMode::Read,      0});
+        pd.accesses.push_back(rg::ResourceAccess{in_mat_ids,         rg::AccessMode::Read,      1});
+        pd.accesses.push_back(rg::ResourceAccess{in_matrix,          rg::AccessMode::Read,      2});
+        pd.accesses.push_back(rg::ResourceAccess{aux_bind,           rg::AccessMode::Read,      3});
+        pd.accesses.push_back(rg::ResourceAccess{st->out_setup,      rg::AccessMode::Write,     4});
+        pd.accesses.push_back(rg::ResourceAccess{st->out_bin_counts, rg::AccessMode::ReadWrite, 5});
+        pd.accesses.push_back(rg::ResourceAccess{st->out_bins,       rg::AccessMode::Write,     6});
+        pd.record     = bin_record;
+        pd.user_ctx   = st.get();
+        pd.dispatch_x = (triangle_count + 63) / 64;
+        pd.compute_hlsl = TriangleBinPass::hlsl_source();
+        pd.push_constant_size = 32;
+        push_u32(pd, width); push_u32(pd, height); push_u32(pd, triangle_count);
+        push_u32(pd, in_aux_per_tri.is_valid() ? 1u : 0u);
+        push_u32(pd, st->tiles_x); push_u32(pd, st->bin_capacity); push_u32(pd, 0u); push_u32(pd, 0u);
+        g.add_pass(cardinal::move(pd));
+    }
+    return st;
+}
+
+const char* TriangleBinPass::hlsl_clear_source() noexcept {
+    return
+    "// Cardinal - TriangleBinClearPass.hlsl - zero one tile count per thread.\n"
+    "RWByteAddressBuffer OutCounts : register(u0);\n"
+    "struct PushT { uint tiles; uint p0; uint p1; uint p2; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "[numthreads(64,1,1)]\n"
+    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
+    "  if (tid.x >= pc.tiles) return;\n"
+    "  OutCounts.Store(tid.x*4u, 0u);\n"
+    "}\n";
+}
+
+const char* TriangleBinPass::hlsl_source() noexcept {
+    return
+    "// Cardinal - TriangleBinPass.hlsl - one thread per triangle: project + set up\n"
+    "// once (mirrors visbuf setup op-for-op), then append the id to every 16x16\n"
+    "// tile the bbox touches. Bin order is atomic (unordered); the raster kernel\n"
+    "// breaks depth ties toward the LOWER triangle id so results stay exact.\n"
+    "ByteAddressBuffer   InTris    : register(t0);   // 9 floats per tri\n"
+    "ByteAddressBuffer   InMatIds  : register(t1);   // u32 per tri\n"
+    "ByteAddressBuffer   InMatrix  : register(t2);   // 16 floats row-major VP\n"
+    "ByteAddressBuffer   InAux     : register(t3);   // u32 per tri (or dummy)\n"
+    "RWByteAddressBuffer OutSetup  : register(u0);   // 64 B per tri\n"
+    "RWByteAddressBuffer OutCounts : register(u1);   // u32 per tile\n"
+    "RWByteAddressBuffer OutBins   : register(u2);   // cap u32 per tile\n"
+    "struct PushT { uint w; uint h; uint triCount; uint hasAux; uint tilesX; uint cap; uint p0; uint p1; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "float edge_fn(float ax, float ay, float bx, float by, float cx, float cy) {\n"
+    "  return (bx-ax)*(cy-ay) - (by-ay)*(cx-ax);\n"
+    "}\n"
+    "uint oct_pack(float3 n) {\n"
+    "  float inv_l1 = 1.0 / (abs(n.x) + abs(n.y) + abs(n.z) + 1.0e-8);\n"
+    "  float ox = n.x * inv_l1;\n"
+    "  float oz = n.z * inv_l1;\n"
+    "  if (n.y < 0.0) {\n"
+    "    float tx = (1.0 - abs(oz)) * (ox >= 0.0 ? 1.0 : -1.0);\n"
+    "    float tz = (1.0 - abs(ox)) * (oz >= 0.0 ? 1.0 : -1.0);\n"
+    "    ox = tx; oz = tz;\n"
+    "  }\n"
+    "  uint ix = uint(int(clamp(ox, -1.0, 1.0) * 32767.0)) & 0xFFFFu;\n"
+    "  uint iz = uint(int(clamp(oz, -1.0, 1.0) * 32767.0)) & 0xFFFFu;\n"
+    "  return ix | (iz << 16);\n"
+    "}\n"
+    "[numthreads(64,1,1)]\n"
+    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
+    "  uint t = tid.x; if (t >= pc.triCount) return;\n"
+    "  uint rb = t * 64u;\n"
+    "  uint b = t*36u;\n"
+    "  float3 v0 = asfloat(InTris.Load3(b+0));\n"
+    "  float3 v1 = asfloat(InTris.Load3(b+12));\n"
+    "  float3 v2 = asfloat(InTris.Load3(b+24));\n"
+    "  float4 r0 = asfloat(InMatrix.Load4(0));\n"
+    "  float4 r1 = asfloat(InMatrix.Load4(16));\n"
+    "  float4 r2 = asfloat(InMatrix.Load4(32));\n"
+    "  float4 r3 = asfloat(InMatrix.Load4(48));\n"
+    "  float hw = 0.5*(float)pc.w, hh = 0.5*(float)pc.h;\n"
+    "  precise float sx[3], sy[3], sz[3], sw[3];\n"
+    "  [unroll] for (uint k = 0u; k < 3u; ++k) {\n"
+    "    float3 p = (k == 0u) ? v0 : ((k == 1u) ? v1 : v2);\n"
+    "    precise float cw = dot(r3.xyz, p) + r3.w;\n"
+    "    sw[k] = cw;\n"
+    "    if (abs(cw) < 1.0e-8 || !isfinite(cw) || cw <= 0.0) {\n"
+    "      sx[k] = 0.0; sy[k] = 0.0; sz[k] = 1.0e30;\n"
+    "    } else {\n"
+    "      sx[k] = (dot(r0.xyz, p) + r0.w) / cw;\n"
+    "      sy[k] = (dot(r1.xyz, p) + r1.w) / cw;\n"
+    "      sz[k] = (dot(r2.xyz, p) + r2.w) / cw;\n"
+    "    }\n"
+    "  }\n"
+    "  bool reject = (sw[0] <= 0.0 || sw[1] <= 0.0 || sw[2] <= 0.0)\n"
+    "             || (sx[0] < -1.0 && sx[1] < -1.0 && sx[2] < -1.0)\n"
+    "             || (sx[0] >  1.0 && sx[1] >  1.0 && sx[2] >  1.0)\n"
+    "             || (sy[0] < -1.0 && sy[1] < -1.0 && sy[2] < -1.0)\n"
+    "             || (sy[0] >  1.0 && sy[1] >  1.0 && sy[2] >  1.0);\n"
+    "  precise float px[3], py[3], pz[3];\n"
+    "  [unroll] for (uint k2 = 0u; k2 < 3u; ++k2) {\n"
+    "    px[k2] = sx[k2]*hw + hw;\n"
+    "    py[k2] = hh - sy[k2]*hh;\n"
+    "    pz[k2] = 0.5*(sz[k2] + 1.0);\n"
+    "  }\n"
+    "  float min_x = min(px[0], min(px[1], px[2]));\n"
+    "  float max_x = max(px[0], max(px[1], px[2]));\n"
+    "  float min_y = min(py[0], min(py[1], py[2]));\n"
+    "  float max_y = max(py[0], max(py[1], py[2]));\n"
+    "  int x0 = (int)min_x;      if (x0 < 0) x0 = 0;\n"
+    "  int x1 = (int)max_x + 1;  if (x1 > (int)pc.w) x1 = (int)pc.w;\n"
+    "  int y0 = (int)min_y;      if (y0 < 0) y0 = 0;\n"
+    "  int y1 = (int)max_y + 1;  if (y1 > (int)pc.h) y1 = (int)pc.h;\n"
+    "  if (x0 >= x1 || y0 >= y1) reject = true;\n"
+    "  float area = edge_fn(px[0], py[0], px[1], py[1], px[2], py[2]);\n"
+    "  bool valid = !reject && abs(area) >= 1.0e-6;\n"
+    "  uint flags = valid ? (1u | (area > 0.0 ? 2u : 0u)) : 0u;\n"
+    "  float inv_area = valid ? 1.0 / area : 0.0;\n"
+    "  float3 nrm = cross(v1 - v0, v2 - v0);\n"
+    "  float  nl  = sqrt(dot(nrm, nrm));\n"
+    "  nrm = (nl > 1.0e-8) ? nrm / nl : float3(0, 1, 0);\n"
+    "  uint mid = valid ? InMatIds.Load(t*4u) : 0u;\n"
+    "  uint aux = valid ? ((pc.hasAux != 0u) ? InAux.Load(t*4u) : t) : 0u;\n"
+    "  if (!valid) { px[0]=px[1]=px[2]=0.0; py[0]=py[1]=py[2]=0.0; pz[0]=pz[1]=pz[2]=0.0; x0=y0=x1=y1=0; }\n"
+    "  OutSetup.Store4(rb +  0u, asuint(float4(px[0], py[0], px[1], py[1])));\n"
+    "  OutSetup.Store4(rb + 16u, asuint(float4(px[2], py[2], pz[0], pz[1])));\n"
+    "  OutSetup.Store4(rb + 32u, uint4(asuint(pz[2]), asuint(inv_area), flags, mid));\n"
+    "  OutSetup.Store4(rb + 48u, uint4(valid ? oct_pack(nrm) : 0u, aux,\n"
+    "                                 (uint)x0 | ((uint)y0 << 16), (uint)x1 | ((uint)y1 << 16)));\n"
+    "  if (!valid) return;\n"
+    "  uint tx0 = (uint)x0 / 16u, tx1 = (uint)(x1 - 1) / 16u;\n"
+    "  uint ty0 = (uint)y0 / 16u, ty1 = (uint)(y1 - 1) / 16u;\n"
+    "  bool pos = area > 0.0;\n"
+    "  float extent = (float)(pc.w + pc.h);\n"
+    "  for (uint ty = ty0; ty <= ty1; ++ty) {\n"
+    "    for (uint tx = tx0; tx <= tx1; ++tx) {\n"
+    "      // tile ∩ bbox, pixel-centre corners; conservative per-edge reject\n"
+    "      int rx0 = max((int)(tx * 16u), x0), ry0 = max((int)(ty * 16u), y0);\n"
+    "      int rx1 = min((int)((tx + 1u) * 16u), x1), ry1 = min((int)((ty + 1u) * 16u), y1);\n"
+    "      if (rx0 >= rx1 || ry0 >= ry1) continue;\n"
+    "      float cx0 = (float)rx0 + 0.5, cy0 = (float)ry0 + 0.5;\n"
+    "      float cx1 = (float)(rx1 - 1) + 0.5, cy1 = (float)(ry1 - 1) + 0.5;\n"
+    "      bool overlap = true;\n"
+    "      [unroll] for (uint e = 0u; e < 3u; ++e) {\n"
+    "        uint a = (e + 1u) % 3u, bb = (e + 2u) % 3u;\n"
+    "        float ax = px[a], ay = py[a], bx = px[bb], by = py[bb];\n"
+    "        float e00 = edge_fn(ax, ay, bx, by, cx0, cy0), e10 = edge_fn(ax, ay, bx, by, cx1, cy0);\n"
+    "        float e01 = edge_fn(ax, ay, bx, by, cx0, cy1), e11 = edge_fn(ax, ay, bx, by, cx1, cy1);\n"
+    "        float eps = 1.0e-5 * (abs(bx - ax) + abs(by - ay)) * extent;\n"
+    "        float mx = max(max(e00, e10), max(e01, e11));\n"
+    "        float mn = min(min(e00, e10), min(e01, e11));\n"
+    "        if (pos && mx < -eps) overlap = false;\n"
+    "        if (!pos && mn > eps) overlap = false;\n"
+    "      }\n"
+    "      if (!overlap) continue;\n"
+    "      uint tile = ty * pc.tilesX + tx;\n"
+    "      uint idx; OutCounts.InterlockedAdd(tile*4u, 1u, idx);\n"
+    "      if (idx < pc.cap) OutBins.Store((tile * pc.cap + idx) * 4u, t);\n"
+    "    }\n"
+    "  }\n"
+    "}\n";
+}
+
+// =============================================================================
+// VisibilityBufferPass — binned form
+// =============================================================================
+namespace {
+
+void visbuf_binned_record(rg::ExecutionContext& ec, void* uctx) noexcept {
+    if (!uctx) return;
+    auto* st = static_cast<VisibilityBufferPass::State*>(uctx);
+    const cardinal::u32 W = st->width, H = st->height;
+    if (W == 0 || H == 0) { ec.dispatch(0, 1, 1); return; }
+    const auto* setup  = static_cast<const cardinal::u32*>(ec.map_buffer_read(st->in_setup));
+    const auto* counts = static_cast<const cardinal::u32*>(ec.map_buffer_read(st->in_bin_counts));
+    const auto* bins   = static_cast<const cardinal::u32*>(ec.map_buffer_read(st->in_bins));
+    float*         depth    = static_cast<float*>        (ec.map_buffer_write(st->out_depth));
+    cardinal::u32* prim_id  = static_cast<cardinal::u32*>(ec.map_buffer_write(st->out_prim_id));
+    cardinal::u32* mat_id   = static_cast<cardinal::u32*>(ec.map_buffer_write(st->out_mat_id));
+    cardinal::u32* normal   = static_cast<cardinal::u32*>(ec.map_buffer_write(st->out_normal));
+    cardinal::u32* motion   = static_cast<cardinal::u32*>(ec.map_buffer_write(st->out_motion));
+    cardinal::u32* aux_out  = static_cast<cardinal::u32*>(ec.map_buffer_write(st->out_aux));
+    if (!depth || !prim_id || !mat_id || !normal || !motion || !aux_out) {
+        ec.dispatch(0, 1, 1); return;
+    }
+    for (cardinal::u32 i = 0; i < W * H; ++i) {
+        depth[i] = 1.0f; prim_id[i] = kInvalidPrimId; mat_id[i] = kInvalidMatId;
+        normal[i] = 0u; motion[i] = 0u; aux_out[i] = 0u;
+    }
+    st->fragments_drawn = st->triangles_offscreen = st->overflow_tiles = 0;
+    if (!setup || !counts || !bins || st->triangle_count == 0) { ec.dispatch(0, 1, 1); return; }
+    const cardinal::u32 cap = st->bin_capacity, T = st->triangle_count;
+    // Stats: setup-rejected tris (the brute record's "offscreen" count).
+    for (cardinal::u32 t = 0; t < T; ++t)
+        if (!(setup[static_cast<cardinal::usize>(t) * kSetupRecordDwords + 10] & 1u))
+            ++st->triangles_offscreen;
+    // Per pixel: test one triangle's setup record. Winner = lowest depth,
+    // ties → LOWER triangle id (== the reference's ascending strict-< scan).
+    auto test_tri = [&](cardinal::u32 t, int x, int y, cardinal::usize pix) {
+        TriSetup s;
+        load_setup(setup + static_cast<cardinal::usize>(t) * kSetupRecordDwords, s);
+        if (!(s.flags & 1u)) return;
+        if (x < s.x0 || x >= s.x1 || y < s.y0 || y >= s.y1) return;
+        const float fx = static_cast<float>(x) + 0.5f;
+        const float fy = static_cast<float>(y) + 0.5f;
+        const float w0 = edge_fn(s.px[1], s.py[1], s.px[2], s.py[2], fx, fy);
+        const float w1 = edge_fn(s.px[2], s.py[2], s.px[0], s.py[0], fx, fy);
+        const float w2 = edge_fn(s.px[0], s.py[0], s.px[1], s.py[1], fx, fy);
+        const bool inside = (s.flags & 2u)
+            ? (w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f)
+            : (w0 <= 0.0f && w1 <= 0.0f && w2 <= 0.0f);
+        if (!inside) return;
+        const float b0 = w0 * s.inv_area, b1 = w1 * s.inv_area, b2 = w2 * s.inv_area;
+        const float z  = b0 * s.pz[0] + b1 * s.pz[1] + b2 * s.pz[2];
+        if (!isf(z) || z < 0.0f || z > 1.0f) return;
+        const bool better = (z < depth[pix]) ||
+                            (z == depth[pix] && prim_id[pix] != kInvalidPrimId && t < prim_id[pix]);
+        if (!better) return;
+        if (prim_id[pix] == kInvalidPrimId) ++st->fragments_drawn;
+        depth[pix] = z; prim_id[pix] = t; mat_id[pix] = s.mid; normal[pix] = s.nrm; aux_out[pix] = s.aux;
+    };
+    const cardinal::u32 tiles_x = st->tiles_x;
+    const cardinal::u32 tiles_y = (H + kVisTileSize - 1) / kVisTileSize;
+    for (cardinal::u32 ty = 0; ty < tiles_y; ++ty)
+        for (cardinal::u32 tx = 0; tx < tiles_x; ++tx) {
+            const cardinal::u32 tile = ty * tiles_x + tx;
+            const cardinal::u32 cnt  = counts[tile];
+            const bool overflow = cnt > cap;
+            if (overflow) ++st->overflow_tiles;
+            const int px0 = static_cast<int>(tx * kVisTileSize), py0 = static_cast<int>(ty * kVisTileSize);
+            const int px1 = cardinal::min(px0 + static_cast<int>(kVisTileSize), static_cast<int>(W));
+            const int py1 = cardinal::min(py0 + static_cast<int>(kVisTileSize), static_cast<int>(H));
+            for (int y = py0; y < py1; ++y)
+                for (int x = px0; x < px1; ++x) {
+                    const cardinal::usize pix = static_cast<cardinal::usize>(y) * W + static_cast<cardinal::usize>(x);
+                    if (overflow) {
+                        for (cardinal::u32 t = 0; t < T; ++t) test_tri(t, x, y, pix);
+                    } else {
+                        const cardinal::u32* list = bins + static_cast<cardinal::usize>(tile) * cap;
+                        for (cardinal::u32 i = 0; i < cnt; ++i)
+                            if (list[i] < T) test_tri(list[i], x, y, pix);
+                    }
+                }
+        }
+    ec.dispatch((W + 7) / 8, (H + 7) / 8, 1);
+}
+
+}  // namespace
+
+cardinal::shared_ptr<VisibilityBufferPass::State> VisibilityBufferPass::add_to_graph(
+    rg::Graph& g,
+    const TriangleBinPass::State& bins,
+    rg::ResourceHandle in_aux_per_tri,
+    cardinal::u32 width, cardinal::u32 height,
+    cardinal::u32 triangle_count)
+{
+    auto st = cardinal::shared_ptr<State>(new State());
+    st->in_tris        = bins.in_tris;
+    st->in_mat_ids     = bins.in_mat_ids;
+    st->in_matrix      = bins.in_matrix;
+    st->in_aux_per_tri = in_aux_per_tri;
+    st->in_setup       = bins.out_setup;
+    st->in_bin_counts  = bins.out_bin_counts;
+    st->in_bins        = bins.out_bins;
+    st->width          = width;
+    st->height         = height;
+    st->triangle_count = triangle_count;
+    st->bin_capacity   = bins.bin_capacity;
+    st->tiles_x        = bins.tiles_x;
+    st->binned         = true;
+    auto decl = [&](const char* nm, cardinal::usize bytes, cardinal::u32 stride) {
+        rg::BufferDesc d; d.name = nm; d.size_bytes = bytes; d.stride_bytes = stride;
+        return g.declare_buffer(d);
+    };
+    const cardinal::usize px = static_cast<cardinal::usize>(width) * height;
+    st->out_depth   = decl("vbuf.depth",   px * sizeof(float),         sizeof(float));
+    st->out_prim_id = decl("vbuf.prim",    px * sizeof(cardinal::u32), sizeof(cardinal::u32));
+    st->out_mat_id  = decl("vbuf.mat",     px * sizeof(cardinal::u32), sizeof(cardinal::u32));
+    st->out_normal  = decl("vbuf.normal",  px * sizeof(cardinal::u32), sizeof(cardinal::u32));
+    st->out_motion  = decl("vbuf.motion",  px * sizeof(cardinal::u32), sizeof(cardinal::u32));
+    st->out_aux     = decl("vbuf.aux",     px * sizeof(cardinal::u32), sizeof(cardinal::u32));
+    rg::PassDesc pd;
+    pd.name = "VisibilityBufferPass";
+    pd.kind = rg::PassKind::Compute;
+    // t0 setup, t1 counts, t2 bins; u0..u5 the six channels.
+    pd.accesses.push_back(rg::ResourceAccess{bins.out_setup,      rg::AccessMode::Read,  0});
+    pd.accesses.push_back(rg::ResourceAccess{bins.out_bin_counts, rg::AccessMode::Read,  1});
+    pd.accesses.push_back(rg::ResourceAccess{bins.out_bins,       rg::AccessMode::Read,  2});
+    pd.accesses.push_back(rg::ResourceAccess{st->out_depth,   rg::AccessMode::Write, 3});
+    pd.accesses.push_back(rg::ResourceAccess{st->out_prim_id, rg::AccessMode::Write, 4});
+    pd.accesses.push_back(rg::ResourceAccess{st->out_mat_id,  rg::AccessMode::Write, 5});
+    pd.accesses.push_back(rg::ResourceAccess{st->out_normal,  rg::AccessMode::Write, 6});
+    pd.accesses.push_back(rg::ResourceAccess{st->out_motion,  rg::AccessMode::Write, 7});
+    pd.accesses.push_back(rg::ResourceAccess{st->out_aux,     rg::AccessMode::Write, 8});
+    pd.record   = visbuf_binned_record;
+    pd.user_ctx = st.get();
+    pd.dispatch_x = (width  + 7) / 8;
+    pd.dispatch_y = (height + 7) / 8;
+    pd.dispatch_z = 1;
+    pd.compute_hlsl = VisibilityBufferPass::hlsl_source_binned();
+    pd.push_constant_size = 32;
+    auto push_u32 = [&pd](cardinal::u32 x) {
+        for (int k = 0; k < 4; ++k)
+            pd.push_constants.push_back(static_cast<cardinal::u8>((x >> (8 * k)) & 0xFF));
+    };
+    push_u32(width); push_u32(height); push_u32(triangle_count); push_u32(bins.tiles_x);
+    push_u32(bins.bin_capacity); push_u32(0u); push_u32(0u); push_u32(0u);
+    g.add_pass(cardinal::move(pd));
+    return st;
+}
+
+const char* VisibilityBufferPass::hlsl_source_binned() noexcept {
+    // One thread per pixel; an 8x8 group sits inside one 16x16 bin tile, so
+    // the whole group shares the tile's list. Each triangle is tested from
+    // its precomputed setup record (no per-pixel projection). Winner rule:
+    // lower depth, then LOWER triangle id (bins are atomically unordered) —
+    // identical to the reference's ascending strict-< scan. A tile whose
+    // count exceeded capacity walks every setup record instead.
+    return
+    "// Cardinal - VisibilityBufferPass (binned).hlsl - per-pixel raster over the\n"
+    "// pixel's 16x16 tile bin, from TriangleBinPass setup records.\n"
+    "ByteAddressBuffer   InSetup  : register(t0);   // 64 B per tri\n"
+    "ByteAddressBuffer   InCounts : register(t1);   // u32 per tile\n"
+    "ByteAddressBuffer   InBins   : register(t2);   // cap u32 per tile\n"
+    "RWByteAddressBuffer OutDepth : register(u0);\n"
+    "RWByteAddressBuffer OutPrim  : register(u1);\n"
+    "RWByteAddressBuffer OutMat   : register(u2);\n"
+    "RWByteAddressBuffer OutNrm   : register(u3);\n"
+    "RWByteAddressBuffer OutMV    : register(u4);\n"
+    "RWByteAddressBuffer OutAux   : register(u5);\n"
+    "struct PushT { uint w; uint h; uint triCount; uint tilesX; uint cap; uint p0; uint p1; uint p2; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "float edge_fn(float ax, float ay, float bx, float by, float cx, float cy) {\n"
+    "  return (bx-ax)*(cy-ay) - (by-ay)*(cx-ax);\n"
+    "}\n"
+    "void test_tri(uint t, int x, int y, float fx, float fy,\n"
+    "              inout float bestZ, inout uint bestPrim, inout uint bestMat,\n"
+    "              inout uint bestNrm, inout uint bestAux) {\n"
+    "  uint rb = t * 64u;\n"
+    "  uint4 q2 = InSetup.Load4(rb + 32u);\n"
+    "  uint flags = q2.z;\n"
+    "  if ((flags & 1u) == 0u) return;\n"
+    "  uint4 q3 = InSetup.Load4(rb + 48u);\n"
+    "  int x0 = (int)(q3.z & 0xFFFFu), y0 = (int)(q3.z >> 16);\n"
+    "  int x1 = (int)(q3.w & 0xFFFFu), y1 = (int)(q3.w >> 16);\n"
+    "  if (x < x0 || x >= x1 || y < y0 || y >= y1) return;\n"
+    "  float4 q0 = asfloat(InSetup.Load4(rb));\n"
+    "  float4 q1 = asfloat(InSetup.Load4(rb + 16u));\n"
+    "  float px0 = q0.x, py0 = q0.y, px1 = q0.z, py1 = q0.w;\n"
+    "  float px2 = q1.x, py2 = q1.y, pz0 = q1.z, pz1 = q1.w;\n"
+    "  float pz2 = asfloat(q2.x), inv_area = asfloat(q2.y);\n"
+    "  float w0 = edge_fn(px1, py1, px2, py2, fx, fy);\n"
+    "  float w1 = edge_fn(px2, py2, px0, py0, fx, fy);\n"
+    "  float w2 = edge_fn(px0, py0, px1, py1, fx, fy);\n"
+    "  bool inside = ((flags & 2u) != 0u) ? (w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0)\n"
+    "                                     : (w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0);\n"
+    "  if (!inside) return;\n"
+    "  precise float z = (w0*inv_area)*pz0 + (w1*inv_area)*pz1 + (w2*inv_area)*pz2;\n"
+    "  if (!isfinite(z) || z < 0.0 || z > 1.0) return;\n"
+    "  bool better = (z < bestZ) || (z == bestZ && bestPrim != 0xFFFFFFFFu && t < bestPrim);\n"
+    "  if (!better) return;\n"
+    "  bestZ = z; bestPrim = t; bestMat = q2.w; bestNrm = q3.x; bestAux = q3.y;\n"
+    "}\n"
+    "[numthreads(8,8,1)]\n"
+    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
+    "  if (tid.x >= pc.w || tid.y >= pc.h) return;\n"
+    "  uint pix = tid.y*pc.w + tid.x;\n"
+    "  float bestZ = 1.0;\n"
+    "  uint bestPrim = 0xFFFFFFFFu, bestMat = 0xFFFFFFFFu, bestNrm = 0u, bestAux = 0u;\n"
+    "  float fx = (float)tid.x + 0.5, fy = (float)tid.y + 0.5;\n"
+    "  int x = (int)tid.x, y = (int)tid.y;\n"
+    "  uint tile = (tid.y / 16u) * pc.tilesX + (tid.x / 16u);\n"
+    "  uint cnt = InCounts.Load(tile*4u);\n"
+    "  if (cnt > pc.cap) {\n"
+    "    [loop] for (uint t = 0u; t < pc.triCount; ++t)\n"
+    "      test_tri(t, x, y, fx, fy, bestZ, bestPrim, bestMat, bestNrm, bestAux);\n"
+    "  } else {\n"
+    "    uint base = tile * pc.cap;\n"
+    "    [loop] for (uint i = 0u; i < cnt; ++i) {\n"
+    "      uint t = InBins.Load((base + i)*4u);\n"
+    "      if (t < pc.triCount)\n"
+    "        test_tri(t, x, y, fx, fy, bestZ, bestPrim, bestMat, bestNrm, bestAux);\n"
+    "    }\n"
     "  }\n"
     "  OutDepth.Store(pix*4u, asuint(bestZ));\n"
     "  OutPrim.Store (pix*4u, bestPrim);\n"
