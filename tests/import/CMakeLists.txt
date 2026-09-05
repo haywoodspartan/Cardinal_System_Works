@@ -8,6 +8,7 @@
 add_executable(Cardinal_Test_Import main.cpp)
 target_link_libraries(Cardinal_Test_Import PRIVATE
     cardinal::import
+    cardinal::asset          # to_asset bridge (header-only) — skinned import → MeshAsset
     cardinal::core
     cardinal::compile_flags)
 set_target_properties(Cardinal_Test_Import PROPERTIES FOLDER tests)

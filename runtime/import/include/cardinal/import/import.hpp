@@ -28,6 +28,7 @@
 #include <cardinal/core/types.hpp>        // foundation: string / u32 / …
 #include <cardinal/core/std/containers.hpp>   // cardinal::vector
 #include <cardinal/scene/math.hpp>
+#include <cardinal/scene/skin.hpp>      // Influence — shared skinning vocabulary
 
 // NOTE: cardinal::import is deliberately core+scene only (NOT asset).
 // asset depends on cook, so an import→asset link would form an
@@ -58,6 +59,27 @@ struct ImportMesh {
     cardinal::vector<Vec2>                  uvs;          // empty ⇒ none
     cardinal::vector<u32>                   indices;      // triangle list
     int                                material{-1}; // into ImportScene.materials
+
+    // Skinning (empty ⇒ rigid). One Influence per vertex (parallel to
+    // `positions`); joint indices refer to ImportScene.skins[skin] joints,
+    // which the importer has ALREADY put parent-first and weight-normalised,
+    // so this maps 1:1 onto scene::skin without further fix-up.
+    cardinal::vector<cardinal::scene::skin::Influence> influences;
+    int                                skin{-1};     // into ImportScene.skins
+};
+
+// A skin = the joint set one or more meshes deform against. Joints are
+// listed PARENT-FIRST (topological), parents resolved WITHIN the joint set
+// (non-joint nodes threaded between two joints have their transforms folded
+// into the child's local_bind), inverse binds per joint (derived from the
+// bind hierarchy when the source ships none). Mirrors scene::skin::Skeleton
+// field-for-field; the to_asset bridge is a flat copy.
+struct ImportSkin {
+    cardinal::string                        name;
+    cardinal::vector<int>                   joint_nodes;    // ImportScene.nodes index per joint
+    cardinal::vector<i32>                   joint_parents;  // index into joint_nodes; -1 = root
+    cardinal::vector<cardinal::scene::Mat4> local_bind;     // per joint, parent-relative
+    cardinal::vector<cardinal::scene::Mat4> inverse_bind;   // per joint
 };
 
 // Metallic-roughness PBR (maps 1:1 onto asset::MaterialAsset).
@@ -100,12 +122,14 @@ struct ImportNode {
     cardinal::scene::Mat4 transform{cardinal::scene::Mat4::identity()};
     cardinal::vector<int>      meshes;     // indices into ImportScene.meshes
     cardinal::vector<int>      children;   // indices into ImportScene.nodes
+    int                        skin{-1};   // ImportScene.skins index this node deforms with
 };
 
 struct ImportScene {
     cardinal::vector<ImportMesh>     meshes;
     cardinal::vector<ImportMaterial> materials;
     cardinal::vector<ImportNode>     nodes;
+    cardinal::vector<ImportSkin>     skins;       // skeletons (see ImportSkin)
     cardinal::vector<int>            roots;       // root node indices
     cardinal::string                 source_format;
     cardinal::string                 diagnostics; // human-readable summary

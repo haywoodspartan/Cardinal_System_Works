@@ -399,6 +399,33 @@ ImportScene import_gltf(const cardinal::string& path, cardinal::string* error) {
                         for (cardinal::size_t i = 0; i + 2 < v.size(); i += nc)
                             im.colors.push_back({v[i], v[i+1], v[i+2]});
                 }
+                // Skinning: JOINTS_0 (u8/u16 VEC4) + WEIGHTS_0 (float or
+                // normalised u8/u16 VEC4). Kept only when BOTH are present
+                // and cover every vertex; joint indices are remapped to the
+                // skin's parent-first order + weights normalised once the
+                // skins are parsed below.
+                if (const JVal* aj = attr->find("JOINTS_0")) {
+                    const JVal* aw = attr->find("WEIGHTS_0");
+                    int ncj = 0, ncw = 0;
+                    auto jv = read_accessor(g, aj->inum(-1), ncj);
+                    cardinal::vector<float> wv;
+                    if (aw) wv = read_accessor(g, aw->inum(-1), ncw);
+                    const cardinal::size_t vcount = im.positions.size();
+                    if (ncj == 4 && ncw == 4 && vcount > 0 &&
+                        jv.size() >= vcount * 4 && wv.size() >= vcount * 4) {
+                        im.influences.resize(vcount);
+                        for (cardinal::size_t vi = 0; vi < vcount; ++vi) {
+                            cardinal::scene::skin::Influence f;
+                            for (int k = 0; k < 4; ++k) {
+                                const float jf = jv[vi * 4 + k];
+                                f.joint[k]  = (jf >= 0.0f && jf < 65535.0f)
+                                            ? static_cast<u16>(jf + 0.5f) : u16{0};
+                                f.weight[k] = wv[vi * 4 + k];
+                            }
+                            im.influences[vi] = f;
+                        }
+                    }
+                }
                 if (const JVal* idx = pr.find("indices")) {
                     auto v = read_accessor(g, idx->inum(-1), nc);
                     const u32 vcount = static_cast<u32>(im.positions.size());
@@ -451,7 +478,140 @@ ImportScene import_gltf(const cardinal::string& path, cardinal::string* error) {
             }
             if (const JVal* ch = nd.find("children"))
                 for (const JVal& c : ch->arr) in.children.push_back(c.inum(-1));
+            if (const JVal* sk = nd.find("skin")) in.skin = sk->inum(-1);
             scene.nodes.push_back(cardinal::move(in));
+        }
+    }
+
+    // Skins → parent-first joint lists (see ImportSkin). glTF lists joints in
+    // arbitrary order and may thread non-joint nodes between two joints. We
+    // (1) sort joints by hierarchy depth (stable, so a parent always lands
+    // before its children), (2) resolve each joint's nearest JOINT ancestor
+    // as its parent, folding any intermediate non-joint transforms into the
+    // joint's local_bind, (3) take inverseBindMatrices when present or derive
+    // them from the bind hierarchy, and (4) remap + normalise every
+    // referencing mesh's influences to the new order.
+    cardinal::vector<cardinal::vector<int>> skin_remaps;   // per skin: raw → sorted
+    if (const JVal* skins = g.doc.find("skins")) {
+        const int node_n = static_cast<int>(scene.nodes.size());
+        cardinal::vector<int> parent_of(scene.nodes.size(), -1);
+        for (int ni = 0; ni < node_n; ++ni)
+            for (int c : scene.nodes[static_cast<cardinal::size_t>(ni)].children)
+                if (c >= 0 && c < node_n && c != ni) parent_of[static_cast<cardinal::size_t>(c)] = ni;
+        auto depth_of = [&](int n) {
+            int d = 0;
+            while (n >= 0 && n < node_n && parent_of[static_cast<cardinal::size_t>(n)] >= 0 && d < node_n) {
+                n = parent_of[static_cast<cardinal::size_t>(n)]; ++d;
+            }
+            return d;
+        };
+        for (const JVal& sk : skins->arr) {
+            ImportSkin is;
+            is.name = sk.find("name") ? sk.find("name")->str() : "skin";
+            cardinal::vector<int> raw_joints;
+            if (const JVal* js = sk.find("joints"))
+                for (const JVal& j : js->arr) {
+                    const int n = j.inum(-1);
+                    raw_joints.push_back((n >= 0 && n < node_n) ? n : -1);
+                }
+            const int J = static_cast<int>(raw_joints.size());
+            int nc_ibm = 0;
+            cardinal::vector<float> ibm;
+            if (const JVal* a = sk.find("inverseBindMatrices"))
+                ibm = read_accessor(g, a->inum(-1), nc_ibm);
+            const bool has_ibm = (nc_ibm == 16 &&
+                                  ibm.size() >= static_cast<cardinal::size_t>(J) * 16u);
+
+            // (1) stable sort by depth.
+            cardinal::vector<int> order(static_cast<cardinal::size_t>(J));
+            cardinal::vector<int> depth(static_cast<cardinal::size_t>(J));
+            for (int i = 0; i < J; ++i) {
+                order[static_cast<cardinal::size_t>(i)] = i;
+                depth[static_cast<cardinal::size_t>(i)] = depth_of(raw_joints[static_cast<cardinal::size_t>(i)]);
+            }
+            for (int i = 1; i < J; ++i) {
+                const int k = order[static_cast<cardinal::size_t>(i)];
+                int p = i - 1;
+                while (p >= 0 && depth[static_cast<cardinal::size_t>(order[static_cast<cardinal::size_t>(p)])]
+                                 > depth[static_cast<cardinal::size_t>(k)]) {
+                    order[static_cast<cardinal::size_t>(p + 1)] = order[static_cast<cardinal::size_t>(p)];
+                    --p;
+                }
+                order[static_cast<cardinal::size_t>(p + 1)] = k;
+            }
+            cardinal::vector<int> remap(static_cast<cardinal::size_t>(J), 0);   // raw → sorted
+            for (int ni = 0; ni < J; ++ni) remap[static_cast<cardinal::size_t>(order[static_cast<cardinal::size_t>(ni)])] = ni;
+            cardinal::vector<int> node_joint(scene.nodes.size(), -1);        // node → raw joint
+            for (int i = 0; i < J; ++i)
+                if (raw_joints[static_cast<cardinal::size_t>(i)] >= 0)
+                    node_joint[static_cast<cardinal::size_t>(raw_joints[static_cast<cardinal::size_t>(i)])] = i;
+
+            // (2)+(3) per joint in sorted order.
+            for (int ni = 0; ni < J; ++ni) {
+                const int ri   = order[static_cast<cardinal::size_t>(ni)];
+                const int node = raw_joints[static_cast<cardinal::size_t>(ri)];
+                is.joint_nodes.push_back(node);
+                Mat4 local = (node >= 0) ? scene.nodes[static_cast<cardinal::size_t>(node)].transform
+                                         : Mat4::identity();
+                int parent_joint = -1;
+                int p = (node >= 0) ? parent_of[static_cast<cardinal::size_t>(node)] : -1;
+                int guard = 0;
+                while (p >= 0 && guard++ < node_n) {
+                    const int pj = node_joint[static_cast<cardinal::size_t>(p)];
+                    if (pj >= 0) { parent_joint = remap[static_cast<cardinal::size_t>(pj)]; break; }
+                    local = scene.nodes[static_cast<cardinal::size_t>(p)].transform * local;   // fold non-joint
+                    p = parent_of[static_cast<cardinal::size_t>(p)];
+                }
+                if (parent_joint >= ni) parent_joint = -1;    // defensive: keep topological
+                is.joint_parents.push_back(parent_joint);
+                is.local_bind.push_back(local);
+                Mat4 inv = Mat4::identity();
+                if (has_ibm)
+                    for (int c = 0; c < 4; ++c)
+                        for (int r = 0; r < 4; ++r)
+                            inv.m[c][r] = ibm[static_cast<cardinal::size_t>(ri) * 16u +
+                                              static_cast<cardinal::size_t>(c * 4 + r)];
+                is.inverse_bind.push_back(inv);
+            }
+            if (!has_ibm && J > 0) {
+                cardinal::scene::skin::Skeleton tmp;
+                for (int i = 0; i < J; ++i) {
+                    cardinal::scene::skin::Joint j;
+                    j.parent     = is.joint_parents[static_cast<cardinal::size_t>(i)];
+                    j.local_bind = is.local_bind[static_cast<cardinal::size_t>(i)];
+                    tmp.joints.push_back(j);
+                }
+                tmp.derive_inverse_bind();
+                for (int i = 0; i < J; ++i)
+                    is.inverse_bind[static_cast<cardinal::size_t>(i)] = tmp.joints[static_cast<cardinal::size_t>(i)].inverse_bind;
+            }
+            skin_remaps.push_back(cardinal::move(remap));
+            scene.skins.push_back(cardinal::move(is));
+        }
+    }
+    // Attach skins to meshes through the nodes that instance them (first
+    // skinned instance wins), then (4) remap + normalise the influences.
+    for (const auto& nd : scene.nodes) {
+        if (nd.skin < 0 || nd.skin >= static_cast<int>(scene.skins.size())) continue;
+        for (int mi : nd.meshes)
+            if (mi >= 0 && mi < static_cast<int>(scene.meshes.size()) &&
+                scene.meshes[static_cast<cardinal::size_t>(mi)].skin < 0)
+                scene.meshes[static_cast<cardinal::size_t>(mi)].skin = nd.skin;
+    }
+    for (auto& m : scene.meshes) {
+        if (m.influences.empty()) continue;
+        if (m.skin < 0 || m.influences.size() != m.positions.size()) {
+            m.influences.clear();                 // orphan / partial weights → rigid
+            continue;
+        }
+        const auto& remap = skin_remaps[static_cast<cardinal::size_t>(m.skin)];
+        for (auto& f : m.influences) {
+            for (int k = 0; k < 4; ++k) {
+                const u16 j = f.joint[k];
+                if (j < remap.size()) f.joint[k] = static_cast<u16>(remap[j]);
+                else { f.joint[k] = 0; f.weight[k] = 0.0f; }   // bad joint → drop weight
+            }
+            f = cardinal::scene::skin::normalized(f);
         }
     }
     if (const JVal* scs = g.doc.find("scenes")) {
@@ -471,6 +631,7 @@ ImportScene import_gltf(const cardinal::string& path, cardinal::string* error) {
     d << "glTF: " << scene.meshes.size() << " mesh(es), "
       << scene.materials.size() << " material(s), "
       << scene.nodes.size() << " node(s), "
+      << scene.skins.size() << " skin(s), "
       << scene.total_vertices() << " verts, "
       << scene.total_triangles() << " tris";
     scene.diagnostics = d.str();

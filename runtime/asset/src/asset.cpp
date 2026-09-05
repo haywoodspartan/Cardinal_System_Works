@@ -79,12 +79,35 @@ bool decode_texture(const cardinal::vector<u8>& bytes, TextureAsset& out) {
 }
 
 // Mesh codec. v2 adds a per-vertex UV (texcoord). To stay backward-compatible
-// with v1 cooked meshes (which begin with the vertex count), v2 is flagged by a
-// 0xFFFFFFFF sentinel + version word up front — a count no real mesh can have.
+// with v1 cooked meshes (which begin with the vertex count), v2+ is flagged by
+// a 0xFFFFFFFF sentinel + version word up front — a count no real mesh can
+// have. v3 appends a skin block after the indices:
+//   u32 influence_count (0 or == vertex_count)
+//     per influence: u32 (joint0 | joint1<<16), u32 (joint2 | joint3<<16), 4×f32 weights
+//   u32 joint_count
+//     per joint: u32 name_len + bytes, u32 parent (i32 bit-cast), 16×f32 local_bind
+//                (column-major), 16×f32 inverse_bind
+// v2 readers never see v3 blobs (the cooker rewrites); a v3 reader accepts
+// v1 / v2 blobs as rigid meshes.
+namespace {
+constexpr u32 kMeshCodecVersion = 3u;
+
+void wr_mat4(cardinal::vector<u8>& o, const cardinal::scene::Mat4& m) {
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r) wr_f(o, m.m[c][r]);
+}
+cardinal::scene::Mat4 rd_mat4(const u8* p) {
+    cardinal::scene::Mat4 m;
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r) m.m[c][r] = rd_f(p + (c * 4 + r) * 4);
+    return m;
+}
+}  // namespace
+
 cardinal::vector<u8> encode_mesh(const MeshAsset& m) {
     cardinal::vector<u8> o;
-    wr_u32(o, 0xFFFFFFFFu);                 // v2 marker (v1 started with the count)
-    wr_u32(o, 2u);                          // version
+    wr_u32(o, 0xFFFFFFFFu);                 // marker (v1 started with the count)
+    wr_u32(o, kMeshCodecVersion);           // version
     wr_u32(o, static_cast<u32>(m.vertices.size()));
     for (const auto& v : m.vertices) {
         wr_f(o, v.position.x); wr_f(o, v.position.y); wr_f(o, v.position.z);
@@ -94,18 +117,41 @@ cardinal::vector<u8> encode_mesh(const MeshAsset& m) {
     }
     wr_u32(o, static_cast<u32>(m.indices.size()));
     for (u32 i : m.indices) wr_u32(o, i);
+
+    // v3 skin block. Written only when it's coherent (parallel to vertices
+    // + a skeleton); otherwise zero counts = rigid.
+    const bool skinned = m.skinned();
+    wr_u32(o, skinned ? static_cast<u32>(m.influences.size()) : 0u);
+    if (skinned) {
+        for (const auto& f : m.influences) {
+            wr_u32(o, static_cast<u32>(f.joint[0]) | (static_cast<u32>(f.joint[1]) << 16));
+            wr_u32(o, static_cast<u32>(f.joint[2]) | (static_cast<u32>(f.joint[3]) << 16));
+            for (int k = 0; k < 4; ++k) wr_f(o, f.weight[k]);
+        }
+    }
+    wr_u32(o, skinned ? static_cast<u32>(m.skeleton.joints.size()) : 0u);
+    if (skinned) {
+        for (const auto& j : m.skeleton.joints) {
+            wr_u32(o, static_cast<u32>(j.name.size()));
+            wr_bytes(o, reinterpret_cast<const u8*>(j.name.data()), j.name.size());
+            wr_u32(o, static_cast<u32>(j.parent));
+            wr_mat4(o, j.local_bind);
+            wr_mat4(o, j.inverse_bind);
+        }
+    }
     return o;
 }
 
 bool decode_mesh(const cardinal::vector<u8>& bytes, MeshAsset& out) {
     if (bytes.size() < 4) return false;
     usize off = 0;
-    bool v2 = false;
-    if (rd_u32(bytes.data()) == 0xFFFFFFFFu) {   // v2: marker + version + count
+    u32   ver = 1u;
+    if (rd_u32(bytes.data()) == 0xFFFFFFFFu) {   // v2+: marker + version + count
         if (bytes.size() < 12) return false;
-        v2  = true;
+        ver = rd_u32(bytes.data() + 4);
         off = 8;                                 // skip marker + version word
     }
+    const bool  v2       = ver >= 2u;
     const u32   vc       = rd_u32(bytes.data() + off); off += 4;
     const usize per_vert = v2 ? (11u * 4u) : (9u * 4u);
     if (off + static_cast<usize>(vc) * per_vert + 4 > bytes.size()) return false;
@@ -136,6 +182,49 @@ bool decode_mesh(const cardinal::vector<u8>& bytes, MeshAsset& out) {
     if (off + static_cast<usize>(ic) * 4u > bytes.size()) return false;
     out.indices.resize(ic);
     for (u32 i = 0; i < ic; ++i) out.indices[i] = rd_u32(bytes.data() + off + i * 4);
+    off += static_cast<usize>(ic) * 4u;
+
+    out.influences.clear();
+    out.skeleton.joints.clear();
+    if (ver < 3u) return true;                    // rigid legacy blob
+
+    // ---- v3 skin block (bounds-checked field by field; truncated = corrupt) --
+    if (off + 4 > bytes.size()) return false;
+    const u32 fc = rd_u32(bytes.data() + off); off += 4;
+    if (off + static_cast<usize>(fc) * 24u > bytes.size()) return false;
+    cardinal::vector<cardinal::scene::skin::Influence> infl(fc);
+    for (u32 i = 0; i < fc; ++i) {
+        const u8* p = bytes.data() + off;
+        const u32 j01 = rd_u32(p), j23 = rd_u32(p + 4);
+        auto& f = infl[i];
+        f.joint[0] = static_cast<u16>(j01 & 0xFFFFu); f.joint[1] = static_cast<u16>(j01 >> 16);
+        f.joint[2] = static_cast<u16>(j23 & 0xFFFFu); f.joint[3] = static_cast<u16>(j23 >> 16);
+        for (int k = 0; k < 4; ++k) f.weight[k] = rd_f(p + 8 + k * 4);
+        off += 24;
+    }
+    if (off + 4 > bytes.size()) return false;
+    const u32 jc = rd_u32(bytes.data() + off); off += 4;
+    if (jc > 65535u) return false;
+    cardinal::scene::skin::Skeleton skel;
+    skel.joints.reserve(jc);
+    for (u32 i = 0; i < jc; ++i) {
+        if (off + 4 > bytes.size()) return false;
+        const u32 nl = rd_u32(bytes.data() + off); off += 4;
+        // 64-bit arithmetic: nl is untrusted.
+        if (off + static_cast<usize>(nl) + 4u + 128u > bytes.size()) return false;
+        cardinal::scene::skin::Joint j;
+        j.name.assign(reinterpret_cast<const char*>(bytes.data() + off), nl); off += nl;
+        j.parent = static_cast<i32>(rd_u32(bytes.data() + off)); off += 4;
+        j.local_bind   = rd_mat4(bytes.data() + off); off += 64;
+        j.inverse_bind = rd_mat4(bytes.data() + off); off += 64;
+        skel.joints.push_back(cardinal::move(j));
+    }
+    // Coherence: influences must be parallel to vertices and the skeleton
+    // parent-first; anything else decodes as a RIGID mesh (never a crash).
+    if (fc == vc && jc > 0 && skel.validate()) {
+        out.influences = cardinal::move(infl);
+        out.skeleton   = cardinal::move(skel);
+    }
     return true;
 }
 

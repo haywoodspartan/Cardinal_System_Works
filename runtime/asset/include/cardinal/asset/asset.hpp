@@ -16,6 +16,7 @@
 #include <cardinal/core/std/containers.hpp>   // unordered_map/vector
 #include <cardinal/cook/cook.hpp>
 #include <cardinal/scene/math.hpp>
+#include <cardinal/scene/skin.hpp>       // Influence / Skeleton — shared skinning types
 
 namespace cardinal::pack { class Archive; }
 
@@ -42,6 +43,17 @@ struct MeshVertex {
 struct MeshAsset {
     cardinal::vector<MeshVertex> vertices;
     cardinal::vector<u32>        indices;     // triangle list
+
+    // Skinning (both empty ⇒ rigid). `influences` is parallel to `vertices`
+    // (indexed geometry: de-index the two together); `skeleton` joints are
+    // parent-first. These are the scene::skin types verbatim so import,
+    // codec, Mesh::set_skin and the renderer never re-declare them.
+    cardinal::vector<cardinal::scene::skin::Influence> influences;
+    cardinal::scene::skin::Skeleton                    skeleton;
+    bool skinned() const noexcept {
+        return !influences.empty() && influences.size() == vertices.size()
+            && !skeleton.joints.empty();
+    }
 };
 
 struct ShaderAsset {

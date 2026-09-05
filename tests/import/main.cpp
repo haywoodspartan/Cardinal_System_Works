@@ -17,6 +17,9 @@
 #include <cardinal/core/diag/log.hpp>
 
 #include <cstring>
+#include <cardinal/import/to_asset.hpp>
+#include <cardinal/scene/skin.hpp>
+
 #include <filesystem>
 #include <fstream>
 #include <vector>
@@ -377,6 +380,109 @@ void test_gltf_triangle(const std::filesystem::path& dir) {
         CHECK(approx(P[2].y, 1.0f, 1e-5f));
     }
     CHECK(s.total_triangles() == 1u);
+}
+
+// ---- glTF skinned: JOINTS_0/WEIGHTS_0 + skins → parent-first skeleton ---
+// The skin lists its joints CHILD-FIRST (knee, hip) to prove the importer
+// re-sorts parent-first and remaps every vertex's joint indices to match.
+void test_gltf_skinned(const std::filesystem::path& dir) {
+    std::vector<unsigned char> bytes;
+    auto put_f = [&](float f) { unsigned char b[4]; std::memcpy(b, &f, 4); bytes.insert(bytes.end(), b, b + 4); };
+    auto put_ident16 = [&](float y_translation) {
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r) {
+                float v = (c == r) ? 1.0f : 0.0f;
+                if (c == 3 && r == 1) v = y_translation;   // column-major m[3][1]
+                put_f(v);
+            }
+    };
+    // POSITION ×3 @0 (36 B)
+    put_f(0.0f); put_f(0.0f); put_f(0.0f);
+    put_f(1.0f); put_f(0.0f); put_f(0.0f);
+    put_f(0.0f); put_f(1.0f); put_f(0.0f);
+    // JOINTS_0 u8 VEC4 ×3 @36 (12 B) — glTF skin order: 0 = knee, 1 = hip
+    const unsigned char joints[12] = { 0,0,0,0,  1,0,0,0,  0,1,0,0 };
+    bytes.insert(bytes.end(), joints, joints + 12);
+    // WEIGHTS_0 float VEC4 ×3 @48 (48 B)
+    put_f(1.0f); put_f(0.0f); put_f(0.0f); put_f(0.0f);
+    put_f(1.0f); put_f(0.0f); put_f(0.0f); put_f(0.0f);
+    put_f(0.5f); put_f(0.5f); put_f(0.0f); put_f(0.0f);
+    // inverseBindMatrices MAT4 ×2 @96 (128 B): knee (T -0.5 y), hip (T -1 y)
+    put_ident16(-0.5f);
+    put_ident16(-1.0f);
+    CHECK(bytes.size() == sz(224));
+    const cardinal::string uri = "data:application/octet-stream;base64," + b64(bytes);
+
+    cardinal::string json =
+        "{\"asset\":{\"version\":\"2.0\"},"
+        "\"buffers\":[{\"byteLength\":224,\"uri\":\"" + uri + "\"}],"
+        "\"bufferViews\":["
+          "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+          "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12},"
+          "{\"buffer\":0,\"byteOffset\":48,\"byteLength\":48},"
+          "{\"buffer\":0,\"byteOffset\":96,\"byteLength\":128}],"
+        "\"accessors\":["
+          "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+          "{\"bufferView\":1,\"componentType\":5121,\"count\":3,\"type\":\"VEC4\"},"
+          "{\"bufferView\":2,\"componentType\":5126,\"count\":3,\"type\":\"VEC4\"},"
+          "{\"bufferView\":3,\"componentType\":5126,\"count\":2,\"type\":\"MAT4\"}],"
+        "\"meshes\":[{\"name\":\"body\",\"primitives\":[{\"attributes\":"
+          "{\"POSITION\":0,\"JOINTS_0\":1,\"WEIGHTS_0\":2}}]}],"
+        "\"skins\":[{\"name\":\"rig\",\"joints\":[2,1],\"inverseBindMatrices\":3,\"skeleton\":1}],"
+        "\"nodes\":["
+          "{\"name\":\"body\",\"mesh\":0,\"skin\":0},"
+          "{\"name\":\"hip\",\"translation\":[0,1,0],\"children\":[2]},"
+          "{\"name\":\"knee\",\"translation\":[0,-0.5,0]}],"
+        "\"scenes\":[{\"nodes\":[0,1]}],\"scene\":0}";
+
+    const auto p = dir / "skinned.gltf";
+    write_file(p, json);
+
+    cardinal::string err;
+    imp::ImportScene s = imp::import_file(str_of(p), &err);
+    CHECK(s.ok);
+    CHECK(s.skins.size() == sz(1));
+    CHECK(s.meshes.size() == sz(1));
+    if (s.skins.size() != 1 || s.meshes.size() != 1) return;
+
+    const imp::ImportSkin& sk = s.skins[0];
+    CHECK(sk.name == "rig");
+    // Parent-first: hip (node 1) then knee (node 2), despite glTF order [2,1].
+    CHECK(sk.joint_nodes.size() == sz(2));
+    CHECK(sk.joint_nodes[0] == 1 && sk.joint_nodes[1] == 2);
+    CHECK(sk.joint_parents[0] == -1 && sk.joint_parents[1] == 0);
+    CHECK(approx(sk.local_bind[0].m[3][1],  1.0f, 1e-6f));
+    CHECK(approx(sk.local_bind[1].m[3][1], -0.5f, 1e-6f));
+    CHECK(approx(sk.inverse_bind[0].m[3][1], -1.0f, 1e-6f));    // hip's IBM followed it
+    CHECK(approx(sk.inverse_bind[1].m[3][1], -0.5f, 1e-6f));    // knee's IBM followed it
+
+    const imp::ImportMesh& m = s.meshes[0];
+    CHECK(m.skin == 0);
+    CHECK(m.influences.size() == sz(3));
+    if (m.influences.size() == 3) {
+        CHECK(m.influences[0].joint[0] == 1 && approx(m.influences[0].weight[0], 1.0f, 1e-6f)); // knee → 1
+        CHECK(m.influences[1].joint[0] == 0 && approx(m.influences[1].weight[0], 1.0f, 1e-6f)); // hip  → 0
+        CHECK(m.influences[2].joint[0] == 1 && m.influences[2].joint[1] == 0);
+        CHECK(approx(m.influences[2].weight[0], 0.5f, 1e-6f) && approx(m.influences[2].weight[1], 0.5f, 1e-6f));
+    }
+
+    // Bridge: the engine mesh asset carries influences + a valid skeleton.
+    cardinal::asset::MeshAsset ma = imp::to_asset_mesh(s, m);
+    CHECK(ma.skinned());
+    CHECK(ma.skeleton.joints.size() == sz(2));
+    if (ma.skeleton.joints.size() == 2) {
+        CHECK(ma.skeleton.joints[0].name == "hip" && ma.skeleton.joints[1].name == "knee");
+        CHECK(ma.skeleton.joints[1].parent == 0);
+        CHECK(ma.skeleton.validate());
+    }
+    // A palette at bind pose is identity → skinning is a no-op on import.
+    cardinal::vector<cardinal::scene::Mat4> scratch, pal;
+    cardinal::scene::skin::compute_palette(ma.skeleton, cardinal::scene::skin::Pose{}, scratch, pal);
+    CHECK(pal.size() == sz(2));
+    if (pal.size() == 2) CHECK(approx(pal[1].m[3][1], 0.0f, 1e-6f) && approx(pal[1].m[1][1], 1.0f, 1e-6f));
+
+    // The rigid single-mesh overload still works and simply carries influences.
+    CHECK(imp::to_asset_mesh(m).influences.size() == sz(3));
 }
 
 // ---- detect_format / format_name ------------------------------------
@@ -1091,6 +1197,7 @@ int main() {
     test_obj_vertex_color(dir);
     test_gltf_triangle(dir);
     test_gltf_pbr_maps(dir);
+    test_gltf_skinned(dir);
     test_megascans_surface(dir);
     test_megascans_3d(dir);
     test_megascans_gloss(dir);

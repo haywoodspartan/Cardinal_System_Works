@@ -96,8 +96,10 @@ void test_mesh() {
     m.vertices = { v0, v1 };
     m.indices  = { 0u,1u,2u, 2u,1u,0u };
     B enc = as::codec::encode_mesh(m);
-    // v2: marker(4) + version(4) + count(4) + 2*(11 floats) + idx_count(4) + 6*u32.
-    CHECK(enc.size() == sz(8 + 4 + 2*11*4 + 4 + 6*4));
+    // v3: marker(4) + version(4) + count(4) + 2*(11 floats) + idx_count(4) + 6*u32
+    //     + skin block: influence_count(4)=0 + joint_count(4)=0 (rigid mesh).
+    CHECK(enc.size() == sz(8 + 4 + 2*11*4 + 4 + 6*4 + 8));
+    CHECK(enc[4]==3 && enc[5]==0 && enc[6]==0 && enc[7]==0);   // version word
 
     as::MeshAsset out;
     CHECK(as::codec::decode_mesh(enc, out));
@@ -111,13 +113,33 @@ void test_mesh() {
     CHECK(out.vertices[1].texcoord.x == 0.5f  && out.vertices[1].texcoord.y == 0.125f);
     CHECK(out.indices == m.indices);
 
-    // Empty mesh: marker(4) + version(4) + vc=0(4) + ic=0(4) = 16.
+    // Empty mesh: marker(4) + version(4) + vc=0(4) + ic=0(4) + fc=0(4) + jc=0(4) = 24.
     as::MeshAsset em;
     B ee = as::codec::encode_mesh(em);
-    CHECK(ee.size() == sz(16));
+    CHECK(ee.size() == sz(24));
     as::MeshAsset eo;
     CHECK(as::codec::decode_mesh(ee, eo));
-    CHECK(eo.vertices.empty() && eo.indices.empty());
+    CHECK(eo.vertices.empty() && eo.indices.empty() && !eo.skinned());
+
+    // Backward compat: a v2 blob (marker + version 2, 11 floats/vertex, NO
+    // skin block) still decodes as a rigid mesh with its UV intact.
+    {
+        B v2b;
+        auto pu = [&](cardinal::u32 u){ for(int k=0;k<4;++k) v2b.push_back(static_cast<cardinal::u8>((u>>(8*k))&0xFFu)); };
+        auto pf = [&](float f){ cardinal::u8 b[4]; std::memcpy(b,&f,4); for(int k=0;k<4;++k) v2b.push_back(b[k]); };
+        pu(0xFFFFFFFFu); pu(2u);                  // marker + version 2
+        pu(1u);                                   // 1 vertex
+        pf(1.0f); pf(2.0f); pf(3.0f);             // position
+        pf(0.0f); pf(1.0f); pf(0.0f);             // normal
+        pf(0.5f); pf(0.6f); pf(0.7f);             // color
+        pf(0.25f); pf(0.75f);                     // texcoord
+        pu(0u);                                   // 0 indices  (blob ends here)
+        as::MeshAsset vo;
+        CHECK(as::codec::decode_mesh(v2b, vo));
+        CHECK(vo.vertices.size() == sz(1));
+        CHECK(vo.vertices[0].texcoord.x == 0.25f && vo.vertices[0].texcoord.y == 0.75f);
+        CHECK(!vo.skinned() && vo.influences.empty() && vo.skeleton.joints.empty());
+    }
 
     // Backward compat: a v1 blob (no marker; begins with vertex count, 9
     // floats/vertex) still decodes, texcoord defaulting to 0.
@@ -142,6 +164,66 @@ void test_mesh() {
     CHECK(!as::codec::decode_mesh(B{1,2,3}, bo));      // < 4
     B trunc(4, 0); trunc[0]=5;                          // v1 path: claims 5 verts
     CHECK(!as::codec::decode_mesh(trunc, bo));
+}
+
+// ---- mesh: v3 skin block round-trip + coherence + truncation -------
+void test_mesh_skinned() {
+    namespace sk = cardinal::scene::skin;
+    as::MeshAsset m;
+    for (int i = 0; i < 3; ++i) {
+        as::MeshVertex v; v.position = { float(i), 0.0f, 0.0f };
+        m.vertices.push_back(v);
+    }
+    m.indices = { 0u, 1u, 2u };
+    // Two-joint rig: hip (root, +1 y) -> knee (-0.5 y). Inverse binds derived.
+    sk::Joint hip;  hip.name  = "hip";  hip.parent  = -1;
+    hip.local_bind = cardinal::scene::Mat4::translation({0.0f, 1.0f, 0.0f});
+    sk::Joint knee; knee.name = "knee"; knee.parent = 0;
+    knee.local_bind = cardinal::scene::Mat4::translation({0.0f, -0.5f, 0.0f});
+    m.skeleton.joints = { hip, knee };
+    m.skeleton.derive_inverse_bind();
+    sk::Influence f0; f0.joint[0] = 0; f0.weight[0] = 1.0f; f0.weight[1] = f0.weight[2] = f0.weight[3] = 0.0f;
+    sk::Influence f1; f1.joint[0] = 1; f1.weight[0] = 1.0f; f1.weight[1] = f1.weight[2] = f1.weight[3] = 0.0f;
+    sk::Influence f2; f2.joint[0] = 0; f2.joint[1] = 1; f2.joint[2] = 0xBEEF; f2.joint[3] = 7;
+    f2.weight[0] = 0.25f; f2.weight[1] = 0.75f; f2.weight[2] = 0.0f; f2.weight[3] = 0.0f;
+    m.influences = { f0, f1, f2 };
+    CHECK(m.skinned());
+
+    B enc = as::codec::encode_mesh(m);
+    // header(12) + 3*44 + ic(4) + 3*4 + fc(4) + 3*24 + jc(4)
+    //   + hip  : nl(4)+3 + parent(4) + 128
+    //   + knee : nl(4)+4 + parent(4) + 128
+    CHECK(enc.size() == sz(12 + 3*44 + 4 + 12 + 4 + 3*24 + 4 + (7+4+128) + (8+4+128)));
+
+    as::MeshAsset out;
+    CHECK(as::codec::decode_mesh(enc, out));
+    CHECK(out.skinned());
+    CHECK(out.influences.size() == sz(3));
+    CHECK(out.influences[2].joint[0] == 0 && out.influences[2].joint[1] == 1);
+    CHECK(out.influences[2].joint[2] == 0xBEEF && out.influences[2].joint[3] == 7);   // u16 pack exact
+    CHECK(out.influences[2].weight[0] == 0.25f && out.influences[2].weight[1] == 0.75f);
+    CHECK(out.skeleton.joints.size() == sz(2));
+    CHECK(out.skeleton.joints[0].name == "hip" && out.skeleton.joints[1].name == "knee");
+    CHECK(out.skeleton.joints[0].parent == -1 && out.skeleton.joints[1].parent == 0);
+    CHECK(out.skeleton.joints[1].local_bind.m[3][1] == -0.5f);
+    CHECK(out.skeleton.joints[0].inverse_bind.m[3][1] == -1.0f);       // bit-exact
+    CHECK(out.skeleton.joints[1].inverse_bind.m[3][1] == -0.5f);
+    CHECK(out.skeleton.validate());
+
+    // Incoherent skin (influences not parallel to vertices) encodes as RIGID.
+    as::MeshAsset bad = m;
+    bad.influences.pop_back();
+    CHECK(!bad.skinned());
+    as::MeshAsset bo;
+    CHECK(as::codec::decode_mesh(as::codec::encode_mesh(bad), bo));
+    CHECK(!bo.skinned() && bo.vertices.size() == sz(3));
+
+    // Truncated inside the skin block = corrupt, never a crash.
+    for (cardinal::usize cut : { enc.size() - 1, enc.size() - 100, sz(12 + 3*44 + 4 + 12 + 2) }) {
+        B t(enc.begin(), enc.begin() + static_cast<std::ptrdiff_t>(cut));
+        as::MeshAsset to;
+        CHECK(!as::codec::decode_mesh(t, to));
+    }
 }
 
 // ---- shader: round-trip + empty + bounds --------------------------
@@ -387,6 +469,7 @@ void test_overflow_guards() {
 int main() {
     test_texture();
     test_mesh();
+    test_mesh_skinned();
     test_shader();
     test_material();
     test_overflow_guards();
