@@ -74,12 +74,80 @@ void test_pack_color() {
     CHECK(((c >> 24) & 0xFFu) == 0x44u);
 }
 
+// Software clipping: the native pipeline has no scissor, so build_geometry
+// clips every primitive to its DrawCmd clip rect.
+void test_clip() {
+    // Filled rect partially inside -> clipped quad bounds.
+    cui::DrawList dl;
+    dl.push_clip(cui::Rect{ {0.0f, 0.0f}, {50.0f, 50.0f} });
+    dl.rect_filled(cui::Rect{ {10.0f, 20.0f}, {100.0f, 40.0f} }, cui::Color{255, 0, 0, 255});
+    cardinal::vector<cr::Vertex> v;
+    cr::Renderer::build_geometry(dl, v);
+    CHECK(v.size() == 6u);
+    float maxx = -1.0f, maxy = -1.0f, minx = 1.0e9f, miny = 1.0e9f;
+    for (const auto& q : v) {
+        if (q.x > maxx) maxx = q.x; if (q.y > maxy) maxy = q.y;
+        if (q.x < minx) minx = q.x; if (q.y < miny) miny = q.y;
+    }
+    CHECK(ap(minx, 10.0f) && ap(miny, 20.0f) && ap(maxx, 50.0f) && ap(maxy, 50.0f));
+
+    // Fully outside -> dropped. Stroke outside -> dropped too.
+    cui::DrawList d2;
+    d2.push_clip(cui::Rect{ {0.0f, 0.0f}, {50.0f, 50.0f} });
+    d2.rect_filled(cui::Rect{ {100.0f, 100.0f}, {10.0f, 10.0f} }, cui::Color{});
+    d2.rect_stroke(cui::Rect{ {60.0f, 60.0f}, {10.0f, 10.0f} }, cui::Color{}, 1.0f);
+    cardinal::vector<cr::Vertex> v2;
+    cr::Renderer::build_geometry(d2, v2);
+    CHECK(v2.empty());
+
+    // Line crossing the clip -> trimmed to the clip's x range.
+    cui::DrawList d3;
+    d3.push_clip(cui::Rect{ {0.0f, 0.0f}, {50.0f, 50.0f} });
+    d3.line({-10.0f, 25.0f}, {200.0f, 25.0f}, cui::Color{}, 2.0f);
+    d3.line({100.0f, 100.0f}, {200.0f, 120.0f}, cui::Color{}, 2.0f);   // fully outside
+    cardinal::vector<cr::Vertex> v3;
+    cr::Renderer::build_geometry(d3, v3);
+    CHECK(v3.size() == 6u);
+    float lminx = 1.0e9f, lmaxx = -1.0f;
+    for (const auto& q : v3) { if (q.x < lminx) lminx = q.x; if (q.x > lmaxx) lmaxx = q.x; }
+    CHECK(ap(lminx, 0.0f) && ap(lmaxx, 50.0f));
+
+    // Text: a glyph half inside emits fewer pixel quads than the full 18; a
+    // glyph entirely outside emits none.
+    cui::DrawList d4;
+    d4.push_clip(cui::Rect{ {0.0f, 0.0f}, {8.0f, 8.0f} });
+    d4.text({0.0f, 0.0f}, "A", cui::Color{}, 16.0f);
+    cardinal::vector<cr::Vertex> v4;
+    cr::Renderer::build_geometry(d4, v4);
+    CHECK(!v4.empty() && v4.size() < 18u * 6u);
+    cui::DrawList d5;
+    d5.push_clip(cui::Rect{ {0.0f, 0.0f}, {8.0f, 8.0f} });
+    d5.text({100.0f, 0.0f}, "A", cui::Color{}, 16.0f);
+    cardinal::vector<cr::Vertex> v5;
+    cr::Renderer::build_geometry(d5, v5);
+    CHECK(v5.empty());
+
+    // Nested clips intersect; popping restores the outer one.
+    cui::DrawList d6;
+    d6.push_clip(cui::Rect{ {0.0f, 0.0f}, {50.0f, 50.0f} });
+    d6.push_clip(cui::Rect{ {25.0f, 0.0f}, {100.0f, 100.0f} });
+    d6.rect_filled(cui::Rect{ {0.0f, 0.0f}, {100.0f, 100.0f} }, cui::Color{});
+    d6.pop_clip();
+    d6.rect_filled(cui::Rect{ {0.0f, 0.0f}, {100.0f, 100.0f} }, cui::Color{});
+    cardinal::vector<cr::Vertex> v6;
+    cr::Renderer::build_geometry(d6, v6);
+    CHECK(v6.size() == 12u);
+    CHECK(ap(v6[0].x, 25.0f) && ap(v6[2].x, 50.0f));   // inner: [25,50]
+    CHECK(ap(v6[6].x, 0.0f)  && ap(v6[8].x, 50.0f));   // outer: [0,50]
+}
+
 }  // namespace
 
 int main() {
     test_rect();
     test_line_and_text();
     test_pack_color();
+    test_clip();
     if (g_fail == 0) {
         cardinal::log::infof("crtest", "OK  %d checks passed", g_checks);
         return 0;

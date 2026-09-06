@@ -5,9 +5,11 @@
 // app — the equivalent of an ImGui app, but driven entirely by cardinal::cui
 // (the framework) + cardinal::cui_rhi (the native RHI renderer). It opens a
 // native window, creates the RHI device + swapchain, builds a Slate widget
-// tree, and each frame: maps OS mouse input into the framework, lays out,
-// paints to a draw list, and renders that draw list through the RHI (Vulkan/
-// D3D12). Esc to quit.
+// tree rooted at Slate's OWN window system (cui::WindowManager: a docked
+// control panel + floating, draggable, resizable, collapsible windows with
+// z-order), and each frame: maps OS mouse input into the framework, lays
+// out, paints to a draw list, and renders that draw list through the RHI
+// (Vulkan/D3D12) with software clipping. Esc to quit.
 // =============================================================================
 
 #include <cardinal/rhi/rhi.hpp>
@@ -15,6 +17,7 @@
 #include <cardinal/input/input.hpp>
 #include <cardinal/cui/context.hpp>
 #include <cardinal/cui/widgets.hpp>
+#include <cardinal/cui/window.hpp>
 #include <cardinal/cui_rhi/renderer.hpp>
 
 #include <chrono>
@@ -68,18 +71,70 @@ int main(int argc, char** argv) {
     float        slider  = 0.5f;
     int          clicks  = 0;
     cui::Label*  clicks_lbl = nullptr;
+    cui::Label*  client_lbl = nullptr;
+    cui::WindowManager* wm = nullptr;
+    cui::Window* win_tools = nullptr;
+    cui::Window* win_about = nullptr;
     {
         using namespace cui;
-        auto panel = cardinal::make_unique<Panel>(ui.theme().panel_bg, Edges::all(16.0f));
+        auto manager = cardinal::make_unique<WindowManager>();
+        wm = manager.get();
+        wm->set_dock_thickness(DockSide::Left, 300.0f);
+
+        // Docked control panel (Left strip): fixed in place, no chrome buttons
+        // except collapse.
+        auto panel = cardinal::make_unique<Panel>(ui.theme().panel_bg, Edges::all(12.0f));
         auto stack = cardinal::make_unique<Stack>(Axis::Vertical, 10.0f);
-        stack->add(cardinal::make_unique<Label>("CARDINAL SLATE - NATIVE UI (NO IMGUI)"));
+        stack->add(cardinal::make_unique<Label>("CARDINAL SLATE - NATIVE (NO IMGUI)"));
         stack->add(cardinal::make_unique<Button>("CLICK ME", [&clicks]() { ++clicks; }));
         clicks_lbl = static_cast<Label*>(
             stack->add(cardinal::make_unique<Label>("CLICKS: 0")));
         stack->add(cardinal::make_unique<Checkbox>("ENABLED", &enabled));
         stack->add(cardinal::make_unique<Slider>(&slider, 0.0f, 1.0f));
+        client_lbl = static_cast<Label*>(
+            stack->add(cardinal::make_unique<Label>("CLIENT: -")));
+        stack->add(cardinal::make_unique<Button>("REOPEN WINDOWS", [&wm, &win_tools, &win_about]() {
+            for (Window* w : { win_tools, win_about }) {
+                if (w == nullptr) continue;
+                w->set_visible(true);
+                w->set_collapsed(false);
+                wm->bring_to_front(w);
+            }
+        }));
         panel->add(cardinal::move(stack));
-        ui.set_root(cardinal::move(panel));
+        auto dock = cardinal::make_unique<Window>("CONTROLS", Rect{ {0.0f, 0.0f}, {300.0f, 400.0f} });
+        dock->set_closable(false);
+        dock->set_content(cardinal::move(panel));
+        Window* dock_raw = wm->add_window(cardinal::move(dock));
+        wm->dock(dock_raw, DockSide::Left);
+
+        // Floating windows: drag the title, resize from the corner grip, '-'
+        // collapses, 'x' closes; the pressed one comes to the front.
+        auto tools = cardinal::make_unique<Window>("TOOLS", Rect{ {340.0f, 40.0f}, {300.0f, 220.0f} });
+        {
+            auto body = cardinal::make_unique<ScrollPanel>(6.0f);
+            body->add(cardinal::make_unique<Label>("DRAG THE TITLE BAR TO MOVE."));
+            body->add(cardinal::make_unique<Label>("DRAG THE CORNER GRIP TO RESIZE."));
+            body->add(cardinal::make_unique<Button>("CLICK ME TOO", [&clicks]() { ++clicks; }));
+            body->add(cardinal::make_unique<Checkbox>("ENABLED (SHARED)", &enabled));
+            body->add(cardinal::make_unique<Slider>(&slider, 0.0f, 1.0f));
+            for (int i = 0; i < 10; ++i)
+                body->add(cardinal::make_unique<Label>("SCROLL ROW " + cardinal::to_string(i)));
+            tools->set_content(cardinal::move(body));
+        }
+        win_tools = wm->add_window(cardinal::move(tools));
+
+        auto about = cardinal::make_unique<Window>("ABOUT", Rect{ {520.0f, 180.0f}, {320.0f, 140.0f} });
+        {
+            auto body = cardinal::make_unique<Stack>(Axis::Vertical, 6.0f);
+            body->add(cardinal::make_unique<Label>("CARDINAL SLATE WINDOW SYSTEM."));
+            body->add(cardinal::make_unique<Label>("WINDOWS, DOCKING, Z-ORDER."));
+            body->add(cardinal::make_unique<Label>("RENDERED BY CUI_RHI. NO IMGUI."));
+            about->set_content(cardinal::move(body));
+        }
+        win_about = wm->add_window(cardinal::move(about));
+
+        ui.set_root(cardinal::move(manager));
     }
 
     std::puts("Cardinal Slate native window up - our own UI framework, GPU-rendered "
@@ -112,9 +167,21 @@ int main(int argc, char** argv) {
         ui.layout({ w, h });
         ui.update_input(in);
         if (clicks_lbl) clicks_lbl->set_text("CLICKS: " + cardinal::to_string(clicks));
+        if (client_lbl && wm) {
+            const cui::Rect cr = wm->client_rect();
+            client_lbl->set_text("CLIENT: " + cardinal::to_string(static_cast<int>(cr.size.x)) +
+                                 " X " + cardinal::to_string(static_cast<int>(cr.size.y)));
+        }
 
         cui::DrawList dl;
         ui.paint(dl);
+        // The manager's client rect is where a game would draw its 3D view.
+        if (wm) {
+            const cui::Rect cr = wm->client_rect();
+            dl.rect_stroke(cr.inset(6.0f, 6.0f, 6.0f, 6.0f), ui.theme().text_dim, 1.0f);
+            dl.text({ cr.left() + 14.0f, cr.bottom() - 26.0f }, "CLIENT RECT (VIEWPORT)",
+                    ui.theme().text_dim, 14.0f);
+        }
 
         swapchain->begin_frame(0.06f, 0.06f, 0.07f, 1.0f);
         renderer->render(dl, *swapchain, w, h);

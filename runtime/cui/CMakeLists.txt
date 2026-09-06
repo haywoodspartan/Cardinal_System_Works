@@ -7,12 +7,14 @@ add_library(cardinal_cui STATIC
     src/widget.cpp
     src/widgets.cpp
     src/context.cpp
+    src/window.cpp
     include/cardinal/cui/geometry.hpp
     include/cardinal/cui/draw.hpp
     include/cardinal/cui/theme.hpp
     include/cardinal/cui/widget.hpp
     include/cardinal/cui/widgets.hpp
-    include/cardinal/cui/context.hpp)
+    include/cardinal/cui/context.hpp
+    include/cardinal/cui/window.hpp)
 add_library(cardinal::cui ALIAS cardinal_cui)
 
 target_include_directories(cardinal_cui PUBLIC

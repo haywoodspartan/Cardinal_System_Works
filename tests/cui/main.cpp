@@ -11,6 +11,7 @@
 #include <cardinal/cui/context.hpp>
 #include <cardinal/cui/widgets.hpp>
 #include <cardinal/cui/bind.hpp>
+#include <cardinal/cui/window.hpp>
 #include <cardinal/core/diag/log.hpp>
 
 namespace {
@@ -721,6 +722,285 @@ void test_enum_combo() {
     CHECK(ec->selected() == 0);
 }
 
+// ---- Window system (Window + WindowManager) --------------------------------
+// One full frame: layout -> input -> paint (paint is where the manager
+// re-sorts z-order and windows drop stale drag state, exactly like a host).
+void win_frame(ui::Ui& u, ui::Vec2 mouse, bool down) {
+    u.layout({800.0f, 600.0f});
+    u.update_input({mouse, down, 0.0f});
+    ui::DrawList dl;
+    u.paint(dl);
+}
+bool rect_eq(const ui::Rect& a, float x, float y, float w, float h) {
+    return ap(a.pos.x, x) && ap(a.pos.y, y) && ap(a.size.x, w) && ap(a.size.y, h);
+}
+
+void test_window_layout_and_clip() {
+    ui::Ui u;
+    auto* wm = static_cast<ui::WindowManager*>(u.set_root(cardinal::make_unique<ui::WindowManager>()));
+    auto win = cardinal::make_unique<ui::Window>("A", ui::Rect{ {100.0f, 100.0f}, {300.0f, 200.0f} });
+    auto* box = win->set_content(cardinal::make_unique<FixedBox>(ui::Vec2{50.0f, 50.0f}));
+    auto* w = wm->add_window(cardinal::move(win));
+    CHECK(w->content() == box);
+    CHECK(wm->windows().size() == 1u && wm->front() == w);
+
+    u.layout({800.0f, 600.0f});
+    CHECK(rect_eq(w->rect(), 100.0f, 100.0f, 300.0f, 200.0f));
+    CHECK(rect_eq(w->title_rect(), 100.0f, 100.0f, 300.0f, 24.0f));
+    CHECK(rect_eq(w->content_rect(), 101.0f, 124.0f, 298.0f, 175.0f));
+    CHECK(rect_eq(box->rect(), 101.0f, 124.0f, 298.0f, 175.0f));   // tight-fit content
+    CHECK(w->close_rect().right() <= w->rect().right());
+    CHECK(w->collapse_rect().right() < w->close_rect().left());
+    CHECK(w->grip_rect().right() <= w->rect().right() + 0.001f);
+    // No dock strips -> the whole manager is client.
+    CHECK(rect_eq(wm->client_rect(), 0.0f, 0.0f, 800.0f, 600.0f));
+
+    // The content's paint is clipped to the content rect; the chrome isn't.
+    ui::DrawList dl;
+    u.paint(dl);
+    bool red_clipped = false, title_seen = false;
+    for (const auto& cmd : dl.cmds()) {
+        if (cmd.kind == ui::DrawKind::RectFilled && cmd.color.r == 255 && cmd.color.g == 0 && cmd.color.b == 0)
+            red_clipped = rect_eq(cmd.clip, 101.0f, 124.0f, 298.0f, 175.0f);
+        if (cmd.kind == ui::DrawKind::Text && cmd.text == "A") title_seen = cmd.clip.size.x > 1.0e8f;
+    }
+    CHECK(red_clipped);
+    CHECK(title_seen);
+}
+
+void test_window_move_and_snap() {
+    ui::Ui u;
+    auto* wm = static_cast<ui::WindowManager*>(u.set_root(cardinal::make_unique<ui::WindowManager>()));
+    auto* w = wm->add_window(cardinal::make_unique<ui::Window>("Move", ui::Rect{ {100.0f, 100.0f}, {300.0f, 200.0f} }));
+    int activated = 0;
+    w->set_on_activate([&activated] { ++activated; });
+
+    win_frame(u, {150.0f, 110.0f}, false);
+    win_frame(u, {150.0f, 110.0f}, true);     // press on the title bar
+    CHECK(activated == 1);
+    CHECK(wm->active() == w);
+    win_frame(u, {170.0f, 140.0f}, true);     // drag +20,+30
+    win_frame(u, {170.0f, 140.0f}, false);    // release
+    CHECK(rect_eq(w->frame(), 120.0f, 130.0f, 300.0f, 200.0f));
+    CHECK(rect_eq(w->rect(),  120.0f, 130.0f, 300.0f, 200.0f));
+
+    // A second drag starts fresh (no stale delta): +0 leaves it in place.
+    win_frame(u, {200.0f, 140.0f}, true);
+    win_frame(u, {200.0f, 140.0f}, false);
+    CHECK(rect_eq(w->frame(), 120.0f, 130.0f, 300.0f, 200.0f));
+
+    // Edge snap: dragging to within snap distance of the left edge lands on it.
+    win_frame(u, {200.0f, 140.0f}, true);
+    win_frame(u, {200.0f - 114.0f, 140.0f}, true);   // left would be 6 px -> snaps to 0
+    win_frame(u, {200.0f - 114.0f, 140.0f}, false);
+    CHECK(ap(w->frame().pos.x, 0.0f));
+
+    // Clamp: a window can't be dragged fully off-screen (title stays reachable).
+    win_frame(u, {50.0f, 140.0f}, true);
+    win_frame(u, {-2000.0f, -2000.0f}, true);
+    win_frame(u, {-2000.0f, -2000.0f}, false);
+    CHECK(w->frame().pos.x > -300.0f);
+    CHECK(ap(w->frame().pos.y, 0.0f));
+
+    // Non-movable windows ignore title drags.
+    w->set_frame({ {100.0f, 100.0f}, {300.0f, 200.0f} });
+    w->set_movable(false);
+    win_frame(u, {150.0f, 110.0f}, false);
+    win_frame(u, {150.0f, 110.0f}, true);
+    win_frame(u, {250.0f, 210.0f}, true);
+    win_frame(u, {250.0f, 210.0f}, false);
+    CHECK(rect_eq(w->frame(), 100.0f, 100.0f, 300.0f, 200.0f));
+}
+
+void test_window_resize_min_size() {
+    ui::Ui u;
+    auto* wm = static_cast<ui::WindowManager*>(u.set_root(cardinal::make_unique<ui::WindowManager>()));
+    auto* w = wm->add_window(cardinal::make_unique<ui::Window>("Size", ui::Rect{ {100.0f, 100.0f}, {300.0f, 200.0f} }));
+    w->set_min_size({120.0f, 60.0f});
+    u.layout({800.0f, 600.0f});
+    const ui::Rect g = w->grip_rect();
+    CHECK(rect_eq(g, 388.0f, 288.0f, 12.0f, 12.0f));
+
+    win_frame(u, {395.0f, 295.0f}, false);
+    win_frame(u, {395.0f, 295.0f}, true);       // press on the grip
+    win_frame(u, {435.0f, 335.0f}, true);       // +40,+40
+    win_frame(u, {435.0f, 335.0f}, false);
+    CHECK(rect_eq(w->frame(), 100.0f, 100.0f, 340.0f, 240.0f));
+
+    // Right edge only.
+    win_frame(u, {438.0f, 200.0f}, true);       // within edge_ of right (440)
+    win_frame(u, {458.0f, 250.0f}, true);
+    win_frame(u, {458.0f, 250.0f}, false);
+    CHECK(rect_eq(w->frame(), 100.0f, 100.0f, 360.0f, 240.0f));
+
+    // Shrinking below the minimum clamps.
+    const ui::Rect g2 = w->grip_rect();
+    const ui::Vec2 gc = g2.center();
+    win_frame(u, gc, true);
+    win_frame(u, {0.0f, 0.0f}, true);
+    win_frame(u, {0.0f, 0.0f}, false);
+    CHECK(rect_eq(w->frame(), 100.0f, 100.0f, 120.0f, 60.0f));
+
+    // Non-resizable: grip drags are ignored.
+    w->set_frame({ {100.0f, 100.0f}, {300.0f, 200.0f} });
+    w->set_resizable(false);
+    u.layout({800.0f, 600.0f});
+    win_frame(u, {395.0f, 295.0f}, false);
+    win_frame(u, {395.0f, 295.0f}, true);
+    win_frame(u, {435.0f, 335.0f}, true);
+    win_frame(u, {435.0f, 335.0f}, false);
+    CHECK(rect_eq(w->frame(), 100.0f, 100.0f, 300.0f, 200.0f));
+}
+
+void test_window_close_and_collapse() {
+    ui::Ui u;
+    auto* wm = static_cast<ui::WindowManager*>(u.set_root(cardinal::make_unique<ui::WindowManager>()));
+    auto win = cardinal::make_unique<ui::Window>("Chrome", ui::Rect{ {100.0f, 100.0f}, {300.0f, 200.0f} });
+    auto* box = win->set_content(cardinal::make_unique<FixedBox>(ui::Vec2{50.0f, 50.0f}));
+    auto* w = wm->add_window(cardinal::move(win));
+    int closed = 0;
+    w->set_on_close([&closed] { ++closed; });
+    u.layout({800.0f, 600.0f});
+
+    // Collapse via the "-" button: title-only, content hidden, size restored on expand.
+    const ui::Vec2 cc = w->collapse_rect().center();
+    win_frame(u, cc, false);
+    win_frame(u, cc, true);
+    win_frame(u, cc, false);
+    u.layout({800.0f, 600.0f});                 // the toggle lands on release; re-layout
+    CHECK(w->collapsed());
+    CHECK(!box->visible());
+    CHECK(ap(w->rect().size.y, 24.0f));
+    CHECK(ap(w->content_rect().size.y, 0.0f));
+    CHECK(u.root()->hit_test({150.0f, 200.0f}) == nullptr);   // former content area is empty now
+    const ui::Vec2 cc2 = w->collapse_rect().center();
+    win_frame(u, cc2, true);
+    win_frame(u, cc2, false);
+    u.layout({800.0f, 600.0f});
+    CHECK(!w->collapsed());
+    CHECK(box->visible());
+    CHECK(ap(w->rect().size.y, 200.0f));
+
+    // Press-then-release elsewhere is NOT a click: nothing toggles.
+    win_frame(u, cc2, true);
+    win_frame(u, {700.0f, 500.0f}, true);
+    win_frame(u, {700.0f, 500.0f}, false);
+    CHECK(!w->collapsed());
+
+    // Close via "x": hidden + callback; the manager keeps ownership so it can be re-shown.
+    const ui::Vec2 xc = w->close_rect().center();
+    win_frame(u, xc, true);
+    win_frame(u, xc, false);
+    CHECK(closed == 1);
+    CHECK(!w->visible());
+    CHECK(wm->front() == nullptr);
+    CHECK(wm->windows().size() == 1u);
+    w->set_visible(true);
+    u.layout({800.0f, 600.0f});
+    CHECK(wm->front() == w);
+    CHECK(u.root()->hit_test({150.0f, 110.0f}) == w);
+
+    // Programmatic close + non-closable windows ignore the "x".
+    w->close();
+    CHECK(closed == 2);
+    w->set_visible(true);
+    w->set_closable(false);
+    u.layout({800.0f, 600.0f});
+    win_frame(u, xc, true);
+    win_frame(u, xc, false);
+    CHECK(closed == 2 && w->visible());
+}
+
+void test_window_zorder() {
+    ui::Ui u;
+    auto* wm = static_cast<ui::WindowManager*>(u.set_root(cardinal::make_unique<ui::WindowManager>()));
+    auto* a = wm->add_window(cardinal::make_unique<ui::Window>("A", ui::Rect{ {0.0f, 0.0f}, {300.0f, 200.0f} }));
+    auto bw = cardinal::make_unique<ui::Window>("B", ui::Rect{ {100.0f, 100.0f}, {300.0f, 200.0f} });
+    int b_clicks = 0;
+    auto* btn = static_cast<ui::Button*>(bw->set_content(cardinal::make_unique<ui::Button>("B", [&b_clicks] { ++b_clicks; })));
+    auto* b = wm->add_window(cardinal::move(bw));
+    CHECK(wm->front() == b);
+    CHECK(wm->windows()[0] == a && wm->windows()[1] == b);
+
+    // Overlap (150,150) belongs to B while B is on top.
+    win_frame(u, {150.0f, 150.0f}, false);
+    CHECK(u.hovered() == btn);
+
+    // Press A's title (outside B) -> A comes to the front and owns the overlap.
+    win_frame(u, {50.0f, 10.0f}, true);
+    win_frame(u, {50.0f, 10.0f}, false);
+    CHECK(wm->front() == a);
+    CHECK(wm->active() == a);
+    CHECK(wm->windows()[1] == a);
+    win_frame(u, {150.0f, 150.0f}, false);
+    CHECK(u.hovered() == a);
+
+    // Press a widget INSIDE B's content (not the chrome) -> the manager notices
+    // from the Ui's active widget and raises B; the button still clicks.
+    win_frame(u, {350.0f, 250.0f}, true);
+    win_frame(u, {350.0f, 250.0f}, false);
+    CHECK(b_clicks == 1);
+    CHECK(wm->front() == b);
+    CHECK(wm->active() == b);
+
+    // Explicit API + removal (move the cursor off B first: the Ui's hover
+    // pointer is non-owning).
+    win_frame(u, {700.0f, 500.0f}, false);
+    wm->bring_to_front(a);
+    CHECK(wm->front() == a);
+    auto owned = wm->remove_window(b);
+    CHECK(owned.get() == b);
+    CHECK(wm->windows().size() == 1u);
+    CHECK(wm->remove_window(b) == nullptr);
+}
+
+void test_window_docking() {
+    ui::Ui u;
+    auto* wm = static_cast<ui::WindowManager*>(u.set_root(cardinal::make_unique<ui::WindowManager>()));
+    auto* l = wm->add_window(cardinal::make_unique<ui::Window>("L", ui::Rect{ {50.0f, 50.0f}, {200.0f, 150.0f} }));
+    auto* b = wm->add_window(cardinal::make_unique<ui::Window>("B", ui::Rect{ {60.0f, 60.0f}, {200.0f, 150.0f} }));
+    wm->dock(l, ui::DockSide::Left);
+    wm->dock(b, ui::DockSide::Bottom);
+    CHECK(l->docked() && l->dock_side() == ui::DockSide::Left);
+    u.layout({800.0f, 600.0f});
+    // Bottom spans the full width; Left sits between Top (0) and Bottom.
+    CHECK(rect_eq(wm->dock_rect(ui::DockSide::Bottom), 0.0f, 420.0f, 800.0f, 180.0f));
+    CHECK(rect_eq(wm->dock_rect(ui::DockSide::Left),   0.0f,   0.0f, 260.0f, 420.0f));
+    CHECK(rect_eq(b->rect(), 0.0f, 420.0f, 800.0f, 180.0f));
+    CHECK(rect_eq(l->rect(), 0.0f,   0.0f, 260.0f, 420.0f));
+    CHECK(rect_eq(wm->client_rect(), 260.0f, 0.0f, 540.0f, 420.0f));
+
+    // Two windows in a strip split it evenly along its long axis.
+    auto* l2 = wm->add_window(cardinal::make_unique<ui::Window>("L2", ui::Rect{ {70.0f, 70.0f}, {200.0f, 150.0f} }));
+    wm->dock(l2, ui::DockSide::Left);
+    u.layout({800.0f, 600.0f});
+    CHECK(rect_eq(l->rect(),  0.0f,   0.0f, 260.0f, 210.0f));
+    CHECK(rect_eq(l2->rect(), 0.0f, 210.0f, 260.0f, 210.0f));
+
+    // Docked windows neither move nor resize.
+    win_frame(u, {100.0f, 10.0f}, false);
+    win_frame(u, {100.0f, 10.0f}, true);
+    win_frame(u, {300.0f, 300.0f}, true);
+    win_frame(u, {300.0f, 300.0f}, false);
+    CHECK(rect_eq(l->rect(), 0.0f, 0.0f, 260.0f, 210.0f));
+    CHECK(wm->active() == l);
+
+    // Thickness is live; undock restores the floating frame; a closed docked
+    // window releases its strip.
+    wm->set_dock_thickness(ui::DockSide::Left, 300.0f);
+    u.layout({800.0f, 600.0f});
+    CHECK(ap(wm->client_rect().pos.x, 300.0f));
+    wm->undock(l2);
+    u.layout({800.0f, 600.0f});
+    CHECK(!l2->docked());
+    CHECK(rect_eq(l2->rect(), 70.0f, 70.0f, 200.0f, 150.0f));
+    CHECK(rect_eq(l->rect(), 0.0f, 0.0f, 300.0f, 420.0f));
+    b->close();
+    u.layout({800.0f, 600.0f});
+    CHECK(rect_eq(wm->client_rect(), 300.0f, 0.0f, 500.0f, 600.0f));
+    CHECK(ap(wm->dock_rect(ui::DockSide::Bottom).size.y, 0.0f));
+}
+
 }  // namespace
 
 int main() {
@@ -745,6 +1025,12 @@ int main() {
     test_scroll_end_and_caret();
     test_number_field();
     test_enum_combo();
+    test_window_layout_and_clip();
+    test_window_move_and_snap();
+    test_window_resize_min_size();
+    test_window_close_and_collapse();
+    test_window_zorder();
+    test_window_docking();
 
     if (g_fail == 0) {
         cardinal::log::infof("cuitest", "OK  %d checks passed", g_checks);

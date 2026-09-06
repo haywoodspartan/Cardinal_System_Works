@@ -87,6 +87,7 @@ namespace cardinal::input {
 #include <cardinal/ui/cui_render.hpp>       // Cardinal Slate -> ImGui draw bridge
 #include <cardinal/cui/context.hpp>         // Cardinal Slate (our own UI framework)
 #include <cardinal/cui/widgets.hpp>
+#include <cardinal/cui/window.hpp>         // Cardinal Slate window system (no ImGui)
 #include <cardinal/blueprint/blueprint.hpp> // interoperable visual scripting
 #include <cardinal/render/render_passes.hpp> // XSI-style passes & partitions
 #include <cardinal/vm/vm.hpp>               // run compiled blueprints
@@ -728,6 +729,13 @@ int main(int argc, char** argv) {
     cardinal::cui::Label*   slate_status_lbl = nullptr;
     cardinal::cui::Combo*   slate_combo      = nullptr;
     cardinal::cui::MenuBar* slate_menubar    = nullptr;
+    // The preview's root is Slate's OWN window system (cui::WindowManager):
+    // the widget gallery docks Left, two floating windows show move / resize /
+    // collapse / close / z-order, and the manager's client rect is what a
+    // native host would hand to the 3D viewport.
+    cardinal::cui::WindowManager* slate_wm       = nullptr;
+    cardinal::cui::Window*        slate_win_about = nullptr;
+    cardinal::cui::Window*        slate_win_tools = nullptr;
     {
         using namespace cardinal::cui;
         auto panel = cardinal::make_unique<Panel>(slate_ui.theme().panel_bg, Edges::all(10.0f));
@@ -776,7 +784,55 @@ int main(int argc, char** argv) {
         tabs->add_tab("About", cardinal::move(about));
 
         panel->add(cardinal::move(tabs));
-        slate_ui.set_root(cardinal::move(panel));
+
+        auto wm = cardinal::make_unique<WindowManager>();
+        slate_wm = wm.get();
+        slate_wm->set_dock_thickness(DockSide::Left, 340.0f);
+
+        // Docked gallery: a docked window can't move/resize; its strip is the
+        // manager's Left dock.
+        auto gallery = cardinal::make_unique<Window>("Widgets", Rect{ {0.0f, 0.0f}, {340.0f, 400.0f} });
+        gallery->set_closable(false);
+        gallery->set_content(cardinal::move(panel));
+        Window* gallery_raw = slate_wm->add_window(cardinal::move(gallery));
+        slate_wm->dock(gallery_raw, DockSide::Left);
+
+        // Floating "Tools": resizable, collapsible, closable; a scroll panel
+        // proves content is clipped to the window's content rect.
+        auto tools = cardinal::make_unique<Window>("Tools", Rect{ {360.0f, 20.0f}, {280.0f, 220.0f} });
+        {
+            auto body = cardinal::make_unique<ScrollPanel>(6.0f);
+            body->add(cardinal::make_unique<Label>("Drag the title bar to move."));
+            body->add(cardinal::make_unique<Label>("Drag the corner grip to resize."));
+            body->add(cardinal::make_unique<Label>("'-' collapses, 'x' closes."));
+            body->add(cardinal::make_unique<Button>("Click me too", [&slate_clicks]() { ++slate_clicks; }));
+            body->add(cardinal::make_unique<Checkbox>("Enabled (shared)", &slate_check));
+            body->add(cardinal::make_unique<Slider>(&slate_val, 0.0f, 1.0f));
+            for (int i = 0; i < 12; ++i)
+                body->add(cardinal::make_unique<Label>("scroll row " + std::to_string(i)));
+            tools->set_content(cardinal::move(body));
+        }
+        slate_win_tools = slate_wm->add_window(cardinal::move(tools));
+
+        // Floating "About": overlaps Tools so pressing either brings it to front.
+        auto about_win = cardinal::make_unique<Window>("About Slate", Rect{ {520.0f, 140.0f}, {300.0f, 150.0f} });
+        {
+            auto body = cardinal::make_unique<Stack>(Axis::Vertical, 6.0f);
+            body->add(cardinal::make_unique<Label>("Cardinal Slate (cui) window system."));
+            body->add(cardinal::make_unique<Label>("Windows, docking, z-order: no ImGui."));
+            body->add(cardinal::make_unique<Button>("Reopen closed windows", [&slate_wm, &slate_win_tools, &slate_win_about]() {
+                for (Window* w : { slate_win_tools, slate_win_about }) {
+                    if (w == nullptr) continue;
+                    w->set_visible(true);
+                    w->set_collapsed(false);
+                    slate_wm->bring_to_front(w);
+                }
+            }));
+            about_win->set_content(cardinal::move(body));
+        }
+        slate_win_about = slate_wm->add_window(cardinal::move(about_win));
+
+        slate_ui.set_root(cardinal::move(wm));
     }
 
     // ----- Console (cui) — the first REAL Studio panel on Cardinal Slate ----
@@ -3981,6 +4037,15 @@ int main(int argc, char** argv) {
 
                 cardinal::cui::DrawList dl;
                 slate_ui.paint(dl);
+                // The client rect (no dock strip covers it) is where a native
+                // host would place the 3D viewport; outline it so it's visible.
+                if (slate_wm != nullptr) {
+                    const cardinal::cui::Rect cr = slate_wm->client_rect();
+                    dl.rect_stroke(cr.inset(4.0f, 4.0f, 4.0f, 4.0f),
+                                   slate_ui.theme().text_dim, 1.0f, 0.0f);
+                    dl.text({ cr.left() + 12.0f, cr.bottom() - 24.0f },
+                            "client rect (viewport goes here)", slate_ui.theme().text_dim, 14.0f);
+                }
                 cardinal::ui::cui_render(dl, ImGui::GetWindowDrawList(),
                                          { origin.x, origin.y });
                 ImGui::Dummy(avail);   // reserve the painted region for sizing

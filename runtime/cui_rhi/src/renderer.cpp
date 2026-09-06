@@ -100,27 +100,70 @@ void Renderer::ensure_capacity(u32 slot, cardinal::usize vcount) {
 
 namespace {
 
-void emit_quad(cardinal::vector<Vertex>& out, float x, float y, float w, float h, u32 rgba) {
-    const Vertex a{ x,     y,     rgba };
-    const Vertex b{ x + w, y,     rgba };
-    const Vertex c{ x + w, y + h, rgba };
-    const Vertex d{ x,     y + h, rgba };
+// Software clipping. The native pipeline has no scissor state, so every
+// emitted primitive is clipped to its DrawCmd's clip rect here: axis-aligned
+// quads are intersected, lines are trimmed with Liang-Barsky, and glyph
+// pixel quads outside the clip are dropped. Matches the ImGui bridge (which
+// uses PushClipRect) so the two hosts look the same.
+struct Clip {
+    float x0, y0, x1, y1;
+    bool empty() const noexcept { return x1 <= x0 || y1 <= y0; }
+};
+
+Clip make_clip(const cui::Rect& r) noexcept {
+    return { r.left(), r.top(), r.right(), r.bottom() };
+}
+
+void emit_quad(cardinal::vector<Vertex>& out, float x, float y, float w, float h, u32 rgba,
+               const Clip& clip) {
+    float x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+    if (x0 < clip.x0) x0 = clip.x0;
+    if (y0 < clip.y0) y0 = clip.y0;
+    if (x1 > clip.x1) x1 = clip.x1;
+    if (y1 > clip.y1) y1 = clip.y1;
+    if (x1 <= x0 || y1 <= y0) return;
+    const Vertex a{ x0, y0, rgba };
+    const Vertex b{ x1, y0, rgba };
+    const Vertex c{ x1, y1, rgba };
+    const Vertex d{ x0, y1, rgba };
     out.push_back(a); out.push_back(b); out.push_back(c);
     out.push_back(a); out.push_back(c); out.push_back(d);
 }
 
 void emit_stroke(cardinal::vector<Vertex>& out, float x, float y, float w, float h,
-                 float t, u32 rgba) {
+                 float t, u32 rgba, const Clip& clip) {
     if (t < 1.0f) t = 1.0f;
-    emit_quad(out, x,         y,         w, t, rgba);   // top
-    emit_quad(out, x,         y + h - t, w, t, rgba);   // bottom
-    emit_quad(out, x,         y,         t, h, rgba);   // left
-    emit_quad(out, x + w - t, y,         t, h, rgba);   // right
+    emit_quad(out, x,         y,         w, t, rgba, clip);   // top
+    emit_quad(out, x,         y + h - t, w, t, rgba, clip);   // bottom
+    emit_quad(out, x,         y,         t, h, rgba, clip);   // left
+    emit_quad(out, x + w - t, y,         t, h, rgba, clip);   // right
+}
+
+// Liang-Barsky: trims the segment [p0,p1] to the clip box. False = fully out.
+bool clip_segment(float& x0, float& y0, float& x1, float& y1, const Clip& c) noexcept {
+    const float dx = x1 - x0, dy = y1 - y0;
+    float t0 = 0.0f, t1 = 1.0f;
+    const float p[4] = { -dx, dx, -dy, dy };
+    const float q[4] = { x0 - c.x0, c.x1 - x0, y0 - c.y0, c.y1 - y0 };
+    for (int i = 0; i < 4; ++i) {
+        if (p[i] == 0.0f) {
+            if (q[i] < 0.0f) return false;   // parallel and outside
+            continue;
+        }
+        const float r = q[i] / p[i];
+        if (p[i] < 0.0f) { if (r > t1) return false; if (r > t0) t0 = r; }
+        else             { if (r < t0) return false; if (r < t1) t1 = r; }
+    }
+    const float nx0 = x0 + dx * t0, ny0 = y0 + dy * t0;
+    const float nx1 = x0 + dx * t1, ny1 = y0 + dy * t1;
+    x0 = nx0; y0 = ny0; x1 = nx1; y1 = ny1;
+    return true;
 }
 
 void emit_line(cardinal::vector<Vertex>& out, float x0, float y0, float x1, float y1,
-               float t, u32 rgba) {
+               float t, u32 rgba, const Clip& clip) {
     if (t < 1.0f) t = 1.0f;
+    if (!clip_segment(x0, y0, x1, y1, clip)) return;
     float dx = x1 - x0, dy = y1 - y0;
     const float len = cardinal::sqrt(dx * dx + dy * dy);
     if (len <= 0.0001f) return;
@@ -136,19 +179,24 @@ void emit_line(cardinal::vector<Vertex>& out, float x0, float y0, float x1, floa
 }
 
 void emit_text(cardinal::vector<Vertex>& out, float x, float y, const cardinal::string& s,
-               float font_size, u32 rgba) {
+               float font_size, u32 rgba, const Clip& clip) {
     if (font_size <= 0.0f) font_size = 14.0f;
     const float px      = font_size / 8.0f;     // square cell pixel
     const float advance = px * 6.0f;            // 6 of 8 columns (matches text_advance 0.75)
+    // Whole run outside the clip vertically -> nothing to do.
+    if (y >= clip.y1 || y + 8.0f * px <= clip.y0) return;
     float pen = x;
     for (char ch : s) {
+        // Skip glyph cells entirely outside horizontally (cheap reject).
+        if (pen >= clip.x1) break;
+        if (pen + 8.0f * px + 0.5f <= clip.x0) { pen += advance; continue; }
         const u8* g = glyph8x8(ch);
         for (int row = 0; row < 8; ++row) {
             const u8 bits = g[row];
             if (bits == 0) continue;
             for (int col = 0; col < 8; ++col)
                 if (bits & (1u << col))
-                    emit_quad(out, pen + col * px, y + row * px, px + 0.5f, px + 0.5f, rgba);
+                    emit_quad(out, pen + col * px, y + row * px, px + 0.5f, px + 0.5f, rgba, clip);
         }
         pen += advance;
     }
@@ -159,21 +207,23 @@ void emit_text(cardinal::vector<Vertex>& out, float x, float y, const cardinal::
 void Renderer::build_geometry(const cui::DrawList& dl, cardinal::vector<Vertex>& out) {
     for (const auto& cmd : dl.cmds()) {
         const u32 col = pack_color(cmd.color);
+        const Clip clip = make_clip(cmd.clip);
+        if (clip.empty()) continue;
         switch (cmd.kind) {
         case cui::DrawKind::RectFilled:
             emit_quad(out, cmd.rect.pos.x, cmd.rect.pos.y,
-                      cmd.rect.size.x, cmd.rect.size.y, col);
+                      cmd.rect.size.x, cmd.rect.size.y, col, clip);
             break;
         case cui::DrawKind::RectStroke:
             emit_stroke(out, cmd.rect.pos.x, cmd.rect.pos.y,
-                        cmd.rect.size.x, cmd.rect.size.y, cmd.thickness, col);
+                        cmd.rect.size.x, cmd.rect.size.y, cmd.thickness, col, clip);
             break;
         case cui::DrawKind::Line:
             emit_line(out, cmd.rect.pos.x, cmd.rect.pos.y, cmd.p1.x, cmd.p1.y,
-                      cmd.thickness, col);
+                      cmd.thickness, col, clip);
             break;
         case cui::DrawKind::Text:
-            emit_text(out, cmd.rect.pos.x, cmd.rect.pos.y, cmd.text, cmd.font_size, col);
+            emit_text(out, cmd.rect.pos.x, cmd.rect.pos.y, cmd.text, cmd.font_size, col, clip);
             break;
         }
     }
