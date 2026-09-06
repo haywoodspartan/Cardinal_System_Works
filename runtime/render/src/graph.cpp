@@ -505,10 +505,10 @@ cardinal::rhi::Buffer* RhiBackend::gpu_buffer(const cardinal::string& name) cons
 
 void RhiBackend::make_copy_source(const cardinal::string& name) noexcept {
     // Async mode records on the queue's recorder inside submit(); barriers
-    // issued here would land on the WRONG command stream. The supported
-    // readback flow constructs the backend over the recorder itself
-    // (tests/gpu_compute) — synchronous mode only.
-    if (async_q_ != nullptr) return;
+    // issued from OUTSIDE that recording would land on the WRONG command
+    // stream. Allowed synchronously, or from inside the async post-record
+    // hook (sw_ is the live recorder there).
+    if (async_q_ != nullptr && !in_async_record_) return;
     const auto slot_it = buffer_cache_.find(name);
     if (slot_it == buffer_cache_.end() || !slot_it->second.buf || !sw_) return;
     cardinal::rhi::Buffer* buf = slot_it->second.buf.get();
@@ -547,7 +547,16 @@ void RhiBackend::execute(Graph& g) noexcept {
         async_q_->submit(
             [](cardinal::rhi::Swapchain* rec, void* user) noexcept {
                 auto* c = static_cast<Ctx*>(user);
-                c->self->execute_on(rec, *c->g);
+                RhiBackend& self = *c->self;
+                // Point sw_ at the live recorder for the whole recording so the
+                // post-record hook's make_copy_source lands on the SAME stream.
+                cardinal::rhi::Swapchain* saved = self.sw_;
+                self.sw_ = rec;
+                self.in_async_record_ = true;
+                self.execute_on(rec, *c->g);
+                if (self.post_record_) self.post_record_(rec, self, self.post_user_);
+                self.in_async_record_ = false;
+                self.sw_ = saved;
             },
             &cx, async_fence_.get(), ++async_fence_value_);
         return;

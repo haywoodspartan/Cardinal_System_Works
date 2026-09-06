@@ -674,7 +674,17 @@ public:
         bci.size        = desc.size;
         bci.usage       = to_vk_buffer_usage(desc.usage);
         bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
+        // Cross-queue buffers (AEGIS present ring): CONCURRENT across the
+        // graphics + compute families, so a compute-queue copy followed by a
+        // graphics-queue read needs only the timeline-semaphore ordering, no
+        // queue-family ownership transfer barriers.
+        const u32 families[2] = { dev_.vk_graphics_queue_family(), dev_.vk_compute_queue_family() };
+        if (desc.queue_shared && families[0] != static_cast<u32>(-1) &&
+            families[1] != static_cast<u32>(-1) && families[0] != families[1]) {
+            bci.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+            bci.queueFamilyIndexCount = 2;
+            bci.pQueueFamilyIndices   = families;
+        }
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO;
         if (desc.cpu_readable) {

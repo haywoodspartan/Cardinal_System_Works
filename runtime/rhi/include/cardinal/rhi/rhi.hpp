@@ -86,6 +86,12 @@ struct BufferDesc {
                                  // READBACK heap in COPY_DEST (never a UAV/SRV);
                                  // Vulkan: host-cached mapping (RANDOM access).
                                  // Used by the GPU compute validation harness.
+    bool  queue_shared{false};   // true: accessed from BOTH the graphics and the
+                                 // async-compute queue (e.g. written by an async
+                                 // copy, read by a graphics draw). Vulkan creates
+                                 // it VK_SHARING_MODE_CONCURRENT across the two
+                                 // families so no ownership transfer is needed;
+                                 // D3D12 needs nothing beyond fence ordering.
 };
 
 class Buffer {

@@ -418,8 +418,26 @@ public:
     // Fence + transition `name`'s buffer into CopySource based on the state
     // execute() left it in (UAV write vs SRV read — the harness can't know).
     // Call between execute() and Swapchain::copy_buffer, on the SAME
-    // recording the execute targeted.
+    // recording the execute targeted — synchronously, or from inside a
+    // post-record hook on the async lane (below).
     void make_copy_source(const cardinal::string& name) noexcept;
+    // Async-lane post-record hook: runs INSIDE the async submission's
+    // recording, right after the graph's dispatches, with the live recorder.
+    // This is the only place a host can append work to the same async command
+    // stream (e.g. make_copy_source + copy_buffer of a graph output into a
+    // host-owned, queue-shared buffer for the graphics queue to consume).
+    // Ignored on the synchronous path. `user` is passed back verbatim.
+    using PostRecordFn = void (*)(cardinal::rhi::Swapchain* rec, RhiBackend& be,
+                                  void* user) noexcept;
+    void set_post_record(PostRecordFn fn, void* user) noexcept {
+        post_record_ = fn; post_user_ = user;
+    }
+    // Async-lane state for hosts that consume graph outputs on the graphics
+    // queue: the timeline fence the lane signals and the value of the most
+    // recent submission — pass both to Swapchain::wait_fence before reading.
+    bool                  async_lane()        const noexcept { return async_q_ != nullptr; }
+    cardinal::rhi::Fence* async_fence()       const noexcept { return async_fence_.get(); }
+    u64                   async_fence_value() const noexcept { return async_fence_value_; }
 
 private:
     RhiBackend() = default;
@@ -466,6 +484,9 @@ private:
     cardinal::vector<PassEvent> events_;
     Stats stats_;
     bool  gpu_execute_ {false};   // opt-in; see set_gpu_execute (default safe)
+    PostRecordFn post_record_ {nullptr};
+    void*        post_user_   {nullptr};
+    bool         in_async_record_ {false};   // true while the async lambda records
 };
 
 // ---------------------------------------------------------------------------

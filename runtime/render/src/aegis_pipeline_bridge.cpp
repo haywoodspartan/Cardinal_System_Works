@@ -29,11 +29,35 @@
 #include <cardinal/scene/renderer.hpp>
 #include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/std/cmath.hpp>   // cardinal::sqrt (camera_dir normalize)
+#include <cardinal/core/std/cstring.hpp>
 #include <cardinal/core/std/utility.hpp>
-
 namespace cardinal::render {
-
 namespace {
+// Fullscreen present of the AEGIS composite buffer (RGBA8, W×H, row 0 = top)
+// into the active viewport: bufferless triangle from SV_VertexID, the PS maps
+// each viewport pixel to the buffer with a nearest stretch. Storage slot 0.
+const char* kAegisBlitShader =
+    "ByteAddressBuffer InPresent : register(t0);\n"
+    "struct Push { uint4 dims; };   // vpW, vpH, W, H\n"
+    "#ifdef __spirv__\n"
+    "[[vk::push_constant]] Push pc;\n"
+    "#else\n"
+    "ConstantBuffer<Push> pc : register(b0);\n"
+    "#endif\n"
+    "float4 VSMain(uint vid : SV_VertexID) : SV_Position {\n"
+    "  float2 uv = float2((vid << 1) & 2, vid & 2);\n"
+    "  return float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);\n"
+    "}\n"
+    "float4 PSMain(float4 pos : SV_Position) : SV_Target {\n"
+    "  uint vpW = max(pc.dims.x, 1u), vpH = max(pc.dims.y, 1u);\n"
+    "  uint W = max(pc.dims.z, 1u),   H = max(pc.dims.w, 1u);\n"
+    "  uint sx = min((uint)pos.x * W / vpW, W - 1u);\n"
+    "  uint sy = min((uint)pos.y * H / vpH, H - 1u);\n"
+    "  uint p = InPresent.Load((sy * W + sx) * 4u);\n"
+    "  return float4((p & 0xFFu) / 255.0, ((p >> 8) & 0xFFu) / 255.0,\n"
+    "                ((p >> 16) & 0xFFu) / 255.0, 1.0);\n"
+    "}\n";
+
 
 class AegisGraphPipeline final : public Pipeline {
 public:
@@ -74,7 +98,7 @@ public:
         int backend_mode {-1}, max_tier {-1}, max_tier_fp8 {-1},
             max_tier_fp4 {-1}, async_compute {-1}, variable_rate_shading {-1},
             bindless_resources {-1}, direct_storage {-1}, gpu_execute {-1},
-            view_mode {-1};
+            view_mode {-1}, aegis_present {-1};
     };
     void cache_knob_indices() {
         auto find = [&](const char* id) -> int {
@@ -92,6 +116,7 @@ public:
         kidx_.direct_storage        = find("direct_storage");
         kidx_.gpu_execute           = find("gpu_execute");
         kidx_.view_mode             = find("view_mode");
+        kidx_.aegis_present         = find("aegis_present");
     }
     bool kb(int idx) const {
         return idx >= 0 && knobs_[static_cast<cardinal::usize>(idx)].kind == KnobKind::Bool
@@ -159,8 +184,186 @@ public:
         const cardinal::u32 h = sw_ ? sw_->height() : 0u;
         gpu::AegisConfig want =
             aegis_resolve_config(runner_->config(), dev_caps_, read_request(), w, h);
+        // Real scene feed: the palette sizes are baked into the graph
+        // (buffer sizes + push constants), so a change reconfigures — which
+        // invalidates the persistent graph and forces the rebuild below.
+        want.material_count = mat_count_;
+        want.light_count    = light_count_;
         if (!aegis_config_equal(want, runner_->config()))
             runner_->reconfigure(want);
+    }
+    // ---- Real scene feed --------------------------------------------------
+    // Flattens the scene into the AEGIS input streams every frame, in place
+    // (the persistent graph keeps raw pointers into these vectors; they only
+    // reallocate when a COUNT changes, which also forces a graph rebuild):
+    //   tris_   : world-space triangle list, 9 f32 / tri (skinned meshes are
+    //             LBS-deformed on the CPU exactly like the forward path)
+    //   mids_   : material index per tri (palette deduped on tint/rough/metal)
+    //   mats_   : 8 f32 / material — base rgb, roughness, metalness, 3 spare
+    //   lights_ : 16 f32 PackedLight — kind, _, pos×3, dir×3, colour×3,
+    //             intensity, range, spot inner/outer cos, _
+    // Empty palettes get one placeholder entry: a 0-byte imported buffer is
+    // skipped by the RhiBackend and every pass touching it would stub.
+    void extract_scene(scene::Scene& scn, bool feed) {
+        struct MatKey { float r, g, b, ro, me; };
+        cardinal::vector<MatKey> keys;
+        mats_.clear();
+        if (!feed) {
+            // Telemetry-only frames skip the flatten (it duplicates the forward
+            // renderer's transform work) and feed placeholder palettes.
+            tris_.clear(); mids_.clear(); tri_count_ = 0;
+            const float m[8] = { 0.8f, 0.8f, 0.8f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f };
+            for (float f : m) mats_.push_back(f);
+            mat_count_ = 1;
+            lights_.assign(16, 0.0f);
+            light_count_ = 1;
+            return;
+        }
+        auto mat_index = [&](const scene::Entity& e) -> cardinal::u32 {
+            const MatKey k{ e.tint.x, e.tint.y, e.tint.z,
+                            e.material.roughness, e.material.metalness };
+            for (cardinal::usize i = 0; i < keys.size(); ++i)
+                if (cardinal::memcmp(&keys[i], &k, sizeof k) == 0) return static_cast<cardinal::u32>(i);
+            keys.push_back(k);
+            const float m[8] = { k.r, k.g, k.b, k.ro, k.me, 0.0f, 0.0f, 0.0f };
+            for (float f : m) mats_.push_back(f);
+            return static_cast<cardinal::u32>(keys.size() - 1);
+        };
+        cardinal::usize tri_total = 0;
+        for (const auto& e : scn.entities())
+            if (e.visible && e.mesh && e.mesh->cpu_vertices())
+                tri_total += e.mesh->vertex_count() / 3;
+        tris_.resize(tri_total * 9);
+        mids_.resize(tri_total);
+        cardinal::usize t = 0;
+        for (const auto& e : scn.entities()) {
+            if (!e.visible || !e.mesh) continue;
+            const scene::Vertex* src = e.mesh->cpu_vertices();
+            const cardinal::u32 vc = (e.mesh->vertex_count() / 3) * 3;
+            if (!src || vc == 0) continue;
+            const cardinal::u32 mid = mat_index(e);
+            const scene::Mat4 model = e.transform.matrix();
+            const scene::Mat4* pal = nullptr;
+            cardinal::u32 palc = 0;
+            const scene::skin::Influence* infl = nullptr;
+            if (e.skeleton && e.mesh->skinned()) {
+                scene::skin::compute_palette(*e.skeleton, e.pose, skin_scratch_global_, skin_scratch_palette_);
+                pal = skin_scratch_palette_.data();
+                palc = static_cast<cardinal::u32>(skin_scratch_palette_.size());
+                infl = e.mesh->skin_influences();
+            }
+            for (cardinal::u32 v = 0; v < vc; ++v) {
+                scene::Vec3 p = src[v].position;
+                if (pal && infl) {
+                    scene::Vec3 n;
+                    scene::skin::skin_point(infl[v], pal, palc, src[v].position, src[v].normal, p, n);
+                }
+                const scene::Vec4 w = model * scene::Vec4{ p.x, p.y, p.z, 1.0f };
+                float* o = tris_.data() + t * 9 + (v % 3) * 3;
+                o[0] = w.x; o[1] = w.y; o[2] = w.z;
+                if ((v % 3) == 2) { mids_[t] = mid; ++t; }
+            }
+        }
+        tri_count_ = static_cast<cardinal::u32>(t);
+        if (mats_.empty()) {
+            const float m[8] = { 0.8f, 0.8f, 0.8f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f };
+            for (float f : m) mats_.push_back(f);
+        }
+        mat_count_ = static_cast<cardinal::u32>(mats_.size() / 8);
+        lights_.clear();
+        if (light_set_) {
+            for (const auto& l : light_set_->lights()) {
+                float L[16] = {};
+                L[0]  = (l.kind == scene::LightKind::Directional) ? 0.0f : 1.0f;
+                L[2]  = l.position.x;  L[3]  = l.position.y;  L[4]  = l.position.z;
+                L[5]  = l.direction.x; L[6]  = l.direction.y; L[7]  = l.direction.z;
+                L[8]  = l.color.x;     L[9]  = l.color.y;     L[10] = l.color.z;
+                L[11] = l.intensity;   L[12] = l.range;
+                L[13] = l.spot_inner_cos; L[14] = l.spot_outer_cos;
+                for (float f : L) lights_.push_back(f);
+            }
+            const scene::Vec3 a = light_set_->ambient();
+            amb_data_[0] = a.x; amb_data_[1] = a.y; amb_data_[2] = a.z;
+        }
+        if (lights_.empty()) lights_.assign(16, 0.0f);   // one zero-intensity placeholder
+        light_count_ = static_cast<cardinal::u32>(lights_.size() / 16);
+    }
+    // ---- On-screen present ------------------------------------------------
+    // Inside the async recording (post-record hook): fence + transition the
+    // composite output, copy it into this frame's queue-shared ring slot.
+    static void post_record_thunk(rhi::Swapchain* rec, graph::RhiBackend& be, void* user) noexcept {
+        static_cast<AegisGraphPipeline*>(user)->post_record(rec, be);
+    }
+    void post_record(rhi::Swapchain* rec, graph::RhiBackend& be) noexcept {
+        if (!hook_dst_ || !rec) return;
+        rhi::Buffer* src = be.gpu_buffer("present.rgba");
+        if (!src || src->size() < hook_dst_->size()) return;
+        be.make_copy_source("present.rgba");
+        rec->copy_buffer(src, 0, hook_dst_, 0, hook_dst_->size());
+        hook_copied_ = true;
+    }
+    bool ensure_blit_pso() {
+        if (blit_pso_) return true;
+        if (blit_tried_ || !dev_ || !sw_) return false;
+        blit_tried_ = true;
+        auto vs = dev_->compile_shader(rhi::ShaderStage::Vertex,   kAegisBlitShader, "VSMain");
+        auto fs = dev_->compile_shader(rhi::ShaderStage::Fragment, kAegisBlitShader, "PSMain");
+        if (!vs.ok() || !fs.ok()) {
+            cardinal::log::errorf("render/aegis", "present blit shader compile failed");
+            return false;
+        }
+        rhi::PipelineDesc pd{};
+        pd.vertex_shader   = cardinal::move(vs);
+        pd.fragment_shader = cardinal::move(fs);
+        pd.vertex_stride   = 0;                       // bufferless fullscreen triangle
+        pd.color_format    = sw_->color_format();
+        pd.depth_format    = sw_->depth_format();     // attachment-compatible, test off
+        pd.depth_test      = false;
+        pd.depth_write     = false;
+        pd.topology        = rhi::PrimitiveTopology::TriangleList;
+        pd.push_constant_size    = 16;
+        pd.storage_buffer_slots  = 1;
+        pd.sampled_texture_slots = 0;
+        blit_pso_ = dev_->create_pipeline(pd);
+        if (!blit_pso_) cardinal::log::errorf("render/aegis", "present blit PSO creation failed");
+        return blit_pso_ != nullptr;
+    }
+    // Ring slot for this render(): (re)create when the composite size changed.
+    // Old buffers are retired, not destroyed — a frame in flight may still be
+    // reading them — and dropped a few frames later.
+    rhi::Buffer* acquire_present_slot(cardinal::usize bytes) {
+        PresentSlot& slot = ring_[ring_next_ % kRingSlots];
+        if (!slot.buf || slot.size != bytes) {
+            if (slot.buf) retired_.push_back(Retired{ cardinal::move(slot.buf), frame_counter_ });
+            rhi::BufferDesc bd{};
+            bd.size         = bytes;
+            bd.usage        = static_cast<u32>(rhi::BufferUsage::Storage);
+            bd.cpu_writable = false;
+            bd.queue_shared = true;
+            slot.buf  = dev_->create_buffer(bd);
+            slot.size = slot.buf ? bytes : 0;
+        }
+        return slot.buf.get();
+    }
+    void retire_old_buffers() {
+        cardinal::usize keep = 0;
+        for (cardinal::usize i = 0; i < retired_.size(); ++i) {
+            if (frame_counter_ - retired_[i].frame < kRetireFrames) {
+                if (keep != i) retired_[keep] = cardinal::move(retired_[i]);
+                ++keep;
+            }
+        }
+        retired_.resize(keep);
+    }
+    void draw_present(rhi::Buffer* buf) {
+        const cardinal::u32 vp = sw_->active_viewport();
+        cardinal::u32 vw = sw_->viewport_width(vp), vh = sw_->viewport_height(vp);
+        if (vw == 0 || vh == 0) { vw = sw_->width(); vh = sw_->height(); }
+        const cardinal::u32 push[4] = { vw, vh, runner_->config().width, runner_->config().height };
+        sw_->bind_pipeline(blit_pso_.get());
+        sw_->set_push_constants(0, push, sizeof push);
+        sw_->bind_storage_buffer(0, buf);
+        sw_->draw(3);
     }
 
     PipelineId  id()          const noexcept override { return PipelineId::Aegis; }
@@ -233,31 +436,45 @@ public:
 
     void render(scene::Scene& scn, float aspect) override {
         if (!renderer_) return;
-
+        ++frame_counter_;
+        retire_old_buffers();
         // Pick up any editor-driven backend change before this frame's
         // build + execute.
         update_backend_from_knob();
+        // Real scene feed BEFORE apply_config: the palette counts it derives
+        // are part of the config (they size graph buffers). Fed whenever the
+        // graph will actually consume it (GPU execute requested, or a CPU
+        // simulation backend is selected); telemetry-only frames skip it.
+        const bool feed = kb(kidx_.gpu_execute) ||
+                          current_mode_ == AegisBackendMode::Cpu ||
+                          current_mode_ == AegisBackendMode::ThreadedCpu;
+        extract_scene(scn, feed);
         // Push knob/caps changes (precision tier + GPU features) into the
         // runner config — diff-gated, so it only reconfigures on a real change.
         apply_config();
-
-        // Honour the experimental GPU-compute-execute toggle: when on, the
-        // RhiBackend actually dispatches the AEGIS compute graph on the GPU;
-        // when off (default) it stays recording-only telemetry while the
-        // ForwardRenderer draws the screen (the stable path).
+        // GPU compute execute. The AEGIS graph is dispatched for real ONLY on
+        // the async compute lane: render() runs inside the frame's render
+        // pass, and a compute dispatch inside an active dynamic-rendering
+        // instance is illegal on Vulkan — so without an async queue (device
+        // support AND the Async Compute knob) the backend stays recording-only
+        // telemetry and the ForwardRenderer draws the screen.
+        bool gpu_on = false;
         if (rhi_backend_) {
-            rhi_backend_->set_gpu_execute(kb(kidx_.gpu_execute));
-            // Async-compute lane: when the resolved config carries
-            // async_compute (device-supported AND requested), the whole AEGIS
-            // compute graph is recorded + submitted on the dedicated async
-            // queue — concurrent with this frame's graphics work. The queue
-            // member is declared ABOVE rhi_backend_ so it destructs AFTER the
-            // backend's drain (set_async_queue holds a non-owning pointer).
             const bool want_async = runner_->config().features.async_compute;
             if (want_async && async_queue_ == nullptr && dev_ != nullptr)
                 async_queue_ = dev_->create_async_compute_queue();
             rhi_backend_->set_async_queue(
                 want_async ? async_queue_.get() : nullptr);
+            const bool want_gpu = kb(kidx_.gpu_execute);
+            gpu_on = want_gpu && rhi_backend_->async_lane();
+            rhi_backend_->set_gpu_execute(gpu_on);
+            if (want_gpu && !gpu_on && !gpu_gate_logged_) {
+                gpu_gate_logged_ = true;
+                cardinal::log::warnf("render/aegis",
+                    "GPU Compute Execute needs the async compute lane (enable the "
+                    "Async Compute knob on a device with a compute queue); staying "
+                    "recording-only");
+            }
         }
 
         // PERSISTENT GRAPH: the AEGIS topology is static for a given config,
@@ -268,14 +485,22 @@ public:
         // which optional handles are valid) is baked at build — if this bridge
         // ever feeds real scene streams, it must force a rebuild when the
         // shape changes (set a dirty flag; see aegis_runner.hpp is_built()).
-        if (!runner_->is_built()) {
+        // Rebuild when invalidated (reconfigure) OR when the triangle count
+        // changed: the count is baked into buffer sizes + push constants.
+        if (!runner_->is_built() || built_tri_count_ != tri_count_) {
             graph::Graph& gr = runner_->begin_build();
             gpu::AegisSceneInputs in;
-            in.triangle_count = 0;
-            in.tris         = gr.declare_buffer(graph::BufferDesc{"tris",  0, 0, true});
-            in.material_ids = gr.declare_buffer(graph::BufferDesc{"mids",  0, 0, true});
-            in.materials    = gr.declare_buffer(graph::BufferDesc{"mats",  0, 0, true});
-            in.lights       = gr.declare_buffer(graph::BufferDesc{"lts",   0, 0, true});
+            in.triangle_count = tri_count_;
+            if (tri_count_ > 0) {
+                in.tris         = gr.import_buffer("tris", tris_.data(), tris_.size() * 4, 4);
+                in.material_ids = gr.import_buffer("mids", mids_.data(), mids_.size() * 4, 4);
+            } else {
+                in.tris         = gr.declare_buffer(graph::BufferDesc{"tris",  0, 0, true});
+                in.material_ids = gr.declare_buffer(graph::BufferDesc{"mids",  0, 0, true});
+            }
+            in.materials    = gr.import_buffer("mats", mats_.data(),   mats_.size() * 4, 4);
+            in.lights       = gr.import_buffer("lts",  lights_.data(), lights_.size() * 4, 4);
+            built_tri_count_ = tri_count_;
             in.ambient      = gr.import_buffer("amb", amb_data_, 12, 4);
             in.view_proj    = gr.import_buffer("vp",  vp_data_,  64, 4);
             in.camera_dir   = gr.import_buffer("dir", dir_data_, 12, 4);
@@ -314,19 +539,48 @@ public:
             }
         }
 
+        // On-screen present: arm the post-record hook so the async recording
+        // copies the composite into this frame's queue-shared ring slot.
+        const bool present_want = gpu_on && kb(kidx_.aegis_present) && tri_count_ > 0 && dev_ && sw_;
+        hook_dst_ = nullptr;
+        hook_copied_ = false;
+        if (present_want) {
+            const cardinal::usize bytes = static_cast<cardinal::usize>(runner_->config().width) *
+                                          runner_->config().height * 4u;
+            hook_dst_ = acquire_present_slot(bytes);
+            rhi_backend_->set_post_record(hook_dst_ ? &post_record_thunk : nullptr, this);
+        } else if (rhi_backend_) {
+            rhi_backend_->set_post_record(nullptr, nullptr);
+        }
         runner_->execute();
-
+        real_dispatches_ = 0;
+        if (rhi_backend_)
+            for (const auto& ev : rhi_backend_->events()) if (ev.real_dispatch) ++real_dispatches_;
+        // Present the AEGIS frame when the copy was really recorded: make the
+        // graphics queue wait (GPU-side) for this submission's fence value,
+        // then blit the ring slot into the active viewport.
+        if (present_want && hook_copied_ && real_dispatches_ > 0 && ensure_blit_pso()) {
+            sw_->wait_fence(rhi_backend_->async_fence(), rhi_backend_->async_fence_value());
+            draw_present(hook_dst_);
+            ++ring_next_;
+            if (!present_logged_) {
+                present_logged_ = true;
+                cardinal::log::infof("render/aegis",
+                    "AEGIS on-screen: %u tris, %u materials, %u lights, %u real dispatches, %ux%u composite",
+                    tri_count_, mat_count_, light_count_, real_dispatches_,
+                    runner_->config().width, runner_->config().height);
+            }
+            return;
+        }
         // Delegate the actual draw to the ForwardRenderer, honouring the
         // per-viewport view mode the Studio pushed into our "view_mode" knob
         // (Solid / Wireframe / Polygons / Heightmap / Normals / RTX Preview).
-        // When graph::RhiBackend ships its own raster output this fallthrough
-        // goes away, but the view-mode contract stays the same.
         const int vm_e_raw = ke(kidx_.view_mode, 0);
         const int vm_e     = (vm_e_raw < 0) ? 0 : (vm_e_raw > 5 ? 5 : vm_e_raw);
         renderer_->render(scn, static_cast<scene::ViewMode>(vm_e), aspect);
     }
-
     void set_light_set(const scene::LightSet* lights) override {
+        light_set_ = lights;
         if (renderer_) renderer_->set_light_set(lights);
     }
     void set_show_aabbs  (bool on) override { if (renderer_) renderer_->set_show_aabbs(on);   }
@@ -354,7 +608,8 @@ public:
         // schema changes — the editor reads cluster_* fields uniformly
         // across pipelines and clusters here is "AEGIS graph nodes".
         s.clusters_total = runner_ ? runner_->compile_stats().passes : 0;
-        s.clusters_drawn = s.clusters_total;
+        s.clusters_drawn = real_dispatches_;          // passes that really dispatched on the GPU
+        s.triangles_drawn = built_tri_count_;         // triangles fed to the AEGIS graph
         return s;
     }
 
@@ -436,11 +691,16 @@ private:
         add_bool_("hiz_occlusion", "Hi-Z Occlusion Culling", "AEGIS",
             "Two-pass hierarchical-Z occlusion test against last frame's depth so "
             "hidden clusters never reach the rasterizer.", true);
-        add_bool_("gpu_execute", "GPU Compute Execute (experimental)", "AEGIS",
-            "Run the AEGIS compute graph on the GPU through RhiBackend instead of "
-            "recording-only telemetry. EXPERIMENTAL + unvalidated on real hardware: "
-            "enable to test GPU dispatch (buffers are now cached across frames). "
-            "Leave OFF for the stable ForwardRenderer path.", false);
+        add_bool_("gpu_execute", "GPU Compute Execute", "AEGIS",
+            "Dispatch the AEGIS compute graph on the GPU (real scene triangles, "
+            "materials and lights) through RhiBackend on the async compute lane. "
+            "Requires the Async Compute knob; without it the graph stays "
+            "recording-only telemetry.", false);
+        add_bool_("aegis_present", "Present AEGIS Output", "AEGIS",
+            "Show the AEGIS composite (tile-binned V-Buffer -> tile-lit PBR resolve "
+            "-> tonemap) in the viewport instead of the ForwardRenderer draw. Needs "
+            "GPU Compute Execute + Async Compute. Editor gizmos are not drawn in "
+            "this mode yet.", false);
 
         // ---- Quality / Resolution -------------------------------------
         add_float_("resolution_scale", "Resolution Scale", "Quality",
@@ -703,6 +963,31 @@ private:
     float dir_data_[3] {0.0f, 0.0f, 1.0f};
     float ivp_data_[16] {};
     float campos_data_[3] {};
+    // ---- Real scene feed (see extract_scene) -------------------------------
+    const scene::LightSet*            light_set_ {nullptr};
+    cardinal::vector<float>           tris_;
+    cardinal::vector<cardinal::u32>   mids_;
+    cardinal::vector<float>           mats_;
+    cardinal::vector<float>           lights_;
+    cardinal::u32                     tri_count_ {0}, mat_count_ {0}, light_count_ {0};
+    cardinal::u32                     built_tri_count_ {0};
+    cardinal::vector<scene::Mat4>     skin_scratch_global_, skin_scratch_palette_;
+    bool                              gpu_gate_logged_ {false};
+    cardinal::u32                     real_dispatches_ {0};
+    cardinal::u32                     frame_counter_ {0};
+    // ---- On-screen present (see post_record / draw_present) ----------------
+    static constexpr cardinal::u32 kRingSlots    = 4;   // > frames in flight
+    static constexpr cardinal::u32 kRetireFrames = 16;
+    struct PresentSlot { cardinal::unique_ptr<rhi::Buffer> buf; cardinal::usize size {0}; };
+    struct Retired     { cardinal::unique_ptr<rhi::Buffer> buf; cardinal::u32 frame {0}; };
+    PresentSlot                       ring_[kRingSlots];
+    cardinal::u32                     ring_next_ {0};
+    cardinal::vector<Retired>         retired_;
+    cardinal::unique_ptr<rhi::Pipeline> blit_pso_;
+    bool                              blit_tried_ {false};
+    rhi::Buffer*                      hook_dst_ {nullptr};
+    bool                              hook_copied_ {false};
+    bool                              present_logged_ {false};
 };
 
 }  // namespace

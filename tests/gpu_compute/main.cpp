@@ -490,11 +490,43 @@ void run_backend(rhi::Backend be, const char* be_name) {
             auto abackend = rg::RhiBackend::create(*dev);
             abackend->set_gpu_execute(true);
             abackend->set_async_queue(queue.get());
+            // Post-record hook (the Studio on-screen path): inside the async
+            // recording, fence + copy the composite into a readback buffer,
+            // then CPU-wait the lane's fence via the accessors and compare.
+            rhi::BufferDesc hbd{};
+            hbd.size = graph->buffer(st.composite->out_presentation).size_bytes;
+            hbd.usage = 0; hbd.cpu_writable = false; hbd.cpu_readable = true;
+            auto hook_rb = dev->create_buffer(hbd);
+            struct HookCx { rhi::Buffer* dst; bool copied; } hcx{ hook_rb.get(), false };
+            abackend->set_post_record(
+                [](rhi::Swapchain* rec, rg::RhiBackend& be, void* u) noexcept {
+                    auto* c = static_cast<HookCx*>(u);
+                    rhi::Buffer* src = be.gpu_buffer("present.rgba");
+                    if (!src || !c->dst) return;
+                    be.make_copy_source("present.rgba");
+                    rec->copy_buffer(src, 0, c->dst, 0, c->dst->size());
+                    c->copied = true;
+                }, &hcx);
             abackend->execute(*graph);
             u32 areal = 0;
             for (const auto& ev : abackend->events())
                 if (ev.real_dispatch) ++areal;
             CHECK(areal >= 10u);                    // every kernel routed async
+            CHECK(hcx.copied);
+            CHECK(abackend->async_lane() && abackend->async_fence() != nullptr);
+            CHECK(abackend->async_fence_value() >= 1u);
+            abackend->async_fence()->wait_cpu(abackend->async_fence_value(), 0);
+            {
+                std::vector<u8> got(hook_rb->size());
+                CHECK(hook_rb->download(got.data(), got.size(), 0));
+                const auto expect = cpu->buffer_contents(st.composite->out_presentation);
+                std::vector<u8> expect_std(expect.begin(), expect.end());
+                std::string why;
+                const Ref pref{ "present.rgba", st.composite->out_presentation, Cmp::Byte1 };
+                const bool ok = compare_output(pref, expect_std, got, {}, why);
+                if (!ok) cardinal::log::errorf("gputest", "%s async hook present.rgba: %s", be_name, why.c_str());
+                CHECK(ok);
+            }
             abackend.reset();                       // dtor drain must not hang
             cardinal::log::infof("gputest",
                 "%s async routing: %u real dispatches via ComputeQueue", be_name, areal);

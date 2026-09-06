@@ -272,6 +272,14 @@ static rhi::Backend parse_backend_arg(int argc, char** argv) {
     }
     return rhi::Backend::Auto;
 }
+// --aegis-gpu: turn on Async Compute + GPU Compute Execute + Present AEGIS
+// Output on the AEGIS pipeline at boot (smoke runs / CI; the panel knobs
+// remain the interactive way).
+static bool has_arg(int argc, char** argv, const char* flag) {
+    for (int i = 1; i < argc; ++i)
+        if (std::strcmp(argv[i], flag) == 0) return true;
+    return false;
+}
 static const char* backend_label(rhi::Backend b) {
     switch (b) {
         case rhi::Backend::Vulkan: return "Vulkan";
@@ -2081,6 +2089,15 @@ int main(int argc, char** argv) {
     // to honour the "Aegis 2.0 default on any start" contract. Runtime
     // pipeline switches via the panel still work; they're session-only.
     pipelines->set_active(rnd::PipelineId::Aegis);
+    if (has_arg(argc, argv, "--aegis-gpu")) {
+        for (auto* p : pipelines->all()) {
+            if (p == nullptr || p->id() != rnd::PipelineId::Aegis) continue;
+            for (auto& k : p->knobs())
+                if (k.id == "async_compute" || k.id == "gpu_execute" || k.id == "aegis_present")
+                    k.b = true;
+        }
+        clog::infof("sample", "--aegis-gpu: AEGIS async compute + GPU execute + present enabled at boot");
+    }
 
     const auto t0 = std::chrono::steady_clock::now();
     auto       prev_t = t0;
