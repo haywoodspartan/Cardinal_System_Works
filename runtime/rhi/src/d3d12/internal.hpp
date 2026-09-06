@@ -138,7 +138,17 @@ public:
     }
 
     usize size() const noexcept override { return size_; }
-
+    // Persistent mapping: UPLOAD / GPU_UPLOAD heaps may stay mapped for the
+    // resource's lifetime (Map is idempotent per subresource; the ComPtr
+    // release tears it down). One Map on first use, never Unmap.
+    void* map_write() override {
+        if (!cpu_writable_) return nullptr;
+        if (mapped_ == nullptr) {
+            D3D12_RANGE read_range{0, 0};   // we don't read
+            if (FAILED(res_->Map(0, &read_range, &mapped_))) mapped_ = nullptr;
+        }
+        return mapped_;
+    }
     void upload(const void* data, usize size, usize offset) override {
         if (!cpu_writable_) {
             cardinal::log::errorf("rhi/d3d12", "upload() on non-cpu_writable buffer");
@@ -148,14 +158,12 @@ public:
             cardinal::log::errorf("rhi/d3d12", "upload() out of range");
             return;
         }
-        void* mapped = nullptr;
-        D3D12_RANGE read_range{0, 0};   // we don't read
-        if (FAILED(res_->Map(0, &read_range, &mapped))) {
+        void* mapped = map_write();
+        if (mapped == nullptr) {
             cardinal::log::errorf("rhi/d3d12", "upload Map failed");
             return;
         }
         cardinal::memcpy(static_cast<u8*>(mapped) + offset, data, size);
-        res_->Unmap(0, nullptr);
     }
 
     u64 device_address() const noexcept override { return gpu_va_; }
@@ -190,6 +198,7 @@ private:
     bool                   cpu_writable_{false};
     bool                   cpu_readable_{false};
     u64                    gpu_va_{0};
+    void*                  mapped_{nullptr};   // persistent Map() (see map_write)
 };
 
 // -----------------------------------------------------------------------------

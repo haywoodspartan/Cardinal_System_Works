@@ -233,8 +233,25 @@ public:
         for (const auto& e : scn.entities())
             if (e.visible && e.mesh && e.mesh->cpu_vertices())
                 tri_total += e.mesh->vertex_count() / 3;
-        tris_.resize(tri_total * 9);
-        mids_.resize(tri_total);
+        // ZERO-COPY: when the GPU graph is live and the stream shape is
+        // unchanged, write straight into the RhiBackend's next unified-memory
+        // import slot (VRAM the CPU can map) instead of into tris_/mids_ and
+        // letting execute() memcpy them across. The host arrays keep their
+        // (stale) size for the CPU backends + the rebuild frame.
+        float*         tri_dst = nullptr;
+        cardinal::u32* mid_dst = nullptr;
+        bool zero_copy = false;
+        if (zero_copy_ok_ && rhi_backend_ && tri_total > 0 && built_tri_count_ == tri_total) {
+            tri_dst = static_cast<float*>(rhi_backend_->import_write_ptr("tris", tri_total * 36u));
+            mid_dst = static_cast<cardinal::u32*>(rhi_backend_->import_write_ptr("mids", tri_total * 4u));
+            zero_copy = (tri_dst != nullptr) && (mid_dst != nullptr);
+        }
+        if (!zero_copy) {
+            tris_.resize(tri_total * 9);
+            mids_.resize(tri_total);
+            tri_dst = tris_.data();
+            mid_dst = mids_.data();
+        }
         cardinal::usize t = 0;
         for (const auto& e : scn.entities()) {
             if (!e.visible || !e.mesh) continue;
@@ -259,12 +276,17 @@ public:
                     scene::skin::skin_point(infl[v], pal, palc, src[v].position, src[v].normal, p, n);
                 }
                 const scene::Vec4 w = model * scene::Vec4{ p.x, p.y, p.z, 1.0f };
-                float* o = tris_.data() + t * 9 + (v % 3) * 3;
+                float* o = tri_dst + t * 9 + (v % 3) * 3;
                 o[0] = w.x; o[1] = w.y; o[2] = w.z;
-                if ((v % 3) == 2) { mids_[t] = mid; ++t; }
+                if ((v % 3) == 2) { mid_dst[t] = mid; ++t; }
             }
         }
         tri_count_ = static_cast<cardinal::u32>(t);
+        if (zero_copy) {
+            rhi_backend_->mark_import_host_written("tris");
+            rhi_backend_->mark_import_host_written("mids");
+            ++zero_copy_frames_;
+        }
         if (mats_.empty()) {
             const float m[8] = { 0.8f, 0.8f, 0.8f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f };
             for (float f : m) mats_.push_back(f);
@@ -388,6 +410,7 @@ public:
         dev_caps_.variable_rate_shading = caps.variable_rate_shading;
         dev_caps_.bindless_resources    = caps.bindless_resources;
         dev_caps_.direct_storage        = caps.direct_storage_capable;
+        unified_memory_ = caps.unified_memory;
 
         // Per-knob availability gating. Walks every knob whose ID matches a
         // GpuCapabilities feature flag and sets `available` + a friendly
@@ -448,6 +471,7 @@ public:
         const bool feed = kb(kidx_.gpu_execute) ||
                           current_mode_ == AegisBackendMode::Cpu ||
                           current_mode_ == AegisBackendMode::ThreadedCpu;
+        zero_copy_ok_ = rhi_backend_ && kb(kidx_.gpu_execute) && rhi_backend_->async_lane();
         extract_scene(scn, feed);
         // Push knob/caps changes (precision tier + GPU features) into the
         // runner config — diff-gated, so it only reconfigures on a real change.
@@ -570,6 +594,11 @@ public:
                     tri_count_, mat_count_, light_count_, real_dispatches_,
                     runner_->config().width, runner_->config().height);
             }
+            if (zero_copy_frames_ == 1)
+                cardinal::log::infof("render/aegis",
+                    "zero-copy scene streaming active: %u tris written straight into the "
+                    "double-buffered import mapping (unified memory: %s)",
+                    tri_count_, unified_memory_ ? "yes, VRAM-resident" : "no, host memory");
             return;
         }
         // Delegate the actual draw to the ForwardRenderer, honouring the
@@ -975,6 +1004,9 @@ private:
     bool                              gpu_gate_logged_ {false};
     cardinal::u32                     real_dispatches_ {0};
     cardinal::u32                     frame_counter_ {0};
+    bool                              zero_copy_ok_ {false};        // per frame: GPU lane live
+    cardinal::u32                     zero_copy_frames_ {0};
+    bool                              unified_memory_ {false};      // from on_caps
     // ---- On-screen present (see post_record / draw_present) ----------------
     static constexpr cardinal::u32 kRingSlots    = 4;   // > frames in flight
     static constexpr cardinal::u32 kRetireFrames = 16;

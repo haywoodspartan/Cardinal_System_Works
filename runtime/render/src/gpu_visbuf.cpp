@@ -476,16 +476,26 @@ inline void setup_tri(const float* v, const float* m, cardinal::u32 W, cardinal:
     o.nrm = oct_pack(nx, ny, nz);
 }
 
-inline void store_setup(cardinal::u32* rec, const TriSetup& s) noexcept {
+// SoAoV setup planes (see gpu_visbuf.hpp): dword q of record t lives at
+// base[(q/4 * npad + t) * 4 + q%4].
+inline void store_setup(cardinal::u32* base, cardinal::usize npad, cardinal::u32 t,
+                        const TriSetup& s) noexcept {
+    cardinal::u32 rec[16];
     float f[10] = { s.px[0], s.py[0], s.px[1], s.py[1], s.px[2], s.py[2],
                     s.pz[0], s.pz[1], s.pz[2], s.inv_area };
     for (int i = 0; i < 10; ++i) cardinal::memcpy(rec + i, &f[i], 4);
     rec[10] = s.flags; rec[11] = s.mid; rec[12] = s.nrm; rec[13] = s.aux;
     rec[14] = static_cast<cardinal::u32>(s.x0) | (static_cast<cardinal::u32>(s.y0) << 16);
     rec[15] = static_cast<cardinal::u32>(s.x1) | (static_cast<cardinal::u32>(s.y1) << 16);
+    for (cardinal::u32 k = 0; k < kSetupPlanes; ++k)
+        cardinal::memcpy(base + (k * npad + t) * 4, rec + k * 4, 16);
 }
 
-inline void load_setup(const cardinal::u32* rec, TriSetup& s) noexcept {
+inline void load_setup(const cardinal::u32* base, cardinal::usize npad, cardinal::u32 t,
+                       TriSetup& s) noexcept {
+    cardinal::u32 rec[16];
+    for (cardinal::u32 k = 0; k < kSetupPlanes; ++k)
+        cardinal::memcpy(rec + k * 4, base + (k * npad + t) * 4, 16);
     float f[10];
     for (int i = 0; i < 10; ++i) cardinal::memcpy(&f[i], rec + i, 4);
     s.px[0] = f[0]; s.py[0] = f[1]; s.px[1] = f[2]; s.py[1] = f[3];
@@ -532,7 +542,7 @@ void bin_clear_record(rg::ExecutionContext& ec, void* uctx) noexcept {
     const cardinal::u32 tiles = st->tiles_x * st->tiles_y;
     if (!counts) { ec.dispatch(0, 1, 1); return; }
     for (cardinal::u32 i = 0; i < tiles; ++i) counts[i] = 0u;
-    ec.dispatch((tiles + 63) / 64, 1, 1);
+    ec.dispatch(grid_stride_groups(tiles), 1, 1);
 }
 
 void bin_record(rg::ExecutionContext& ec, void* uctx) noexcept {
@@ -551,6 +561,7 @@ void bin_record(rg::ExecutionContext& ec, void* uctx) noexcept {
     st->tiles_rejected = 0;
     if (!setup || !counts || !bins || W == 0 || H == 0) { ec.dispatch(0, 1, 1); return; }
     const cardinal::u32 cap = st->bin_capacity;
+    const cardinal::usize npad = setup_npad(T);
     float m[16];
     for (int i = 0; i < 16; ++i) m[i] = mat ? fzf(mat[i], (i % 5 == 0) ? 1.0f : 0.0f)
                                             : ((i % 5 == 0) ? 1.0f : 0.0f);
@@ -558,7 +569,7 @@ void bin_record(rg::ExecutionContext& ec, void* uctx) noexcept {
         TriSetup s;
         if (tris) setup_tri(tris + t * 9, m, W, H, t, mat_ids, aux_in, s);
         else      s = TriSetup{};
-        store_setup(setup + static_cast<cardinal::usize>(t) * kSetupRecordDwords, s);
+        store_setup(setup, npad, t, s);
         if (!(s.flags & 1u)) { ++st->tris_rejected; continue; }
         ++st->tris_binned;
         const cardinal::u32 tx0 = static_cast<cardinal::u32>(s.x0) / kVisTileSize;
@@ -583,7 +594,7 @@ void bin_record(rg::ExecutionContext& ec, void* uctx) noexcept {
     }
     const cardinal::u32 tiles = st->tiles_x * st->tiles_y;
     for (cardinal::u32 i = 0; i < tiles; ++i) if (counts[i] > cap) ++st->overflow_tiles;
-    ec.dispatch((T + 63) / 64, 1, 1);
+    ec.dispatch(grid_stride_groups(T), 1, 1);
 }
 
 }  // namespace
@@ -615,7 +626,7 @@ cardinal::shared_ptr<TriangleBinPass::State> TriangleBinPass::add_to_graph(
         rg::BufferDesc d; d.name = nm; d.size_bytes = bytes; d.stride_bytes = stride;
         return g.declare_buffer(d);
     };
-    st->out_setup      = decl("bin.setup",  T * kSetupRecordDwords * 4u, kSetupRecordDwords * 4u);
+    st->out_setup      = decl("bin.setup",  kSetupPlanes * setup_npad(static_cast<cardinal::u32>(T)) * 16u, 16u);
     st->out_bin_counts = decl("bin.counts", (tiles == 0 ? 1u : tiles) * 4u, 4u);
     st->out_bins       = decl("bin.ids",    (tiles == 0 ? 1u : tiles) * st->bin_capacity * 4u, 4u);
 
@@ -634,10 +645,10 @@ cardinal::shared_ptr<TriangleBinPass::State> TriangleBinPass::add_to_graph(
         pd.accesses.push_back(rg::ResourceAccess{st->out_bin_counts, rg::AccessMode::Write, 0});
         pd.record     = bin_clear_record;
         pd.user_ctx   = st.get();
-        pd.dispatch_x = static_cast<cardinal::u32>((tiles + 63) / 64);
+        pd.dispatch_x = grid_stride_groups(static_cast<cardinal::u32>(tiles));
         pd.compute_hlsl = TriangleBinPass::hlsl_clear_source();
         pd.push_constant_size = 16;
-        push_u32(pd, static_cast<cardinal::u32>(tiles)); push_u32(pd, 0u); push_u32(pd, 0u); push_u32(pd, 0u);
+        push_u32(pd, static_cast<cardinal::u32>(tiles)); push_u32(pd, pd.dispatch_x); push_u32(pd, 0u); push_u32(pd, 0u);
         g.add_pass(cardinal::move(pd));
     }
     {
@@ -654,12 +665,14 @@ cardinal::shared_ptr<TriangleBinPass::State> TriangleBinPass::add_to_graph(
         pd.accesses.push_back(rg::ResourceAccess{st->out_bins,       rg::AccessMode::Write,     6});
         pd.record     = bin_record;
         pd.user_ctx   = st.get();
-        pd.dispatch_x = (triangle_count + 63) / 64;
+        pd.dispatch_x = grid_stride_groups(triangle_count);
         pd.compute_hlsl = TriangleBinPass::hlsl_source();
         pd.push_constant_size = 32;
         push_u32(pd, width); push_u32(pd, height); push_u32(pd, triangle_count);
         push_u32(pd, in_aux_per_tri.is_valid() ? 1u : 0u);
-        push_u32(pd, st->tiles_x); push_u32(pd, st->bin_capacity); push_u32(pd, 0u); push_u32(pd, 0u);
+        push_u32(pd, st->tiles_x); push_u32(pd, st->bin_capacity);
+        push_u32(pd, pd.dispatch_x);                                          // groups (grid stride)
+        push_u32(pd, static_cast<cardinal::u32>(setup_npad(triangle_count))); // SoAoV plane stride
         g.add_pass(cardinal::move(pd));
     }
     return st;
@@ -667,14 +680,15 @@ cardinal::shared_ptr<TriangleBinPass::State> TriangleBinPass::add_to_graph(
 
 const char* TriangleBinPass::hlsl_clear_source() noexcept {
     return
-    "// Cardinal - TriangleBinClearPass.hlsl - zero one tile count per thread.\n"
+    "// Cardinal - TriangleBinClearPass.hlsl - zero tile counts; 256-thread blocks,\n"
+    "// grid-stride over the tile range.\n"
     "RWByteAddressBuffer OutCounts : register(u0);\n"
-    "struct PushT { uint tiles; uint p0; uint p1; uint p2; };\n"
+    "struct PushT { uint tiles; uint groups; uint p1; uint p2; };\n"
     "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
-    "[numthreads(64,1,1)]\n"
+    "[numthreads(256,1,1)]\n"
     "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
-    "  if (tid.x >= pc.tiles) return;\n"
-    "  OutCounts.Store(tid.x*4u, 0u);\n"
+    "  uint stride = max(pc.groups, 1u) * 256u;\n"
+    "  for (uint i = tid.x; i < pc.tiles; i += stride) OutCounts.Store(i*4u, 0u);\n"
     "}\n";
 }
 
@@ -691,7 +705,7 @@ const char* TriangleBinPass::hlsl_source() noexcept {
     "RWByteAddressBuffer OutSetup  : register(u0);   // 64 B per tri\n"
     "RWByteAddressBuffer OutCounts : register(u1);   // u32 per tile\n"
     "RWByteAddressBuffer OutBins   : register(u2);   // cap u32 per tile\n"
-    "struct PushT { uint w; uint h; uint triCount; uint hasAux; uint tilesX; uint cap; uint p0; uint p1; };\n"
+    "struct PushT { uint w; uint h; uint triCount; uint hasAux; uint tilesX; uint cap; uint groups; uint npad; };\n"
     "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
     "float edge_fn(float ax, float ay, float bx, float by, float cx, float cy) {\n"
     "  return (bx-ax)*(cy-ay) - (by-ay)*(cx-ax);\n"
@@ -709,10 +723,11 @@ const char* TriangleBinPass::hlsl_source() noexcept {
     "  uint iz = uint(int(clamp(oz, -1.0, 1.0) * 32767.0)) & 0xFFFFu;\n"
     "  return ix | (iz << 16);\n"
     "}\n"
-    "[numthreads(64,1,1)]\n"
+    "// 256-thread blocks + grid-stride loop over the triangle range.\n"
+    "[numthreads(256,1,1)]\n"
     "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
-    "  uint t = tid.x; if (t >= pc.triCount) return;\n"
-    "  uint rb = t * 64u;\n"
+    "  uint stride = max(pc.groups, 1u) * 256u;\n"
+    "  for (uint t = tid.x; t < pc.triCount; t += stride) {\n"
     "  uint b = t*36u;\n"
     "  float3 v0 = asfloat(InTris.Load3(b+0));\n"
     "  float3 v1 = asfloat(InTris.Load3(b+12));\n"
@@ -765,12 +780,14 @@ const char* TriangleBinPass::hlsl_source() noexcept {
     "  uint mid = valid ? InMatIds.Load(t*4u) : 0u;\n"
     "  uint aux = valid ? ((pc.hasAux != 0u) ? InAux.Load(t*4u) : t) : 0u;\n"
     "  if (!valid) { px[0]=px[1]=px[2]=0.0; py[0]=py[1]=py[2]=0.0; pz[0]=pz[1]=pz[2]=0.0; x0=y0=x1=y1=0; }\n"
-    "  OutSetup.Store4(rb +  0u, asuint(float4(px[0], py[0], px[1], py[1])));\n"
-    "  OutSetup.Store4(rb + 16u, asuint(float4(px[2], py[2], pz[0], pz[1])));\n"
-    "  OutSetup.Store4(rb + 32u, uint4(asuint(pz[2]), asuint(inv_area), flags, mid));\n"
-    "  OutSetup.Store4(rb + 48u, uint4(valid ? oct_pack(nrm) : 0u, aux,\n"
+    "  // SoAoV planes: plane k of record t at (k*npad + t)*16 — each Store4 is\n"
+    "  // contiguous across the wave (16 B per lane) instead of 64 B strided.\n"
+    "  OutSetup.Store4((0u*pc.npad + t)*16u, asuint(float4(px[0], py[0], px[1], py[1])));\n"
+    "  OutSetup.Store4((1u*pc.npad + t)*16u, asuint(float4(px[2], py[2], pz[0], pz[1])));\n"
+    "  OutSetup.Store4((2u*pc.npad + t)*16u, uint4(asuint(pz[2]), asuint(inv_area), flags, mid));\n"
+    "  OutSetup.Store4((3u*pc.npad + t)*16u, uint4(valid ? oct_pack(nrm) : 0u, aux,\n"
     "                                 (uint)x0 | ((uint)y0 << 16), (uint)x1 | ((uint)y1 << 16)));\n"
-    "  if (!valid) return;\n"
+    "  if (!valid) continue;\n"
     "  uint tx0 = (uint)x0 / 16u, tx1 = (uint)(x1 - 1) / 16u;\n"
     "  uint ty0 = (uint)y0 / 16u, ty1 = (uint)(y1 - 1) / 16u;\n"
     "  bool pos = area > 0.0;\n"
@@ -801,6 +818,7 @@ const char* TriangleBinPass::hlsl_source() noexcept {
     "      if (idx < pc.cap) OutBins.Store((tile * pc.cap + idx) * 4u, t);\n"
     "    }\n"
     "  }\n"
+    "  }   // grid-stride loop\n"
     "}\n";
 }
 
@@ -833,15 +851,17 @@ void visbuf_binned_record(rg::ExecutionContext& ec, void* uctx) noexcept {
     st->fragments_drawn = st->triangles_offscreen = st->overflow_tiles = 0;
     if (!setup || !counts || !bins || st->triangle_count == 0) { ec.dispatch(0, 1, 1); return; }
     const cardinal::u32 cap = st->bin_capacity, T = st->triangle_count;
+    const cardinal::usize npad = setup_npad(T);
     // Stats: setup-rejected tris (the brute record's "offscreen" count).
+    // flags = dword 10 = plane 2, lane 2.
     for (cardinal::u32 t = 0; t < T; ++t)
-        if (!(setup[static_cast<cardinal::usize>(t) * kSetupRecordDwords + 10] & 1u))
+        if (!(setup[(2u * npad + t) * 4 + 2] & 1u))
             ++st->triangles_offscreen;
     // Per pixel: test one triangle's setup record. Winner = lowest depth,
     // ties → LOWER triangle id (== the reference's ascending strict-< scan).
     auto test_tri = [&](cardinal::u32 t, int x, int y, cardinal::usize pix) {
         TriSetup s;
-        load_setup(setup + static_cast<cardinal::usize>(t) * kSetupRecordDwords, s);
+        load_setup(setup, npad, t, s);
         if (!(s.flags & 1u)) return;
         if (x < s.x0 || x >= s.x1 || y < s.y0 || y >= s.y1) return;
         const float fx = static_cast<float>(x) + 0.5f;
@@ -885,7 +905,7 @@ void visbuf_binned_record(rg::ExecutionContext& ec, void* uctx) noexcept {
                     }
                 }
         }
-    ec.dispatch((W + 7) / 8, (H + 7) / 8, 1);
+    ec.dispatch(tiles_x, tiles_y, 1);   // one 16x16 block per bin tile
 }
 
 }  // namespace
@@ -937,8 +957,10 @@ cardinal::shared_ptr<VisibilityBufferPass::State> VisibilityBufferPass::add_to_g
     pd.accesses.push_back(rg::ResourceAccess{st->out_aux,     rg::AccessMode::Write, 8});
     pd.record   = visbuf_binned_record;
     pd.user_ctx = st.get();
-    pd.dispatch_x = (width  + 7) / 8;
-    pd.dispatch_y = (height + 7) / 8;
+    // Perfect block dimensions: one 16x16 block per 16x16 bin tile, so the
+    // block cooperatively stages exactly its own tile's list in shared memory.
+    pd.dispatch_x = bins.tiles_x;
+    pd.dispatch_y = bins.tiles_y;
     pd.dispatch_z = 1;
     pd.compute_hlsl = VisibilityBufferPass::hlsl_source_binned();
     pd.push_constant_size = 32;
@@ -947,22 +969,26 @@ cardinal::shared_ptr<VisibilityBufferPass::State> VisibilityBufferPass::add_to_g
             pd.push_constants.push_back(static_cast<cardinal::u8>((x >> (8 * k)) & 0xFF));
     };
     push_u32(width); push_u32(height); push_u32(triangle_count); push_u32(bins.tiles_x);
-    push_u32(bins.bin_capacity); push_u32(0u); push_u32(0u); push_u32(0u);
+    push_u32(bins.bin_capacity); push_u32(static_cast<cardinal::u32>(setup_npad(triangle_count)));
+    push_u32(0u); push_u32(0u);
     g.add_pass(cardinal::move(pd));
     return st;
 }
 
 const char* VisibilityBufferPass::hlsl_source_binned() noexcept {
-    // One thread per pixel; an 8x8 group sits inside one 16x16 bin tile, so
-    // the whole group shares the tile's list. Each triangle is tested from
-    // its precomputed setup record (no per-pixel projection). Winner rule:
-    // lower depth, then LOWER triangle id (bins are atomically unordered) —
-    // identical to the reference's ascending strict-< scan. A tile whose
-    // count exceeded capacity walks every setup record instead.
+    // One 16x16 thread block per 16x16 bin tile (perfect block dimensions).
+    // The block stages its tile's bin list in SHARED MEMORY in chunks of 256
+    // setup records: thread `lid` fetches record `base+lid` — four contiguous,
+    // 32-byte-aligned SoAoV plane loads, fully coalesced across the wave —
+    // then every pixel thread tests all staged records from groupshared
+    // instead of re-reading the same 64 bytes from global memory 256 times.
+    // Winner rule unchanged (lower depth, then lower id). Barriers are block-
+    // uniform: the chunk loop bounds depend only on the tile, and pixels
+    // outside the viewport keep participating without storing.
     return
-    "// Cardinal - VisibilityBufferPass (binned).hlsl - per-pixel raster over the\n"
-    "// pixel's 16x16 tile bin, from TriangleBinPass setup records.\n"
-    "ByteAddressBuffer   InSetup  : register(t0);   // 64 B per tri\n"
+    "// Cardinal - VisibilityBufferPass (binned).hlsl - 16x16 block per tile,\n"
+    "// shared-memory staged bin list from SoAoV setup planes.\n"
+    "ByteAddressBuffer   InSetup  : register(t0);   // 4 planes x npad x 16 B\n"
     "ByteAddressBuffer   InCounts : register(t1);   // u32 per tile\n"
     "ByteAddressBuffer   InBins   : register(t2);   // cap u32 per tile\n"
     "RWByteAddressBuffer OutDepth : register(u0);\n"
@@ -971,24 +997,31 @@ const char* VisibilityBufferPass::hlsl_source_binned() noexcept {
     "RWByteAddressBuffer OutNrm   : register(u3);\n"
     "RWByteAddressBuffer OutMV    : register(u4);\n"
     "RWByteAddressBuffer OutAux   : register(u5);\n"
-    "struct PushT { uint w; uint h; uint triCount; uint tilesX; uint cap; uint p0; uint p1; uint p2; };\n"
+    "struct PushT { uint w; uint h; uint triCount; uint tilesX; uint cap; uint npad; uint p1; uint p2; };\n"
     "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "#define CHUNK 256u\n"
+    "groupshared float4 s_q0[CHUNK];   // px0 py0 px1 py1\n"
+    "groupshared float4 s_q1[CHUNK];   // px2 py2 pz0 pz1\n"
+    "groupshared uint4  s_q2[CHUNK];   // pz2 inv_area flags mid\n"
+    "groupshared uint4  s_q3[CHUNK];   // nrm aux bbox_min bbox_max\n"
+    "groupshared uint   s_id[CHUNK];   // triangle id (0xFFFFFFFF = empty)\n"
     "float edge_fn(float ax, float ay, float bx, float by, float cx, float cy) {\n"
     "  return (bx-ax)*(cy-ay) - (by-ay)*(cx-ax);\n"
     "}\n"
-    "void test_tri(uint t, int x, int y, float fx, float fy,\n"
+    "void test_rec(uint j, int x, int y, float fx, float fy,\n"
     "              inout float bestZ, inout uint bestPrim, inout uint bestMat,\n"
     "              inout uint bestNrm, inout uint bestAux) {\n"
-    "  uint rb = t * 64u;\n"
-    "  uint4 q2 = InSetup.Load4(rb + 32u);\n"
+    "  uint t = s_id[j];\n"
+    "  if (t == 0xFFFFFFFFu) return;\n"
+    "  uint4 q2 = s_q2[j];\n"
     "  uint flags = q2.z;\n"
     "  if ((flags & 1u) == 0u) return;\n"
-    "  uint4 q3 = InSetup.Load4(rb + 48u);\n"
+    "  uint4 q3 = s_q3[j];\n"
     "  int x0 = (int)(q3.z & 0xFFFFu), y0 = (int)(q3.z >> 16);\n"
     "  int x1 = (int)(q3.w & 0xFFFFu), y1 = (int)(q3.w >> 16);\n"
     "  if (x < x0 || x >= x1 || y < y0 || y >= y1) return;\n"
-    "  float4 q0 = asfloat(InSetup.Load4(rb));\n"
-    "  float4 q1 = asfloat(InSetup.Load4(rb + 16u));\n"
+    "  float4 q0 = s_q0[j];\n"
+    "  float4 q1 = s_q1[j];\n"
     "  float px0 = q0.x, py0 = q0.y, px1 = q0.z, py1 = q0.w;\n"
     "  float px2 = q1.x, py2 = q1.y, pz0 = q1.z, pz1 = q1.w;\n"
     "  float pz2 = asfloat(q2.x), inv_area = asfloat(q2.y);\n"
@@ -1004,27 +1037,45 @@ const char* VisibilityBufferPass::hlsl_source_binned() noexcept {
     "  if (!better) return;\n"
     "  bestZ = z; bestPrim = t; bestMat = q2.w; bestNrm = q3.x; bestAux = q3.y;\n"
     "}\n"
-    "[numthreads(8,8,1)]\n"
-    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
-    "  if (tid.x >= pc.w || tid.y >= pc.h) return;\n"
-    "  uint pix = tid.y*pc.w + tid.x;\n"
+    "[numthreads(16,16,1)]\n"
+    "void CSMain(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {\n"
+    "  uint lid  = gtid.y * 16u + gtid.x;\n"
+    "  uint tile = gid.y * pc.tilesX + gid.x;\n"
+    "  uint px = gid.x * 16u + gtid.x, py = gid.y * 16u + gtid.y;\n"
+    "  bool live = (px < pc.w) && (py < pc.h);\n"
+    "  int x = (int)px, y = (int)py;\n"
+    "  float fx = (float)px + 0.5, fy = (float)py + 0.5;\n"
     "  float bestZ = 1.0;\n"
     "  uint bestPrim = 0xFFFFFFFFu, bestMat = 0xFFFFFFFFu, bestNrm = 0u, bestAux = 0u;\n"
-    "  float fx = (float)tid.x + 0.5, fy = (float)tid.y + 0.5;\n"
-    "  int x = (int)tid.x, y = (int)tid.y;\n"
-    "  uint tile = (tid.y / 16u) * pc.tilesX + (tid.x / 16u);\n"
     "  uint cnt = InCounts.Load(tile*4u);\n"
-    "  if (cnt > pc.cap) {\n"
-    "    [loop] for (uint t = 0u; t < pc.triCount; ++t)\n"
-    "      test_tri(t, x, y, fx, fy, bestZ, bestPrim, bestMat, bestNrm, bestAux);\n"
-    "  } else {\n"
-    "    uint base = tile * pc.cap;\n"
-    "    [loop] for (uint i = 0u; i < cnt; ++i) {\n"
-    "      uint t = InBins.Load((base + i)*4u);\n"
-    "      if (t < pc.triCount)\n"
-    "        test_tri(t, x, y, fx, fy, bestZ, bestPrim, bestMat, bestNrm, bestAux);\n"
+    "  bool overflow = cnt > pc.cap;                 // walk every record instead\n"
+    "  uint total = overflow ? pc.triCount : cnt;    // block-uniform\n"
+    "  uint listBase = tile * pc.cap;\n"
+    "  for (uint base = 0u; base < total; base += CHUNK) {\n"
+    "    // Stage: thread lid fetches record base+lid from the four planes.\n"
+    "    uint i = base + lid;\n"
+    "    uint t = 0xFFFFFFFFu;\n"
+    "    if (i < total) {\n"
+    "      t = overflow ? i : InBins.Load((listBase + i)*4u);\n"
+    "      if (t >= pc.triCount) t = 0xFFFFFFFFu;\n"
     "    }\n"
+    "    if (t != 0xFFFFFFFFu) {\n"
+    "      s_q0[lid] = asfloat(InSetup.Load4((0u*pc.npad + t)*16u));\n"
+    "      s_q1[lid] = asfloat(InSetup.Load4((1u*pc.npad + t)*16u));\n"
+    "      s_q2[lid] = InSetup.Load4((2u*pc.npad + t)*16u);\n"
+    "      s_q3[lid] = InSetup.Load4((3u*pc.npad + t)*16u);\n"
+    "    }\n"
+    "    s_id[lid] = t;\n"
+    "    GroupMemoryBarrierWithGroupSync();\n"
+    "    uint n = min(CHUNK, total - base);\n"
+    "    if (live) {\n"
+    "      [loop] for (uint j = 0u; j < n; ++j)\n"
+    "        test_rec(j, x, y, fx, fy, bestZ, bestPrim, bestMat, bestNrm, bestAux);\n"
+    "    }\n"
+    "    GroupMemoryBarrierWithGroupSync();   // chunk consumed before it is overwritten\n"
     "  }\n"
+    "  if (!live) return;\n"
+    "  uint pix = py*pc.w + px;\n"
     "  OutDepth.Store(pix*4u, asuint(bestZ));\n"
     "  OutPrim.Store (pix*4u, bestPrim);\n"
     "  OutMat.Store  (pix*4u, bestMat);\n"

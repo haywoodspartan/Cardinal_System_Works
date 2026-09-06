@@ -90,6 +90,28 @@ constexpr cardinal::u32 kInvalidMatId  = 0xFFFFFFFFu;
 constexpr cardinal::u32 kVisTileSize        = 16;   // px per bin tile (square)
 constexpr cardinal::u32 kDefaultBinCapacity = 256;  // tri ids per tile before overflow
 constexpr cardinal::u32 kSetupRecordDwords  = 16;
+// Setup records are stored SoAoV — Structure of Arrays of Vectors: four
+// uint4/float4 PLANES, each npad × 16 B, npad = triangle count rounded up to
+// EVEN so every plane starts 32-byte aligned. A cooperative load where thread
+// t fetches record t then issues four fully-contiguous 16-byte-per-lane
+// loads (512 B per 32-lane wave, one cache-line-aligned transaction each)
+// instead of striding 64 B between lanes. Plane k of record t sits at byte
+// (k * npad + t) * 16.
+constexpr cardinal::u32 kSetupPlanes        = 4;
+inline cardinal::usize setup_npad(cardinal::u32 tri_count) noexcept {
+    return (static_cast<cardinal::usize>(tri_count) + 1u) & ~static_cast<cardinal::usize>(1u);
+}
+// Perfect block dimensions + grid-stride loops for the one-thread-per-element
+// kernels: 256-thread blocks (8 waves of 32 / 4 of 64 — full occupancy on
+// every desktop GPU) and a capped grid where each thread strides
+// `groups × 256` over the element range, so a 10-million-element dispatch
+// costs 4096 resident blocks, not 40 000 tiny ones.
+constexpr cardinal::u32 kBlockThreads       = 256;
+constexpr cardinal::u32 kGridStrideMaxGroups = 4096;
+inline cardinal::u32 grid_stride_groups(cardinal::u32 n) noexcept {
+    const cardinal::u32 g = (n + kBlockThreads - 1) / kBlockThreads;
+    return g == 0 ? 1u : (g > kGridStrideMaxGroups ? kGridStrideMaxGroups : g);
+}
 
 class TriangleBinPass {
 public:

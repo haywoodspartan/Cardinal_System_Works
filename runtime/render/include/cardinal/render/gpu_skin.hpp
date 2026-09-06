@@ -50,7 +50,14 @@ public:
     static constexpr cardinal::u32 kVertexBytes    = 44;
     static constexpr cardinal::u32 kInfluenceBytes = 24;
     static constexpr cardinal::u32 kMat4Bytes      = 64;
-    static constexpr cardinal::u32 kThreadsPerGroup = 64;
+    // 256-thread blocks + grid-stride loop (see gpu_visbuf.hpp rationale);
+    // the group count is capped and passed in the push block.
+    static constexpr cardinal::u32 kThreadsPerGroup = 256;
+    static constexpr cardinal::u32 kMaxGroups       = 4096;
+    static cardinal::u32 grid_groups(cardinal::u32 n) noexcept {
+        const cardinal::u32 g = (n + kThreadsPerGroup - 1) / kThreadsPerGroup;
+        return g == 0 ? 1u : (g > kMaxGroups ? kMaxGroups : g);
+    }
 };
 
 }  // namespace cardinal::render::gpu

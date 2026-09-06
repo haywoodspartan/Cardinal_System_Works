@@ -516,6 +516,38 @@ void run_backend(rhi::Backend be, const char* be_name) {
             CHECK(abackend->async_lane() && abackend->async_fence() != nullptr);
             CHECK(abackend->async_fence_value() >= 1u);
             abackend->async_fence()->wait_cpu(abackend->async_fence_value(), 0);
+            // Zero-copy import API: after an execute the double-buffered import
+            // exists; the NEXT slot's persistent mapping is writable, a wrong
+            // size is refused, and a host-written mark makes the next execute
+            // skip its memcpy (the GPU then reads exactly what we wrote).
+            {
+                const usize tri_bytes = sd.tris.size() * 4;
+                CHECK(abackend->import_write_ptr("in.tris", tri_bytes + 4) == nullptr);
+                void* p = abackend->import_write_ptr("in.tris", tri_bytes);
+                CHECK(p != nullptr);
+                if (p) {
+                    std::vector<float> shifted(sd.tris);
+                    for (auto& f : shifted) f += 0.001f;          // distinguishable bytes
+                    cardinal::memcpy(p, shifted.data(), tri_bytes);
+                    abackend->mark_import_host_written("in.tris");
+                    abackend->execute(*graph);
+                    abackend->async_fence()->wait_cpu(abackend->async_fence_value(), 0);
+                    rhi::Buffer* cur = abackend->gpu_buffer("in.tris");
+                    CHECK(cur != nullptr);
+                    if (cur && cur->map_write()) {
+                        // The slot the GPU just bound holds OUR bytes, not the host array.
+                        CHECK(cardinal::memcmp(cur->map_write(), shifted.data(), tri_bytes) == 0);
+                    }
+                    // Unmarked execute goes back to the host array.
+                    abackend->execute(*graph);
+                    abackend->async_fence()->wait_cpu(abackend->async_fence_value(), 0);
+                    cur = abackend->gpu_buffer("in.tris");
+                    if (cur && cur->map_write())
+                        CHECK(cardinal::memcmp(cur->map_write(), sd.tris.data(), tri_bytes) == 0);
+                }
+                cardinal::log::infof("gputest", "%s unified memory: %s", be_name,
+                                     dev->capabilities().unified_memory ? "yes" : "no");
+            }
             {
                 std::vector<u8> got(hook_rb->size());
                 CHECK(hook_rb->download(got.data(), got.size(), 0));

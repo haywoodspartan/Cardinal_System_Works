@@ -695,6 +695,11 @@ public:
         } else if (desc.cpu_writable) {
             aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                         VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            // Unified-memory hint: prefer a DEVICE_LOCAL | HOST_VISIBLE type
+            // (ReBAR exposes all of VRAM that way) so the persistent mapping
+            // writes straight into VRAM. VMA falls back to host memory when
+            // no such type exists — the buffer stays valid either way.
+            if (desc.unified) aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         }
 
         VmaAllocationInfo info{};
@@ -720,7 +725,7 @@ public:
 
     usize size() const noexcept override { return size_; }
     u64   device_address() const noexcept override { return device_address_; }
-
+    void* map_write() override { return cpu_writable_ ? mapped_ptr_ : nullptr; }
     void upload(const void* data, usize size, usize offset) override {
         if (!cpu_writable_) {
             cardinal::log::errorf("rhi/vk", "upload() to non-cpu_writable buffer");

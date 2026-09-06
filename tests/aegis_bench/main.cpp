@@ -108,7 +108,7 @@ struct Built {
     cardinal::shared_ptr<gpu::TriangleBinPass::State>      bin;
 };
 
-Built build(Scene& sc, bool binned) {
+Built build(Scene& sc, bool binned, u32 bin_capacity = gpu::kDefaultBinCapacity) {
     Built b;
     b.graph = rg::Graph::create();
     auto& g = *b.graph;
@@ -116,7 +116,7 @@ Built build(Scene& sc, bool binned) {
     auto h_i = g.import_buffer("in.mids", sc.mids.data(), sc.mids.size() * 4, 4);
     auto h_m = g.import_buffer("in.vp",   sc.vp.data(),   64, 4);
     if (binned) {
-        b.bin  = gpu::TriangleBinPass::add_to_graph(g, h_t, h_i, h_m, {}, sc.W, sc.H, sc.T);
+        b.bin  = gpu::TriangleBinPass::add_to_graph(g, h_t, h_i, h_m, {}, sc.W, sc.H, sc.T, bin_capacity);
         b.vbuf = gpu::VisibilityBufferPass::add_to_graph(g, *b.bin, {}, sc.W, sc.H, sc.T);
     } else {
         b.vbuf = gpu::VisibilityBufferPass::add_to_graph(g, h_t, h_i, h_m, {}, sc.W, sc.H, sc.T);
@@ -307,6 +307,79 @@ void bench_pipeline(rhi::Device& dev, rhi::ComputeQueue& q, const char* be_name)
         qc, qf, 100.0 * static_cast<double>(qc) / static_cast<double>(qc + qf ? qc + qf : 1));
 }
 
+// ---- zero-copy / unified-memory scene streaming --------------------------
+// A 200k-triangle stream (7.2 MB) rewritten every frame, binned raster only.
+//   upload    : the host "animates" its CPU array, execute() memcpys it into
+//               the import buffer (the classic staging-style path).
+//   zero-copy : the host animates straight into the next unified-memory
+//               import slot (import_write_ptr) and marks it; execute() copies
+//               nothing. Same GPU work, one fewer 7.2 MB pass per frame on the
+//               CPU, and — with a ReBAR/GPU-upload heap — the GPU reads VRAM.
+void bench_zero_copy(rhi::Device& dev, rhi::ComputeQueue& q, const char* be_name) {
+    // ~350 tris land in each 16x16 tile at this density: a 2048-entry bin
+    // capacity keeps every tile on the fast list path (the 256 default would
+    // overflow and the every-record fallback would swamp the upload cost).
+    Scene sc(960, 540, 200000);
+    Built b = build(sc, true, 2048);
+    const usize tri_bytes = sc.tris.size() * 4;
+    auto backend = rg::RhiBackend::create(dev);
+    backend->set_gpu_execute(true);
+    backend->set_async_queue(&q);
+    backend->execute(*b.graph);                       // warm-up + buffer creation
+    backend->set_async_queue(nullptr);
+    backend->set_async_queue(&q);
+    // ONE sequential pass: the zero-copy destination is write-combined
+    // memory (VRAM over the BAR, or an upload heap), where strided or
+    // revisited writes break the WC line combining and run several times
+    // slower than a forward stream. Producers that write straight into the
+    // mapping must be written this way — the bridge's extract_scene is.
+    auto animate = [&](float* dst, u32 frame) {
+        const float dx = 0.0001f * static_cast<float>(frame % 8);
+        const float* src = sc.tris.data();
+        const usize n = sc.tris.size();
+        for (usize i = 0; i + 2 < n; i += 3) {
+            dst[i] = src[i] + dx; dst[i + 1] = src[i + 1]; dst[i + 2] = src[i + 2];
+        }
+    };
+    std::vector<float> host(sc.tris.size());
+    const u32 frames = 20;
+    // upload path: animate into a host array bound as the import source.
+    // (the graph imports sc.tris — animate sc.tris' twin then copy in, which
+    //  is exactly the vector->memcpy->execute shape the bridge used to have)
+    auto t0 = std::chrono::steady_clock::now();
+    for (u32 f = 0; f < frames; ++f) {
+        animate(host.data(), f);
+        cardinal::memcpy(sc.tris.data(), host.data(), tri_bytes);   // producer's own array
+        backend->execute(*b.graph);                                // + execute's memcpy
+    }
+    backend->set_async_queue(nullptr);
+    const double ms_upload = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / frames;
+    backend->set_async_queue(&q);
+    // zero-copy path: animate directly into the next import slot.
+    u32 zc_ok = 0;
+    t0 = std::chrono::steady_clock::now();
+    for (u32 f = 0; f < frames; ++f) {
+        void* p = backend->import_write_ptr("in.tris", tri_bytes);
+        if (p) {
+            animate(static_cast<float*>(p), f);
+            backend->mark_import_host_written("in.tris");
+            ++zc_ok;
+        } else {
+            animate(sc.tris.data(), f);
+        }
+        backend->execute(*b.graph);
+    }
+    backend->set_async_queue(nullptr);
+    const double ms_zero = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / frames;
+    CHECK(zc_ok == frames);
+    backend.reset();
+    cardinal::log::infof("aegisbench",
+        "%s  zero-copy streaming, %u tris (%.1f MB/frame), unified memory %s :  upload %.2f ms/frame   zero-copy %.2f ms/frame   speedup %.2fx",
+        be_name, sc.T, static_cast<double>(tri_bytes) / (1024.0 * 1024.0),
+        dev.capabilities().unified_memory ? "YES" : "no",
+        ms_upload, ms_zero, ms_zero > 0.0 ? ms_upload / ms_zero : 0.0);
+}
+
 void run_backend(rhi::Backend be, const char* be_name) {
     rhi::DeviceDesc dd{}; dd.backend = be;
     auto dev = rhi::create_device(dd);
@@ -406,6 +479,7 @@ void run_backend(rhi::Backend be, const char* be_name) {
         ms_binned > 0.0 ? ms_brute / ms_binned : 0.0);
 
     bench_pipeline(*dev, *queue, be_name);
+    bench_zero_copy(*dev, *queue, be_name);
 }
 
 }  // namespace

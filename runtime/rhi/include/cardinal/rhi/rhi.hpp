@@ -92,6 +92,15 @@ struct BufferDesc {
                                  // it VK_SHARING_MODE_CONCURRENT across the two
                                  // families so no ownership transfer is needed;
                                  // D3D12 needs nothing beyond fence ordering.
+    bool  unified{false};        // cpu_writable hint: place the buffer in UNIFIED
+                                 // memory — device-local AND host-visible (ReBAR /
+                                 // "GPU upload heap") — so the CPU writes straight
+                                 // into VRAM through the persistent mapping and the
+                                 // GPU reads it at local speed: zero-copy streaming
+                                 // with no staging pass. Vulkan: VMA prefer-device +
+                                 // host-access (falls back to host memory when the
+                                 // device has no such heap); D3D12: GPU_UPLOAD heap
+                                 // when GpuCapabilities::unified_memory, else UPLOAD.
 };
 
 class Buffer {
@@ -107,7 +116,11 @@ public:
     // BufferDesc::cpu_writable == true. Currently each call maps + memcpy +
     // unmaps; Phase 2.5-E will add a persistent-mapped fast path.
     virtual void upload(const void* data, usize size, usize offset = 0) = 0;
-
+    // Persistent host write pointer for a cpu_writable buffer (null otherwise).
+    // Writes land directly in the GPU-visible allocation — the zero-copy path;
+    // the caller owns the hazard (never write a region the GPU may be reading:
+    // double-buffer per frame in flight). Coherent memory on both backends.
+    virtual void* map_write() { return nullptr; }
     // GPU virtual address — only valid if the buffer was created with
     // BufferUsage::ShaderDeviceAddress. Returns 0 otherwise. Used for
     // ray-tracing acceleration structure inputs and bindless / buffer
@@ -865,6 +878,11 @@ struct GpuCapabilities {
     // ---- Streaming / IO (Block 11) --------------------------------------
     bool direct_storage_capable{false};   // DirectStorage / RTX IO present
     bool gdeflate_decompress  {false};    // GPU GDEFLATE decode (RTX 40+ HW path)
+    // ---- Memory architecture ----------------------------------------------
+    bool unified_memory       {false};    // a device-local + host-visible heap of
+                                          // meaningful size exists (ReBAR / D3D12
+                                          // GPU upload heap / true UMA): BufferDesc::
+                                          // unified buffers live in VRAM, CPU-mapped.
 
     // ---- Timestamp / profiling ------------------------------------------
     u64  timestamp_ticks_per_second{0};   // divide timestamp delta by this for seconds

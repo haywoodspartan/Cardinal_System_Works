@@ -329,7 +329,7 @@ void test_skin_pass_cpu() {
     if (out.size() == sc.expect.size() * sizeof(Vertex))
         CHECK(cardinal::memcmp(out.data(), sc.expect.data(), out.size()) == 0);
     CHECK(be->trace().size() == 1u);
-    if (!be->trace().empty()) CHECK(be->trace()[0].dispatched_gx == (200u + 63u) / 64u);
+    if (!be->trace().empty()) CHECK(be->trace()[0].dispatched_gx == gpu::SkinPass::grid_groups(200u));
 
     // Invalid inputs are rejected up front.
     auto g2 = rg::Graph::create();

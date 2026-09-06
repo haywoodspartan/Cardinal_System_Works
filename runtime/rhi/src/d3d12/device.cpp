@@ -193,6 +193,13 @@ void D3D12Device::populate_capabilities() {
     device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &o5, sizeof(o5));
     device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS6, &o6, sizeof(o6));
     device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &o7, sizeof(o7));
+    // GPU upload heaps (Agility 1.613+ runtime, ReBAR): device-local memory
+    // the CPU can map — the D3D12 form of unified memory.
+    {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS16 o16{};
+        if (SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS16, &o16, sizeof(o16))))
+            caps_.unified_memory = (o16.GPUUploadHeapSupported != FALSE);
+    }
     // Request the highest SM the SDK knows; on failure, step down so the field
     // is always a value the runtime actually returned.
 #if defined(D3D_SHADER_MODEL_6_9)
@@ -265,7 +272,11 @@ cardinal::unique_ptr<Buffer> D3D12Device::create_buffer(const BufferDesc& desc) 
     if (desc.size == 0) return nullptr;
 
     D3D12_HEAP_PROPERTIES heap{};
+    // Unified hint + GPU-upload-heap support: VRAM-resident, CPU-mappable.
+    const bool gpu_upload = desc.cpu_writable && !desc.cpu_readable &&
+                            desc.unified && caps_.unified_memory;
     heap.Type = desc.cpu_readable ? D3D12_HEAP_TYPE_READBACK
+              : gpu_upload        ? D3D12_HEAP_TYPE_GPU_UPLOAD
               : desc.cpu_writable ? D3D12_HEAP_TYPE_UPLOAD
                                   : D3D12_HEAP_TYPE_DEFAULT;
 
@@ -291,8 +302,11 @@ cardinal::unique_ptr<Buffer> D3D12Device::create_buffer(const BufferDesc& desc) 
 
     // READBACK-heap resources must be created in COPY_DEST (they're pure
     // GPU-copy destinations the CPU maps for reading).
+    // GPU_UPLOAD resources follow DEFAULT-heap state rules (COMMON + implicit
+    // promotion for buffer reads); UPLOAD must start GENERIC_READ.
     const D3D12_RESOURCE_STATES initial =
         desc.cpu_readable ? D3D12_RESOURCE_STATE_COPY_DEST
+      : gpu_upload        ? D3D12_RESOURCE_STATE_COMMON
       : desc.cpu_writable ? D3D12_RESOURCE_STATE_GENERIC_READ
                           : D3D12_RESOURCE_STATE_COMMON;
 

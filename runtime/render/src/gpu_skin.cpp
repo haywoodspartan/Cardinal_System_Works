@@ -52,7 +52,7 @@ void skin_record(rg::ExecutionContext& ec, void* uctx) noexcept {
     if (cap_pal < jc) jc = static_cast<cardinal::u32>(cap_pal);
 
     cardinal::scene::skin::skin_vertices(in, infl, n, pal, jc, out);
-    ec.dispatch((n + SkinPass::kThreadsPerGroup - 1) / SkinPass::kThreadsPerGroup, 1, 1);
+    ec.dispatch(SkinPass::grid_groups(n), 1, 1);
 }
 
 }  // namespace
@@ -91,12 +91,12 @@ cardinal::shared_ptr<SkinPass::State> SkinPass::add_to_graph(
     pd.accesses.push_back(rg::ResourceAccess{st->out_verts, rg::AccessMode::Write, 3});
     pd.record     = skin_record;
     pd.user_ctx   = st.get();
-    pd.dispatch_x = (vertex_count + kThreadsPerGroup - 1) / kThreadsPerGroup;
+    pd.dispatch_x = grid_groups(vertex_count);      // 256-thread blocks, grid-stride
     pd.compute_hlsl = hlsl_source();
     pd.push_constant_size = 16;
     put_u32(pd.push_constants, vertex_count);
     put_u32(pd.push_constants, joint_count);
-    put_u32(pd.push_constants, 0u);
+    put_u32(pd.push_constants, pd.dispatch_x);      // groups
     put_u32(pd.push_constants, 0u);
     g.add_pass(cardinal::move(pd));
     return st;
@@ -110,7 +110,7 @@ const char* SkinPass::hlsl_source() noexcept {
     "ByteAddressBuffer   InInfl    : register(t1);  // 24 B/vertex: uint2 joints + float4 w\n"
     "ByteAddressBuffer   InPalette : register(t2);  // 64 B/joint, column-major\n"
     "RWByteAddressBuffer OutVerts  : register(u0);  // 44 B/vertex\n"
-    "struct PushT { uint n; uint joints; uint p0; uint p1; };\n"
+    "struct PushT { uint n; uint joints; uint groups; uint p1; };\n"
     "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
     "void load_cols(uint j, out float4 c0, out float4 c1, out float4 c2, out float4 c3) {\n"
     "  if (j < pc.joints) {\n"
@@ -124,9 +124,11 @@ const char* SkinPass::hlsl_source() noexcept {
     "    c2 = float4(0,0,1,0); c3 = float4(0,0,0,1);\n"
     "  }\n"
     "}\n"
-    "[numthreads(64,1,1)]\n"
+    "// 256-thread blocks + grid-stride loop over the vertex range.\n"
+    "[numthreads(256,1,1)]\n"
     "void CSMain(uint3 tid : SV_DispatchThreadID) {\n"
-    "  uint v = tid.x; if (v >= pc.n) return;\n"
+    "  uint stride = max(pc.groups, 1u) * 256u;\n"
+    "  for (uint v = tid.x; v < pc.n; v += stride) {\n"
     "  uint vb = v * 44u;\n"
     "  float3 pos = asfloat(InVerts.Load3(vb));\n"
     "  float3 nrm = asfloat(InVerts.Load3(vb + 12u));\n"
@@ -156,6 +158,7 @@ const char* SkinPass::hlsl_source() noexcept {
     "  OutVerts.Store3(vb + 12u, asuint(onrm));\n"
     "  OutVerts.Store3(vb + 24u, asuint(col));\n"
     "  OutVerts.Store2(vb + 36u, asuint(uv));\n"
+    "  }   // grid-stride loop\n"
     "}\n";
 }
 

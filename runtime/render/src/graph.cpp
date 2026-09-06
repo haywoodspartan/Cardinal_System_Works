@@ -500,7 +500,21 @@ void RhiBackend::reset() noexcept {
 
 cardinal::rhi::Buffer* RhiBackend::gpu_buffer(const cardinal::string& name) const noexcept {
     const auto it = buffer_cache_.find(name);
-    return (it != buffer_cache_.end()) ? it->second.buf.get() : nullptr;
+    return (it != buffer_cache_.end()) ? it->second.current() : nullptr;
+}
+
+void* RhiBackend::import_write_ptr(const cardinal::string& name, usize size) noexcept {
+    if (!gpu_execute_) return nullptr;
+    const auto it = buffer_cache_.find(name);
+    if (it == buffer_cache_.end()) return nullptr;
+    const CachedBuffer& slot = it->second;
+    if (!slot.host_visible || !slot.alt || slot.size != size) return nullptr;
+    cardinal::rhi::Buffer* nb = slot.next();
+    return nb ? nb->map_write() : nullptr;
+}
+
+void RhiBackend::mark_import_host_written(const cardinal::string& name) noexcept {
+    host_written_[name] = true;
 }
 
 void RhiBackend::make_copy_source(const cardinal::string& name) noexcept {
@@ -511,7 +525,7 @@ void RhiBackend::make_copy_source(const cardinal::string& name) noexcept {
     if (async_q_ != nullptr && !in_async_record_) return;
     const auto slot_it = buffer_cache_.find(name);
     if (slot_it == buffer_cache_.end() || !slot_it->second.buf || !sw_) return;
-    cardinal::rhi::Buffer* buf = slot_it->second.buf.get();
+    cardinal::rhi::Buffer* buf = slot_it->second.current();
     // Host-visible (imported / UPLOAD-heap) buffers take NO barrier: on D3D12
     // they are pinned in GENERIC_READ — which already includes COPY_SOURCE —
     // and a transition barrier on an UPLOAD-heap resource is invalid; they are
@@ -618,16 +632,28 @@ void RhiBackend::execute_on(cardinal::rhi::Swapchain* target, Graph& g) noexcept
                     // reuse check so a name flipping imported<->transient can
                     // never inherit a wrong-heap buffer.
                     bd.cpu_writable = wants_host;
+                    bd.unified      = wants_host;   // VRAM-resident, CPU-mapped (ReBAR / GPU upload heap)
                     slot.buf  = dev_->create_buffer(bd);
+                    // Imports are double-buffered so a host can write the next
+                    // frame's bytes (import_write_ptr) while the in-flight
+                    // submission still reads the other slot.
+                    slot.alt  = wants_host ? dev_->create_buffer(bd) : nullptr;
+                    slot.cur  = 0;
                     slot.size = sz;
                     slot.host_visible = wants_host;
+                    host_written_.erase(bdesc.name);   // any mark targeted the old buffers
+                } else if (wants_host && slot.alt) {
+                    slot.cur ^= 1;                     // flip to the slot the GPU isn't reading
                 }
-                if (slot.buf) {
-                    // Imported (host) data can change every frame — re-upload it;
-                    // transient buffers (no import) just persist.
+                cardinal::rhi::Buffer* curb = slot.current();
+                if (curb) {
+                    // Imported (host) data can change every frame — re-upload it
+                    // unless the host wrote this frame's bytes straight into the
+                    // mapping (zero-copy); transient buffers just persist.
                     const void* src = g.buffer_imported(h);
-                    if (src) slot.buf->upload(src, sz, 0);
-                    buffers_[rid] = slot.buf.get();
+                    if (src && host_written_.find(bdesc.name) == host_written_.end())
+                        curb->upload(src, sz, 0);
+                    buffers_[rid] = curb;
                 }
             }
         }
@@ -740,7 +766,7 @@ void RhiBackend::execute_on(cardinal::rhi::Swapchain* target, Graph& g) noexcept
         }
         events_.push_back(cardinal::move(ev));
     }
-
+    host_written_.clear();   // marks are per execute
     sw_ = sw_saved;
 }
 

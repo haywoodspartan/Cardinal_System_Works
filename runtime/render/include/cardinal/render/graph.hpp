@@ -438,6 +438,20 @@ public:
     bool                  async_lane()        const noexcept { return async_q_ != nullptr; }
     cardinal::rhi::Fence* async_fence()       const noexcept { return async_fence_.get(); }
     u64                   async_fence_value() const noexcept { return async_fence_value_; }
+    // ---- Zero-copy import streaming (unified memory) -----------------------
+    // Imported buffers live in UNIFIED memory (BufferDesc::unified: VRAM the
+    // CPU can map) and are DOUBLE-BUFFERED: each execute flips to the slot
+    // the previous submission is not reading. A host can therefore write the
+    // next frame's bytes straight into the mapping instead of into a CPU
+    // array that execute() memcpys — no staging, no second copy:
+    //   void* p = be.import_write_ptr("tris", bytes);   // next slot, or null
+    //   if (p) { ...write directly...; be.mark_import_host_written("tris"); }
+    // Null when the buffer doesn't exist yet (first execute), the size
+    // differs (rebuild pending), or the backend isn't in GPU mode — fall back
+    // to the imported host array for that frame. Marks are consumed by the
+    // next execute(): execute skips the memcpy for marked names.
+    void* import_write_ptr(const cardinal::string& name, usize size) noexcept;
+    void  mark_import_host_written(const cardinal::string& name) noexcept;
 
 private:
     RhiBackend() = default;
@@ -471,11 +485,16 @@ private:
     // ResourceHandle.id → Buffer* view rebuilt from the cache each execute.
     struct CachedBuffer {
         cardinal::unique_ptr<cardinal::rhi::Buffer> buf;
+        cardinal::unique_ptr<cardinal::rhi::Buffer> alt;   // host-visible imports: 2nd slot
+        u32                                         cur {0};  // slot the GPU binds this execute
         usize                                       size {0};
-        bool host_visible {false};   // imported/UPLOAD-heap (never a UAV; on
-                                     // D3D12 pinned GENERIC_READ — no barriers)
+        bool host_visible {false};   // imported/unified-heap (never a UAV; no
+                                     // barriers — implicit promotion / GENERIC_READ)
+        cardinal::rhi::Buffer* current() const noexcept { return (cur && alt) ? alt.get() : buf.get(); }
+        cardinal::rhi::Buffer* next()    const noexcept { return (cur || !alt) ? buf.get() : alt.get(); }
     };
     cardinal::unordered_map<cardinal::string, CachedBuffer> buffer_cache_;
+    cardinal::unordered_map<cardinal::string, bool>         host_written_;   // consumed per execute
     cardinal::vector<cardinal::rhi::Buffer*>                buffers_;
     // Final per-buffer use state after the last execute() (Srv/Uav), so
     // make_copy_source can issue the correct pre-copy barrier.

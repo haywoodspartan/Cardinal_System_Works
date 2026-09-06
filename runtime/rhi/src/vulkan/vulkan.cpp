@@ -357,6 +357,24 @@ bool VulkanDevice::initialize(const DeviceDesc& desc) {
     // Async compute needs both the dedicated queue AND timeline semaphores
     // (the Fence + cross-queue handshake are timeline-based).
     caps_.async_compute            = (compute_queue_ != VK_NULL_HANDLE) && q12.timelineSemaphore;
+    // Unified memory: a DEVICE_LOCAL + HOST_VISIBLE + HOST_COHERENT type whose
+    // heap is at least 1 GiB (ReBAR / SAM exposes all of VRAM; the legacy
+    // 256 MiB BAR window is deliberately NOT counted — it would thrash).
+    {
+        VkPhysicalDeviceMemoryProperties mp{};
+        vkGetPhysicalDeviceMemoryProperties(physical_, &mp);
+        const VkMemoryPropertyFlags want = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        for (u32 i = 0; i < mp.memoryTypeCount; ++i) {
+            const auto& mt = mp.memoryTypes[i];
+            if ((mt.propertyFlags & want) == want &&
+                mp.memoryHeaps[mt.heapIndex].size >= (1ull << 30)) {
+                caps_.unified_memory = true;
+                break;
+            }
+        }
+    }
     caps_.max_async_compute_queues = caps_.async_compute ? 1u : 0u;
     caps_.shader_float16           = q12.shaderFloat16;
     caps_.shader_int8              = q12.shaderInt8;

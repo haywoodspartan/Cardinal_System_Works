@@ -384,7 +384,9 @@ int main(int argc, char** argv) {
     // Event 1002 "stopped interacting" with no dump — the 2026-07-15
     // incident). The main loop pokes a heartbeat each frame; 10 silent
     // seconds writes a full-thread dump of the still-frozen process.
-    cardinal::crash::watchdog_start(10);
+    // Hang watchdog is armed right before the main loop (below): device +
+    // NVIDIA SDK bring-up can legitimately take >10 s (Streamline plugin
+    // signature checks hit the network) and a startup stall is not a hang.
 
 #if defined(_WIN32) && !defined(NDEBUG)
     // Diagnostics: log every abort path so when the user sees the CRT
@@ -2104,6 +2106,7 @@ int main(int argc, char** argv) {
     u32        frame  = 0;
 
     u64 reflex_frame = 1;
+    cardinal::crash::watchdog_start(10);   // armed here: only the live loop is watched
     while (!window->should_close() && !want_quit) {
         cardinal::crash::watchdog_poke();   // heartbeat: loop is alive
         // Reflex sleep MUST come first — it's where the driver decides
@@ -2137,7 +2140,15 @@ int main(int argc, char** argv) {
         }
 
         const auto now = std::chrono::steady_clock::now();
-        const float dt = std::chrono::duration<float>(now - prev_t).count();
+        // Frame dt, CLAMPED. Startup (device + NVIDIA SDK bring-up can take
+        // 10 s+), a debugger break, or a window drag would otherwise hand the
+        // first frame a multi-second dt: the fixed-step sim then runs ~1000
+        // steps in one frame, actors and the fly camera teleport, the world
+        // streamer loads thousands of chunks, the frame takes seconds — and
+        // the next dt is even larger (spiral of death; the hang watchdog
+        // fires). 100 ms = a 10 FPS floor on simulated time.
+        const float dt_raw = std::chrono::duration<float>(now - prev_t).count();
+        const float dt     = (dt_raw > 0.1f) ? 0.1f : (dt_raw < 0.0f ? 0.0f : dt_raw);
         prev_t = now;
         last_frame_ms_for_profiler = dt * 1000.0f;
         // End-of-frame tick for cardinal::async — rolls per-phase running
