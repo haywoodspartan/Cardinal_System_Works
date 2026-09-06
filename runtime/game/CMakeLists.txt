@@ -1,6 +1,10 @@
 add_library(cardinal_game STATIC
     src/reflection.cpp
     src/game.cpp
+    src/timer.cpp
+    src/kit.cpp
+    include/cardinal/game/timer.hpp
+    include/cardinal/game/kit.hpp
     include/cardinal/game/reflection.hpp
     include/cardinal/game/game_actor.hpp
     include/cardinal/game/game.hpp)

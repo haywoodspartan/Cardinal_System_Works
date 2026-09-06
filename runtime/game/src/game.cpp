@@ -15,7 +15,11 @@ const char* game_state_name(GameState s) noexcept {
     return "?";
 }
 
+namespace { Game* g_active_game = nullptr; }
+Game* Game::active() noexcept { return g_active_game; }
+
 Game::Game(cardinal::sim::SimWorld& sim) : sim_(sim) {
+    g_active_game = this;
     // Sim handlers — added once. They early-out based on game state so we
     // don't need to add/remove on every transition (which would race with
     // a tick already in progress).
@@ -48,6 +52,7 @@ Game::Game(cardinal::sim::SimWorld& sim) : sim_(sim) {
 }
 
 Game::~Game() {
+    if (g_active_game == this) g_active_game = nullptr;
     if (state_ != GameState::Stopped) stop_play();
     sim_.remove_handler(pre_h_);
     sim_.remove_handler(update_h_);

@@ -5,7 +5,9 @@ add_library(cardinal_actor STATIC
     src/builtin_prefabs.cpp
     src/validation.cpp
     src/scene_stats.cpp
+    src/transform_ops.cpp
     include/cardinal/actor/component.hpp
+    include/cardinal/actor/transform_ops.hpp
     include/cardinal/actor/actor.hpp
     include/cardinal/actor/world.hpp
     include/cardinal/actor/builtin_prefabs.hpp

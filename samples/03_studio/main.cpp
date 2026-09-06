@@ -38,6 +38,7 @@
 #include <cardinal/audio/audio.hpp>
 #include <cardinal/cine/cine.hpp>
 #include <cardinal/game/game.hpp>
+#include <cardinal/game/kit.hpp>
 #include <cardinal/game/game_actor.hpp>
 #include <cardinal/net/net.hpp>
 #include <cardinal/net/replication.hpp>
@@ -1774,6 +1775,9 @@ int main(int argc, char** argv) {
             cardinal::game::game_state_name(old_),
             cardinal::game::game_state_name(now));
     });
+    // Engine gameplay kit (Rotator / Orbiter / LookAt / WaypointMover /
+    // Lifetime / Spawner) — registered so the Class Picker lists "Kit/…".
+    cardinal::game::kit::register_gameplay_kit();
     // Pre-spawn one of each demo class so the user can immediately see
     // them in the Outliner before pressing Play.
     if (auto* a = game.spawn_class("SpinnerActor", "Spinner")) {

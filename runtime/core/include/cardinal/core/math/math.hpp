@@ -168,6 +168,74 @@ inline Quat integrate(const Quat& q, const Vec3& w, f32 dt) noexcept {
     return normalize(r);
 }
 
+inline Quat conjugate(const Quat& q) noexcept { return { -q.x, -q.y, -q.z, q.w }; }
+inline f32  dot(const Quat& a, const Quat& b) noexcept {
+    return a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w;
+}
+
+// Shortest-arc angle between two orientations, radians in [0, π].
+inline f32 quat_angle(const Quat& a, const Quat& b) noexcept {
+    f32 d = std::fabs(dot(normalize(a), normalize(b)));
+    if (d > 1.0f) d = 1.0f;
+    return 2.0f * std::acos(d);
+}
+
+// Spherical interpolation along the SHORTEST arc (b is flipped when the
+// quaternions sit in opposite hemispheres); t is clamped to [0, 1]; near-
+// parallel inputs fall back to a normalised lerp.
+inline Quat slerp(const Quat& a0, const Quat& b0, f32 t) noexcept {
+    if (!(t > 0.0f)) t = 0.0f;
+    if (t > 1.0f)    t = 1.0f;
+    const Quat a = normalize(a0);
+    Quat b = normalize(b0);
+    f32 d = dot(a, b);
+    if (d < 0.0f) { b = { -b.x, -b.y, -b.z, -b.w }; d = -d; }
+    if (d > 0.9995f) {
+        return normalize({ a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
+                           a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t });
+    }
+    const f32 th0 = std::acos(d);
+    const f32 th  = th0 * t;
+    const f32 s0  = std::cos(th) - d * std::sin(th) / std::sin(th0);
+    const f32 s1  = std::sin(th) / std::sin(th0);
+    return normalize({ a.x*s0 + b.x*s1, a.y*s0 + b.y*s1, a.z*s0 + b.z*s1, a.w*s0 + b.w*s1 });
+}
+
+// Orientation whose local -Z points along `forward` and whose local +Y is
+// as close to `up_hint` as possible (camera / look-at convention; right =
+// +X completes a right-handed frame). A zero `forward` yields identity; an
+// `up_hint` parallel to `forward` is replaced by a stable alternative.
+inline Quat look_rotation(const Vec3& forward, const Vec3& up_hint) noexcept {
+    const f32 fl = length(forward);
+    if (!(fl > 1.0e-8f)) return Quat::identity();
+    const Vec3 back = forward * (-1.0f / fl);            // local +Z in world
+    Vec3 up = up_hint;
+    if (length(up) < 1.0e-8f || std::fabs(dot(normalize(up), back)) > 0.999f)
+        up = (std::fabs(back.y) < 0.9f) ? Vec3{0, 1, 0} : Vec3{0, 0, 1};
+    const Vec3 right = normalize(cross(up, back));       // local +X
+    const Vec3 u     = cross(back, right);               // local +Y
+    // Rotation matrix with columns (right, u, back); Shepperd's method.
+    const f32 r00 = right.x, r10 = right.y, r20 = right.z;
+    const f32 r01 = u.x,     r11 = u.y,     r21 = u.z;
+    const f32 r02 = back.x,  r12 = back.y,  r22 = back.z;
+    const f32 tr = r00 + r11 + r22;
+    Quat q;
+    if (tr > 0.0f) {
+        const f32 s = std::sqrt(tr + 1.0f) * 2.0f;
+        q.w = 0.25f * s; q.x = (r21 - r12) / s; q.y = (r02 - r20) / s; q.z = (r10 - r01) / s;
+    } else if (r00 > r11 && r00 > r22) {
+        const f32 s = std::sqrt(1.0f + r00 - r11 - r22) * 2.0f;
+        q.w = (r21 - r12) / s; q.x = 0.25f * s; q.y = (r01 + r10) / s; q.z = (r02 + r20) / s;
+    } else if (r11 > r22) {
+        const f32 s = std::sqrt(1.0f + r11 - r00 - r22) * 2.0f;
+        q.w = (r02 - r20) / s; q.x = (r01 + r10) / s; q.y = 0.25f * s; q.z = (r12 + r21) / s;
+    } else {
+        const f32 s = std::sqrt(1.0f + r22 - r00 - r11) * 2.0f;
+        q.w = (r10 - r01) / s; q.x = (r02 + r20) / s; q.y = (r12 + r21) / s; q.z = 0.25f * s;
+    }
+    return normalize(q);
+}
+
 // =============================================================================
 // 3×3 matrix (row-major). Used for inertia tensors + quaternion-to-matrix.
 // =============================================================================

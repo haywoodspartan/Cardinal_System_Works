@@ -43,6 +43,11 @@ public:
     ~Game();
     Game(const Game&) = delete;
     Game& operator=(const Game&) = delete;
+    // The most recently constructed live Game (null when none). Lets engine-
+    // provided GameActors (the gameplay kit) reach the World they live in —
+    // an Actor does not know its World — without threading a pointer through
+    // every spawn. Cleared by the destructor.
+    static Game* active() noexcept;
 
     cardinal::sim::SimWorld&     sim()        noexcept { return sim_; }
     cardinal::actor::World&      world()      noexcept { return sim_.world(); }
