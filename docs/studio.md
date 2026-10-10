@@ -10,6 +10,13 @@ The Studio is the `03_studio` sample (`Cardinal_System_Studio`), built on the
 `cardinal::ui` editor layer (`StudioEngine` + the panels in
 `runtime/ui/src/panels/`).
 
+A second, ImGui-free host is growing alongside it: `Cardinal_System_StudioNative`
+(`samples/13_studio_native`) runs the `cardinal::cui_shell` editor chrome —
+menu bar, docked Hierarchy / Inspector / Console / Log panels and a floating
+Stats window on the Cardinal Slate window manager — over the same 3D viewport.
+It is the migration target for the panels below; today it covers the scene
+basics, not the full panel set.
+
 ---
 
 ## 1. Launch

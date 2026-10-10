@@ -552,13 +552,13 @@ JobSystem::~JobSystem() {
 
 void JobSystem::start(const WorkerPlan& plan_in) {
     assert(!impl_->running.load() && "JobSystem already started");
-    assert(!plan_in.worker_cores.empty() && "WorkerPlan must have at least one core");
 
-    // Defensive: the assert above is compiled out in release. An empty
-    // plan (topology detection degenerating to nothing on an exotic VM)
-    // would make worker_count()==0 and turn the submit/steal
-    // `% worker_count` into an integer divide-by-zero crash. Synthesize a
-    // single core-0 Performance worker so the system always has >=1.
+    // An EMPTY plan is a supported input, not a programming error: topology
+    // detection can degenerate to nothing on an exotic VM / container, and
+    // worker_count()==0 would turn the submit/steal `% worker_count` into an
+    // integer divide-by-zero crash. Synthesize a single core-0 Performance
+    // worker so the system always has >=1 (tests/jobs T7 pins this in every
+    // build config — there is deliberately no assert here).
     WorkerPlan fallback;
     if (plan_in.worker_cores.empty()) {
         fallback.worker_cores      = { 0u };

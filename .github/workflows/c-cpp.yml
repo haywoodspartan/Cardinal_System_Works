@@ -3,8 +3,14 @@ name: C/C++ CI
 # Cardinal is a CMake + Ninja + vcpkg(manifest) project — NOT autotools.
 # This builds the verified Windows/MSVC path (windows-msvc-release preset)
 # and runs the deterministic CTest suite. The renderer/runtime is currently
-# Windows-first (vcpkg pulls imgui[win32-binding] + directx-dxc), so CI
-# targets windows-latest. CMake >= 3.27 and Ninja are required.
+# Windows-first (vcpkg pulls imgui[win32-binding] + directx-dxc), so the
+# gating job targets windows-latest. CMake >= 3.27 and Ninja are required.
+#
+# A second, NON-gating job (continue-on-error) configures the linux-clang
+# preset and builds only the portable core suites. The Linux window / input
+# backends are stubs, so this job exists to keep the portable modules
+# compiling under clang -Werror and to show how far the Linux path reaches —
+# it must not block merges until a real Linux WSI backend lands.
 
 on:
   push:
@@ -57,3 +63,45 @@ jobs:
 
       - name: Test (CTest)
         run: ctest --test-dir build/windows-msvc-release --output-on-failure --parallel 4
+
+  linux-core:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang lld libx11-dev libxcb1-dev libwayland-dev
+          cmake --version
+
+      - name: Point CMake at the runner's vcpkg
+        run: |
+          root="${VCPKG_INSTALLATION_ROOT:-/usr/local/share/vcpkg}"
+          echo "VCPKG_ROOT=$root" >> "$GITHUB_ENV"
+
+      - name: Cache vcpkg binary archives
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-
+
+      - name: Configure (linux-clang-release)
+        run: cmake --preset linux-clang-release
+
+      # Portable core suites only — no window, RHI, or editor targets.
+      - name: Build core test suites
+        run: >
+          cmake --build --preset linux-clang-release --target
+          Cardinal_Test_Math Cardinal_Test_Memory Cardinal_Test_Allocators
+          Cardinal_Test_FlatContainers Cardinal_Test_Hash Cardinal_Test_Compress
+          Cardinal_Test_Jobs Cardinal_Test_Async Cardinal_Test_Result
+          Cardinal_Test_FoundationStd Cardinal_Test_CoreKit
+
+      - name: Run core test suites
+        run: >
+          ctest --test-dir build/linux-clang-release --output-on-failure
+          -R '^(math|memory|allocators|flat_containers|hash|compress|jobs|async|result|foundation_std|core_kit)$'

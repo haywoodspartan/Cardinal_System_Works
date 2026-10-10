@@ -41,6 +41,16 @@ endif()
 add_library(cardinal_compile_flags INTERFACE)
 add_library(cardinal::compile_flags ALIAS cardinal_compile_flags)
 
+# NDEBUG is pinned here rather than inherited from CMAKE_CXX_FLAGS_<CONFIG>.
+# CMake's per-config defaults carry /DNDEBUG for Release + RelWithDebInfo, but
+# a cache whose per-config flags were blanked (seen on a dev box: both local
+# trees built every "release" binary with asserts LIVE while CI had them
+# compiled out) silently diverges from CI. Making it explicit keeps local ==
+# CI: asserts are active only in Debug, everywhere.
+target_compile_definitions(cardinal_compile_flags INTERFACE
+    $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
+)
+
 if(MSVC)
     target_compile_options(cardinal_compile_flags INTERFACE
         /W4 /WX

@@ -34,6 +34,13 @@ ui  hud  shader  audio  window  launcher  mass  plugin  script
 cppscript  engine  compile  render  sandbox
 ```
 
+Modules added after the Phase 1 sweep were authored conformant from their
+first commit (no migration pass needed): `lighting`, `postfx`, `assetdb`,
+`buildtool`, `cmd`, `blueprint`, `ice`, `cui`, `cui_rhi`, `cui_shell`.
+The only knowingly remaining raw includes outside core are `<chrono>` /
+`<thread>` in `render/frame_pacer.cpp`, `render/graph.cpp` and four
+`lighting/` sources (timing only — tracked for a `core/clock` sweep).
+
 ## Sanctioned exceptions
 
 The sweep deliberately excludes — these are correct, not violations:

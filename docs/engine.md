@@ -7,7 +7,7 @@ the project/build pipeline. For build commands and requirements see the root
 foundation library see [core.md](core.md).
 
 > Status: foundation (`v0.0.1`). C++23, dual RHI (Vulkan + D3D12),
-> Windows + Linux, vcpkg manifest mode, CMake ≥ 3.27 + Ninja.
+> Windows-first (Linux WSI pending), vcpkg manifest mode, CMake ≥ 3.27 + Ninja.
 
 ---
 
@@ -58,7 +58,7 @@ root — the single place base C++ headers are referenced (see
 | Module | Responsibility |
 |---|---|
 | `cardinal::core` | Types, allocators, containers, math (multi-ISA SIMD), `std/` wrappers, jobs, compress (DEFLATE/PNG), service locator, OS/clock/sync. See [core.md](core.md). |
-| `cardinal::window` | OS window abstraction (Win32 / X11). |
+| `cardinal::window` | OS window abstraction (Win32 today; the Linux X11 / Wayland backend is a compile-only stub). |
 | `cardinal::rhi` | Rendering Hardware Interface — thin abstraction over **Vulkan** and **D3D12**. |
 
 ### RHI
@@ -105,13 +105,24 @@ device caps + the requested ceiling.
 
 The bridge (`aegis_pipeline_bridge.cpp`) exposes the pipeline's settings as
 editor *knobs* (see [studio.md](studio.md)) and clamps requested features
-against real device caps (`aegis_resolve_config`). On-screen drawing currently
-delegates to `scene::ForwardRenderer`; the graph runs alongside for telemetry.
+against real device caps (`aegis_resolve_config`). Every frame it flattens the
+visible scene into persistent imported buffers (world-space triangles with CPU
+skinning, a deduped material palette, packed lights) — streamed zero-copy into
+unified memory when the device reports it.
 
-> **GPU compute dispatch is opt-in** (`RhiBackend::set_gpu_execute`, default
-> **off**). The default path is recording-only telemetry + the ForwardRenderer,
-> which is the validated, stable path. The experimental GPU dispatch is exposed
-> via the Studio's *GPU Compute Execute* knob for on-device validation.
+**Execution modes.** With the *GPU Compute Execute* + *Async Compute* knobs on
+(or the Studio `--aegis-gpu` flag), the whole graph dispatches on the async
+compute queue and the *Present AEGIS Output* knob blits the composite into the
+viewport, so the on-screen image **is** the AEGIS frame. With them off the
+graph records telemetry only and `scene::ForwardRenderer` draws the viewport —
+the conservative fallback. Kernels in the GPU path are numerically pinned
+against the CPU reference by `tests/gpu_compute` on both backends.
+
+Headline GPU-path numbers (RTX 4090, 960×540, `tests/aegis_bench`): the
+tile-binned V-Buffer raster is 160–230× the brute per-pixel loop and
+byte-identical to it; zero-copy scene streaming of a 200k-triangle stream is
+~1.7× a staged upload; the full graph runs in ~0.3 ms per frame, so remaining
+cost is dispatch overhead rather than kernel time.
 
 ---
 

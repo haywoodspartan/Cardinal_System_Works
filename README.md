@@ -1,12 +1,17 @@
 # Cardinal System Works
 
 A greenfield, performance-first foundation engine in modern C++ — dual
-backend (Vulkan + DirectX 12), cross-platform (Windows + Linux), built with a
-deliberate zero-dependency ethos.
+backend (Vulkan + DirectX 12), Windows-first with a Linux build path, built
+with a deliberate zero-dependency ethos.
 
 > Status: early / foundation (`v0.0.1`). The runtime, editor scaffolding,
 > sample apps and a broad deterministic test net are in place; the renderer
 > and higher-level systems are under active development.
+>
+> Platform status: **Windows is the supported host** (Win32 window + input,
+> Vulkan + D3D12, CI). The Linux preset compiles the portable modules, but the
+> Linux window / input backends are stubs until X11 or Wayland WSI lands, so
+> nothing opens a window there yet.
 
 ## Design principles
 
@@ -28,7 +33,7 @@ deliberate zero-dependency ethos.
 | Platform | Toolchain |
 |---|---|
 | Windows | Visual Studio 2022 (any edition) or clang-cl, CMake ≥ 3.27, Ninja |
-| Linux   | clang/clang++, CMake ≥ 3.27, Ninja |
+| Linux   | clang/clang++, CMake ≥ 3.27, Ninja — builds the portable modules + tests; no window / input backend yet |
 
 C++23. [vcpkg](https://github.com/microsoft/vcpkg) is used in manifest mode
 (set `VCPKG_ROOT`) for the small set of unavoidable third-party headers.
