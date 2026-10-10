@@ -18,3 +18,6 @@ add_subdirectory(11_stress_world)
 # Cardinal Slate native UI — our own retained-mode framework as a native,
 # GPU-rendered windowed app (no ImGui): window + input + RHI renderer.
 add_subdirectory(12_slate_native)
+# Cardinal Studio (native) — the editor shell on Cardinal Slate, no ImGui:
+# WindowManager desktop + Hierarchy/Inspector/Console/Log panels over the 3D view.
+add_subdirectory(13_studio_native)
