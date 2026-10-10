@@ -99,46 +99,85 @@ static inline f32 hmax_ps(__m128 v) noexcept {
     return _mm_cvtss_f32(v);
 }
 
+// ---------------------------------------------------------------------------
+// f32x8 — a 256-bit logical vector carried as two __m128 halves ("software
+// double pump"): each op is two independent uops that co-issue on a dual-pipe
+// core. Four accumulators = 8 independent chains = pipes × FMA latency, which
+// is what the reductions below need to stay throughput-bound instead of
+// latency-bound. (The AVX-512 tier carries the 1024-bit version of this.)
+// ---------------------------------------------------------------------------
+struct f32x8 { __m128 lo, hi; };
+static inline f32x8 w_zero() noexcept { return { _mm_setzero_ps(), _mm_setzero_ps() }; }
+static inline f32x8 w_set1(f32 v) noexcept { const __m128 s = _mm_set1_ps(v); return { s, s }; }
+static inline f32x8 w_loadu(const f32* q) noexcept { return { _mm_loadu_ps(q), _mm_loadu_ps(q + 4) }; }
+static inline f32x8 w_fmadd(f32x8 a, f32x8 b, f32x8 c) noexcept { return { _mm_add_ps(c.lo, _mm_mul_ps(a.lo, b.lo)), _mm_add_ps(c.hi, _mm_mul_ps(a.hi, b.hi)) }; }
+static inline f32x8 w_add(f32x8 a, f32x8 b) noexcept { return { _mm_add_ps(a.lo, b.lo), _mm_add_ps(a.hi, b.hi) }; }
+static inline f32x8 w_min(f32x8 a, f32x8 b) noexcept { return { _mm_min_ps(a.lo, b.lo), _mm_min_ps(a.hi, b.hi) }; }
+static inline f32x8 w_max(f32x8 a, f32x8 b) noexcept { return { _mm_max_ps(a.lo, b.lo), _mm_max_ps(a.hi, b.hi) }; }
+static inline __m128 w_fold_add(f32x8 v) noexcept { return _mm_add_ps(v.lo, v.hi); }
+static inline __m128 w_fold_min(f32x8 v) noexcept { return _mm_min_ps(v.lo, v.hi); }
+static inline __m128 w_fold_max(f32x8 v) noexcept { return _mm_max_ps(v.lo, v.hi); }
+
 f32 dot_f32(const f32* a, const f32* b, usize n) {
-    __m128 acc = _mm_setzero_ps();
+    // 4 × f32x8 = 8 chains; 32 floats/iter, then the 4-wide remainder + scalar tail.
+    f32x8 c0 = w_zero(), c1 = w_zero(), c2 = w_zero(), c3 = w_zero();
     usize i = 0;
+    for (; i + 32 <= n; i += 32) {
+        c0 = w_fmadd(w_loadu(a + i),          w_loadu(b + i),          c0);
+        c1 = w_fmadd(w_loadu(a + i + 8),     w_loadu(b + i + 8),     c1);
+        c2 = w_fmadd(w_loadu(a + i + 16),     w_loadu(b + i + 16),     c2);
+        c3 = w_fmadd(w_loadu(a + i + 24), w_loadu(b + i + 24), c3);
+    }
+    __m128 acc = _mm_add_ps(_mm_add_ps(w_fold_add(c0), w_fold_add(c1)),
+                        _mm_add_ps(w_fold_add(c2), w_fold_add(c3)));
     for (; i + 4 <= n; i += 4) {
-        __m128 va = _mm_loadu_ps(a + i);
-        __m128 vb = _mm_loadu_ps(b + i);
-        acc = _mm_add_ps(acc, _mm_mul_ps(va, vb));
+        acc = _mm_add_ps(acc, _mm_mul_ps(_mm_loadu_ps(a + i), _mm_loadu_ps(b + i)));
     }
     f32 tail = 0.0f;
     for (; i < n; ++i) tail += a[i] * b[i];
     return hsum_ps(acc) + tail;
 }
 f32 sum_f32(const f32* a, usize n) {
-    __m128 acc = _mm_setzero_ps();
+    f32x8 c0 = w_zero(), c1 = w_zero(), c2 = w_zero(), c3 = w_zero();
     usize i = 0;
-    for (; i + 4 <= n; i += 4) {
-        acc = _mm_add_ps(acc, _mm_loadu_ps(a + i));
+    for (; i + 32 <= n; i += 32) {
+        c0 = w_add(c0, w_loadu(a + i));
+        c1 = w_add(c1, w_loadu(a + i + 8));
+        c2 = w_add(c2, w_loadu(a + i + 16));
+        c3 = w_add(c3, w_loadu(a + i + 24));
     }
+    __m128 acc = _mm_add_ps(_mm_add_ps(w_fold_add(c0), w_fold_add(c1)),
+                        _mm_add_ps(w_fold_add(c2), w_fold_add(c3)));
+    for (; i + 4 <= n; i += 4) acc = _mm_add_ps(acc, _mm_loadu_ps(a + i));
     f32 tail = 0.0f;
     for (; i < n; ++i) tail += a[i];
     return hsum_ps(acc) + tail;
 }
 f32 min_f32(const f32* a, usize n) {
     if (n == 0) return std::numeric_limits<f32>::infinity();
-    __m128 acc = _mm_set1_ps(a[0]);
+    // Idempotent, so every chain starts at a[0]; 4 chains (16 floats/iter).
+    f32x8 c0 = w_set1(a[0]), c1 = w_set1(a[0]);
     usize i = 0;
-    for (; i + 4 <= n; i += 4) {
-        acc = _mm_min_ps(acc, _mm_loadu_ps(a + i));
+    for (; i + 16 <= n; i += 16) {
+        c0 = w_min(c0, w_loadu(a + i));
+        c1 = w_min(c1, w_loadu(a + i + 8));
     }
+    __m128 acc = _mm_min_ps(w_fold_min(c0), w_fold_min(c1));
+    for (; i + 4 <= n; i += 4) acc = _mm_min_ps(acc, _mm_loadu_ps(a + i));
     f32 m = hmin_ps(acc);
     for (; i < n; ++i) m = std::min(m, a[i]);
     return m;
 }
 f32 max_f32(const f32* a, usize n) {
     if (n == 0) return -std::numeric_limits<f32>::infinity();
-    __m128 acc = _mm_set1_ps(a[0]);
+    f32x8 c0 = w_set1(a[0]), c1 = w_set1(a[0]);
     usize i = 0;
-    for (; i + 4 <= n; i += 4) {
-        acc = _mm_max_ps(acc, _mm_loadu_ps(a + i));
+    for (; i + 16 <= n; i += 16) {
+        c0 = w_max(c0, w_loadu(a + i));
+        c1 = w_max(c1, w_loadu(a + i + 8));
     }
+    __m128 acc = _mm_max_ps(w_fold_max(c0), w_fold_max(c1));
+    for (; i + 4 <= n; i += 4) acc = _mm_max_ps(acc, _mm_loadu_ps(a + i));
     f32 m = hmax_ps(acc);
     for (; i < n; ++i) m = std::max(m, a[i]);
     return m;

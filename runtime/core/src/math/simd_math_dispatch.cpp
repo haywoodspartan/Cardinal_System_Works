@@ -234,6 +234,7 @@ namespace {
 
 std::atomic<bool> g_initialised{false};
 Backend           g_active_backend{Backend::Scalar};
+Backend           g_best_backend{Backend::Scalar};     // what the CPU supports
 Backend           g_op_backend[static_cast<usize>(OpId::Count)] = {};
 
 // Rank a tier by preference. Higher = better.
@@ -268,6 +269,152 @@ Backend backend_for(OpId op) noexcept {
     return g_op_backend[idx];
 }
 
+namespace {
+
+// Bind every dispatch pointer to one tier's kernels (AVX keeps the SSE4.2
+// mat4_mul_array — see the comment inside).
+void bind_tier(Backend tier) {
+    switch (tier) {
+        case Backend::Scalar:
+            vec_add_f32   = &scalar::vec_add_f32;
+            vec_sub_f32   = &scalar::vec_sub_f32;
+            vec_mul_f32   = &scalar::vec_mul_f32;
+            vec_scale_f32 = &scalar::vec_scale_f32;
+            vec_axpy_f32  = &scalar::vec_axpy_f32;
+            dot_f32       = &scalar::dot_f32;
+            sum_f32       = &scalar::sum_f32;
+            min_f32       = &scalar::min_f32;
+            max_f32       = &scalar::max_f32;
+            transform_points_mat4        = &scalar::transform_points_mat4;
+            vec3_cross_array             = &scalar::vec3_cross_array;
+            vec3_length_array            = &scalar::vec3_length_array;
+            vec3_normalize_array_inplace = &scalar::vec3_normalize_array_inplace;
+            mat4_mul_array               = &scalar::mat4_mul_array;
+            frustum_cull_spheres         = &scalar::frustum_cull_spheres;
+            transform_aabb_array         = &scalar::transform_aabb_array;
+            frustum_cull_aabbs           = &scalar::frustum_cull_aabbs;
+            ray_aabb_intersect_array     = &scalar::ray_aabb_intersect_array;
+            min_index_f32                = &scalar::min_index_f32;
+            max_index_f32                = &scalar::max_index_f32;
+            morton_encode_3d_array       = &scalar::morton_encode_3d_array;
+            for (auto& b : g_op_backend) b = Backend::Scalar;
+            return;
+        case Backend::SSE42:
+            vec_add_f32   = &sse42::vec_add_f32;
+            vec_sub_f32   = &sse42::vec_sub_f32;
+            vec_mul_f32   = &sse42::vec_mul_f32;
+            vec_scale_f32 = &sse42::vec_scale_f32;
+            vec_axpy_f32  = &sse42::vec_axpy_f32;
+            dot_f32       = &sse42::dot_f32;
+            sum_f32       = &sse42::sum_f32;
+            min_f32       = &sse42::min_f32;
+            max_f32       = &sse42::max_f32;
+            transform_points_mat4        = &sse42::transform_points_mat4;
+            vec3_cross_array             = &sse42::vec3_cross_array;
+            vec3_length_array            = &sse42::vec3_length_array;
+            vec3_normalize_array_inplace = &sse42::vec3_normalize_array_inplace;
+            mat4_mul_array               = &sse42::mat4_mul_array;
+            frustum_cull_spheres         = &sse42::frustum_cull_spheres;
+            transform_aabb_array         = &sse42::transform_aabb_array;
+            frustum_cull_aabbs           = &sse42::frustum_cull_aabbs;
+            ray_aabb_intersect_array     = &sse42::ray_aabb_intersect_array;
+            min_index_f32                = &sse42::min_index_f32;
+            max_index_f32                = &sse42::max_index_f32;
+            morton_encode_3d_array       = &sse42::morton_encode_3d_array;
+            for (auto& b : g_op_backend) b = Backend::SSE42;
+            return;
+        case Backend::AVX:
+            vec_add_f32   = &avx::vec_add_f32;
+            vec_sub_f32   = &avx::vec_sub_f32;
+            vec_mul_f32   = &avx::vec_mul_f32;
+            vec_scale_f32 = &avx::vec_scale_f32;
+            vec_axpy_f32  = &avx::vec_axpy_f32;
+            dot_f32       = &avx::dot_f32;
+            sum_f32       = &avx::sum_f32;
+            min_f32       = &avx::min_f32;
+            max_f32       = &avx::max_f32;
+            transform_points_mat4        = &avx::transform_points_mat4;
+            vec3_cross_array             = &avx::vec3_cross_array;
+            vec3_length_array            = &avx::vec3_length_array;
+            vec3_normalize_array_inplace = &avx::vec3_normalize_array_inplace;
+            // mat4_mul_array INTENTIONALLY NOT REASSIGNED — falls
+            // back to whatever the previous bind_tier(SSE42) set
+            // (sse42::mat4_mul_array). Tracked separately in
+            // g_op_backend so the diagnostic panel can show the
+            // mixed-tier reality.
+            frustum_cull_spheres         = &avx::frustum_cull_spheres;
+            transform_aabb_array         = &avx::transform_aabb_array;
+            frustum_cull_aabbs           = &avx::frustum_cull_aabbs;
+            ray_aabb_intersect_array     = &avx::ray_aabb_intersect_array;
+            min_index_f32                = &avx::min_index_f32;
+            max_index_f32                = &avx::max_index_f32;
+            morton_encode_3d_array       = &avx::morton_encode_3d_array;
+            for (auto& b : g_op_backend) b = Backend::AVX;
+            g_op_backend[static_cast<usize>(OpId::Mat4Mul_Array)] = Backend::SSE42;
+            return;
+        case Backend::AVX2:
+            vec_add_f32   = &avx2::vec_add_f32;
+            vec_sub_f32   = &avx2::vec_sub_f32;
+            vec_mul_f32   = &avx2::vec_mul_f32;
+            vec_scale_f32 = &avx2::vec_scale_f32;
+            vec_axpy_f32  = &avx2::vec_axpy_f32;
+            dot_f32       = &avx2::dot_f32;
+            sum_f32       = &avx2::sum_f32;
+            min_f32       = &avx2::min_f32;
+            max_f32       = &avx2::max_f32;
+            transform_points_mat4        = &avx2::transform_points_mat4;
+            vec3_cross_array             = &avx2::vec3_cross_array;
+            vec3_length_array            = &avx2::vec3_length_array;
+            vec3_normalize_array_inplace = &avx2::vec3_normalize_array_inplace;
+            mat4_mul_array               = &avx2::mat4_mul_array;
+            frustum_cull_spheres         = &avx2::frustum_cull_spheres;
+            transform_aabb_array         = &avx2::transform_aabb_array;
+            frustum_cull_aabbs           = &avx2::frustum_cull_aabbs;
+            ray_aabb_intersect_array     = &avx2::ray_aabb_intersect_array;
+            min_index_f32                = &avx2::min_index_f32;
+            max_index_f32                = &avx2::max_index_f32;
+            morton_encode_3d_array       = &avx2::morton_encode_3d_array;
+            for (auto& b : g_op_backend) b = Backend::AVX2;
+            return;
+        case Backend::AVX512:
+            vec_add_f32   = &avx512::vec_add_f32;
+            vec_sub_f32   = &avx512::vec_sub_f32;
+            vec_mul_f32   = &avx512::vec_mul_f32;
+            vec_scale_f32 = &avx512::vec_scale_f32;
+            vec_axpy_f32  = &avx512::vec_axpy_f32;
+            dot_f32       = &avx512::dot_f32;
+            sum_f32       = &avx512::sum_f32;
+            min_f32       = &avx512::min_f32;
+            max_f32       = &avx512::max_f32;
+            transform_points_mat4        = &avx512::transform_points_mat4;
+            vec3_cross_array             = &avx512::vec3_cross_array;
+            vec3_length_array            = &avx512::vec3_length_array;
+            vec3_normalize_array_inplace = &avx512::vec3_normalize_array_inplace;
+            mat4_mul_array               = &avx512::mat4_mul_array;
+            frustum_cull_spheres         = &avx512::frustum_cull_spheres;
+            transform_aabb_array         = &avx512::transform_aabb_array;
+            frustum_cull_aabbs           = &avx512::frustum_cull_aabbs;
+            ray_aabb_intersect_array     = &avx512::ray_aabb_intersect_array;
+            min_index_f32                = &avx512::min_index_f32;
+            max_index_f32                = &avx512::max_index_f32;
+            morton_encode_3d_array       = &avx512::morton_encode_3d_array;
+            for (auto& b : g_op_backend) b = Backend::AVX512;
+            return;
+    }
+}
+
+// Apply the ladder bottom-up to `cap` so unsupported tiers never bind and
+// each tier overwrites the one below it.
+void apply_ladder(Backend cap) {
+    bind_tier(Backend::Scalar);
+    if (tier_rank(cap) >= tier_rank(Backend::SSE42))  bind_tier(Backend::SSE42);
+    if (tier_rank(cap) >= tier_rank(Backend::AVX))    bind_tier(Backend::AVX);
+    if (tier_rank(cap) >= tier_rank(Backend::AVX2))   bind_tier(Backend::AVX2);
+    if (tier_rank(cap) >= tier_rank(Backend::AVX512)) bind_tier(Backend::AVX512);
+}
+
+}  // namespace
+
 void init() {
     bool already = g_initialised.exchange(true, std::memory_order_acq_rel);
     if (already) return;
@@ -285,145 +432,12 @@ void init() {
     // Bind each pointer to the corresponding tier's implementation.
     // Add tiers in ladder order so falls-back work (every tier we
     // assign overwrites the previous one when the CPU supports it).
-    auto bind_tier = [&](Backend tier) {
-        switch (tier) {
-            case Backend::Scalar:
-                vec_add_f32   = &scalar::vec_add_f32;
-                vec_sub_f32   = &scalar::vec_sub_f32;
-                vec_mul_f32   = &scalar::vec_mul_f32;
-                vec_scale_f32 = &scalar::vec_scale_f32;
-                vec_axpy_f32  = &scalar::vec_axpy_f32;
-                dot_f32       = &scalar::dot_f32;
-                sum_f32       = &scalar::sum_f32;
-                min_f32       = &scalar::min_f32;
-                max_f32       = &scalar::max_f32;
-                transform_points_mat4        = &scalar::transform_points_mat4;
-                vec3_cross_array             = &scalar::vec3_cross_array;
-                vec3_length_array            = &scalar::vec3_length_array;
-                vec3_normalize_array_inplace = &scalar::vec3_normalize_array_inplace;
-                mat4_mul_array               = &scalar::mat4_mul_array;
-                frustum_cull_spheres         = &scalar::frustum_cull_spheres;
-                transform_aabb_array         = &scalar::transform_aabb_array;
-                frustum_cull_aabbs           = &scalar::frustum_cull_aabbs;
-                ray_aabb_intersect_array     = &scalar::ray_aabb_intersect_array;
-                min_index_f32                = &scalar::min_index_f32;
-                max_index_f32                = &scalar::max_index_f32;
-                morton_encode_3d_array       = &scalar::morton_encode_3d_array;
-                for (auto& b : g_op_backend) b = Backend::Scalar;
-                return;
-            case Backend::SSE42:
-                vec_add_f32   = &sse42::vec_add_f32;
-                vec_sub_f32   = &sse42::vec_sub_f32;
-                vec_mul_f32   = &sse42::vec_mul_f32;
-                vec_scale_f32 = &sse42::vec_scale_f32;
-                vec_axpy_f32  = &sse42::vec_axpy_f32;
-                dot_f32       = &sse42::dot_f32;
-                sum_f32       = &sse42::sum_f32;
-                min_f32       = &sse42::min_f32;
-                max_f32       = &sse42::max_f32;
-                transform_points_mat4        = &sse42::transform_points_mat4;
-                vec3_cross_array             = &sse42::vec3_cross_array;
-                vec3_length_array            = &sse42::vec3_length_array;
-                vec3_normalize_array_inplace = &sse42::vec3_normalize_array_inplace;
-                mat4_mul_array               = &sse42::mat4_mul_array;
-                frustum_cull_spheres         = &sse42::frustum_cull_spheres;
-                transform_aabb_array         = &sse42::transform_aabb_array;
-                frustum_cull_aabbs           = &sse42::frustum_cull_aabbs;
-                ray_aabb_intersect_array     = &sse42::ray_aabb_intersect_array;
-                min_index_f32                = &sse42::min_index_f32;
-                max_index_f32                = &sse42::max_index_f32;
-                morton_encode_3d_array       = &sse42::morton_encode_3d_array;
-                for (auto& b : g_op_backend) b = Backend::SSE42;
-                return;
-            case Backend::AVX:
-                vec_add_f32   = &avx::vec_add_f32;
-                vec_sub_f32   = &avx::vec_sub_f32;
-                vec_mul_f32   = &avx::vec_mul_f32;
-                vec_scale_f32 = &avx::vec_scale_f32;
-                vec_axpy_f32  = &avx::vec_axpy_f32;
-                dot_f32       = &avx::dot_f32;
-                sum_f32       = &avx::sum_f32;
-                min_f32       = &avx::min_f32;
-                max_f32       = &avx::max_f32;
-                transform_points_mat4        = &avx::transform_points_mat4;
-                vec3_cross_array             = &avx::vec3_cross_array;
-                vec3_length_array            = &avx::vec3_length_array;
-                vec3_normalize_array_inplace = &avx::vec3_normalize_array_inplace;
-                // mat4_mul_array INTENTIONALLY NOT REASSIGNED — falls
-                // back to whatever the previous bind_tier(SSE42) set
-                // (sse42::mat4_mul_array). Tracked separately in
-                // g_op_backend so the diagnostic panel can show the
-                // mixed-tier reality.
-                frustum_cull_spheres         = &avx::frustum_cull_spheres;
-                transform_aabb_array         = &avx::transform_aabb_array;
-                frustum_cull_aabbs           = &avx::frustum_cull_aabbs;
-                ray_aabb_intersect_array     = &avx::ray_aabb_intersect_array;
-                min_index_f32                = &avx::min_index_f32;
-                max_index_f32                = &avx::max_index_f32;
-                morton_encode_3d_array       = &avx::morton_encode_3d_array;
-                for (auto& b : g_op_backend) b = Backend::AVX;
-                g_op_backend[static_cast<usize>(OpId::Mat4Mul_Array)] = Backend::SSE42;
-                return;
-            case Backend::AVX2:
-                vec_add_f32   = &avx2::vec_add_f32;
-                vec_sub_f32   = &avx2::vec_sub_f32;
-                vec_mul_f32   = &avx2::vec_mul_f32;
-                vec_scale_f32 = &avx2::vec_scale_f32;
-                vec_axpy_f32  = &avx2::vec_axpy_f32;
-                dot_f32       = &avx2::dot_f32;
-                sum_f32       = &avx2::sum_f32;
-                min_f32       = &avx2::min_f32;
-                max_f32       = &avx2::max_f32;
-                transform_points_mat4        = &avx2::transform_points_mat4;
-                vec3_cross_array             = &avx2::vec3_cross_array;
-                vec3_length_array            = &avx2::vec3_length_array;
-                vec3_normalize_array_inplace = &avx2::vec3_normalize_array_inplace;
-                mat4_mul_array               = &avx2::mat4_mul_array;
-                frustum_cull_spheres         = &avx2::frustum_cull_spheres;
-                transform_aabb_array         = &avx2::transform_aabb_array;
-                frustum_cull_aabbs           = &avx2::frustum_cull_aabbs;
-                ray_aabb_intersect_array     = &avx2::ray_aabb_intersect_array;
-                min_index_f32                = &avx2::min_index_f32;
-                max_index_f32                = &avx2::max_index_f32;
-                morton_encode_3d_array       = &avx2::morton_encode_3d_array;
-                for (auto& b : g_op_backend) b = Backend::AVX2;
-                return;
-            case Backend::AVX512:
-                vec_add_f32   = &avx512::vec_add_f32;
-                vec_sub_f32   = &avx512::vec_sub_f32;
-                vec_mul_f32   = &avx512::vec_mul_f32;
-                vec_scale_f32 = &avx512::vec_scale_f32;
-                vec_axpy_f32  = &avx512::vec_axpy_f32;
-                dot_f32       = &avx512::dot_f32;
-                sum_f32       = &avx512::sum_f32;
-                min_f32       = &avx512::min_f32;
-                max_f32       = &avx512::max_f32;
-                transform_points_mat4        = &avx512::transform_points_mat4;
-                vec3_cross_array             = &avx512::vec3_cross_array;
-                vec3_length_array            = &avx512::vec3_length_array;
-                vec3_normalize_array_inplace = &avx512::vec3_normalize_array_inplace;
-                mat4_mul_array               = &avx512::mat4_mul_array;
-                frustum_cull_spheres         = &avx512::frustum_cull_spheres;
-                transform_aabb_array         = &avx512::transform_aabb_array;
-                frustum_cull_aabbs           = &avx512::frustum_cull_aabbs;
-                ray_aabb_intersect_array     = &avx512::ray_aabb_intersect_array;
-                min_index_f32                = &avx512::min_index_f32;
-                max_index_f32                = &avx512::max_index_f32;
-                morton_encode_3d_array       = &avx512::morton_encode_3d_array;
-                for (auto& b : g_op_backend) b = Backend::AVX512;
-                return;
-        }
-    };
-
     // Apply ladder bottom-up so unsupported tiers don't regress past
     // the best supported one. (Today every per-op binding moves
     // together — separate per-op binding lands when individual ISA TUs
     // start shipping a strict subset of ops.)
-    bind_tier(Backend::Scalar);
-    if (tier_rank(best) >= tier_rank(Backend::SSE42))  bind_tier(Backend::SSE42);
-    if (tier_rank(best) >= tier_rank(Backend::AVX))    bind_tier(Backend::AVX);
-    if (tier_rank(best) >= tier_rank(Backend::AVX2))   bind_tier(Backend::AVX2);
-    if (tier_rank(best) >= tier_rank(Backend::AVX512)) bind_tier(Backend::AVX512);
+    g_best_backend = best;
+    apply_ladder(best);
 
     cardinal::log::infof("simd",
         "math dispatch active: %s  (CPU=%s vendor=%s SSE4.2=%s AVX=%s AVX2=%s "
@@ -437,6 +451,16 @@ void init() {
         cf.fma3   ? "yes" : "no",
         cf.avx512f? "yes" : "no",
         cf.sse4a  ? "yes" : "no");
+}
+
+Backend best_backend() noexcept { return g_best_backend; }
+
+bool force_backend(Backend b) noexcept {
+    init();   // idempotent — guarantees g_best_backend is resolved
+    if (tier_rank(b) > tier_rank(g_best_backend)) return false;
+    apply_ladder(b);
+    g_active_backend = b;
+    return true;
 }
 
 namespace {

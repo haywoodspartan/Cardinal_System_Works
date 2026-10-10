@@ -93,13 +93,46 @@ void vec_axpy_f32(f32* y, f32 a, const f32* x, usize n) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// f32x32 — a 1024-bit logical vector carried as two zmm halves: the
+// "software double pump". Every op is two independent 512-bit uops, so on a
+// core with two 512-bit FMA pipes (Zen 5) the halves co-issue in the SAME
+// cycle: 32 lanes per cycle, which a hardware AVX-1024 pumped over two cycles
+// could only match. What it buys the reductions below is latency hiding — an
+// FMA chain retires one op per latency (4 cycles), so a loop needs
+// pipes × latency = 8 independent zmm chains to keep both pipes busy. Four
+// f32x32 accumulators are exactly those 8 chains, written as four wide ops
+// per iteration instead of eight narrow ones.
+// ---------------------------------------------------------------------------
+struct f32x32 { __m512 lo, hi; };
+static inline f32x32 w_zero() noexcept { return { _mm512_setzero_ps(), _mm512_setzero_ps() }; }
+static inline f32x32 w_set1(f32 v) noexcept { const __m512 s = _mm512_set1_ps(v); return { s, s }; }
+static inline f32x32 w_loadu(const f32* p) noexcept { return { _mm512_loadu_ps(p), _mm512_loadu_ps(p + 16) }; }
+static inline f32x32 w_fmadd(f32x32 a, f32x32 b, f32x32 c) noexcept {
+    return { _mm512_fmadd_ps(a.lo, b.lo, c.lo), _mm512_fmadd_ps(a.hi, b.hi, c.hi) };
+}
+static inline f32x32 w_add(f32x32 a, f32x32 b) noexcept { return { _mm512_add_ps(a.lo, b.lo), _mm512_add_ps(a.hi, b.hi) }; }
+static inline f32x32 w_min(f32x32 a, f32x32 b) noexcept { return { _mm512_min_ps(a.lo, b.lo), _mm512_min_ps(a.hi, b.hi) }; }
+static inline f32x32 w_max(f32x32 a, f32x32 b) noexcept { return { _mm512_max_ps(a.lo, b.lo), _mm512_max_ps(a.hi, b.hi) }; }
+static inline __m512 w_fold_add(f32x32 v) noexcept { return _mm512_add_ps(v.lo, v.hi); }
+static inline __m512 w_fold_min(f32x32 v) noexcept { return _mm512_min_ps(v.lo, v.hi); }
+static inline __m512 w_fold_max(f32x32 v) noexcept { return _mm512_max_ps(v.lo, v.hi); }
+
 f32 dot_f32(const f32* a, const f32* b, usize n) {
-    __m512 acc = _mm512_setzero_ps();
+    // 4 × f32x32 = 8 zmm chains (2 FMA pipes × 4-cycle latency); 128 floats/iter.
+    f32x32 c0 = w_zero(), c1 = w_zero(), c2 = w_zero(), c3 = w_zero();
     usize i = 0;
+    for (; i + 128 <= n; i += 128) {
+        c0 = w_fmadd(w_loadu(a + i),      w_loadu(b + i),      c0);
+        c1 = w_fmadd(w_loadu(a + i + 32), w_loadu(b + i + 32), c1);
+        c2 = w_fmadd(w_loadu(a + i + 64), w_loadu(b + i + 64), c2);
+        c3 = w_fmadd(w_loadu(a + i + 96), w_loadu(b + i + 96), c3);
+    }
+    // Pairwise fold 8 chains -> 1 zmm, then the 16-wide remainder + masked tail.
+    __m512 acc = _mm512_add_ps(_mm512_add_ps(w_fold_add(c0), w_fold_add(c1)),
+                               _mm512_add_ps(w_fold_add(c2), w_fold_add(c3)));
     for (; i + 16 <= n; i += 16) {
-        __m512 va = _mm512_loadu_ps(a + i);
-        __m512 vb = _mm512_loadu_ps(b + i);
-        acc = _mm512_fmadd_ps(va, vb, acc);
+        acc = _mm512_fmadd_ps(_mm512_loadu_ps(a + i), _mm512_loadu_ps(b + i), acc);
     }
     if (i < n) {
         __mmask16 m = tail_mask(n - i);
@@ -110,11 +143,19 @@ f32 dot_f32(const f32* a, const f32* b, usize n) {
     return _mm512_reduce_add_ps(acc);
 }
 f32 sum_f32(const f32* a, usize n) {
-    __m512 acc = _mm512_setzero_ps();
+    // vaddps is shorter-latency than FMA, but the add pipes are also two
+    // wide; the same 8 chains keep sum and dot pacing identically.
+    f32x32 c0 = w_zero(), c1 = w_zero(), c2 = w_zero(), c3 = w_zero();
     usize i = 0;
-    for (; i + 16 <= n; i += 16) {
-        acc = _mm512_add_ps(acc, _mm512_loadu_ps(a + i));
+    for (; i + 128 <= n; i += 128) {
+        c0 = w_add(c0, w_loadu(a + i));
+        c1 = w_add(c1, w_loadu(a + i + 32));
+        c2 = w_add(c2, w_loadu(a + i + 64));
+        c3 = w_add(c3, w_loadu(a + i + 96));
     }
+    __m512 acc = _mm512_add_ps(_mm512_add_ps(w_fold_add(c0), w_fold_add(c1)),
+                               _mm512_add_ps(w_fold_add(c2), w_fold_add(c3)));
+    for (; i + 16 <= n; i += 16) acc = _mm512_add_ps(acc, _mm512_loadu_ps(a + i));
     if (i < n) {
         __mmask16 m = tail_mask(n - i);
         acc = _mm512_add_ps(acc, _mm512_maskz_loadu_ps(m, a + i));
@@ -123,11 +164,16 @@ f32 sum_f32(const f32* a, usize n) {
 }
 f32 min_f32(const f32* a, usize n) {
     if (n == 0) return std::numeric_limits<f32>::infinity();
-    __m512 acc = _mm512_set1_ps(a[0]);
+    // min / max are idempotent, so every chain may start at a[0]. Four
+    // chains (2 × f32x32, 64 floats/iter) cover vminps' shorter latency.
+    f32x32 c0 = w_set1(a[0]), c1 = w_set1(a[0]);
     usize i = 0;
-    for (; i + 16 <= n; i += 16) {
-        acc = _mm512_min_ps(acc, _mm512_loadu_ps(a + i));
+    for (; i + 64 <= n; i += 64) {
+        c0 = w_min(c0, w_loadu(a + i));
+        c1 = w_min(c1, w_loadu(a + i + 32));
     }
+    __m512 acc = _mm512_min_ps(w_fold_min(c0), w_fold_min(c1));
+    for (; i + 16 <= n; i += 16) acc = _mm512_min_ps(acc, _mm512_loadu_ps(a + i));
     if (i < n) {
         __mmask16 m = tail_mask(n - i);
         // Initialise masked-off lanes to +inf so they don't influence the min.
@@ -139,11 +185,14 @@ f32 min_f32(const f32* a, usize n) {
 }
 f32 max_f32(const f32* a, usize n) {
     if (n == 0) return -std::numeric_limits<f32>::infinity();
-    __m512 acc = _mm512_set1_ps(a[0]);
+    f32x32 c0 = w_set1(a[0]), c1 = w_set1(a[0]);
     usize i = 0;
-    for (; i + 16 <= n; i += 16) {
-        acc = _mm512_max_ps(acc, _mm512_loadu_ps(a + i));
+    for (; i + 64 <= n; i += 64) {
+        c0 = w_max(c0, w_loadu(a + i));
+        c1 = w_max(c1, w_loadu(a + i + 32));
     }
+    __m512 acc = _mm512_max_ps(w_fold_max(c0), w_fold_max(c1));
+    for (; i + 16 <= n; i += 16) acc = _mm512_max_ps(acc, _mm512_loadu_ps(a + i));
     if (i < n) {
         __mmask16 m = tail_mask(n - i);
         __m512 v = _mm512_mask_loadu_ps(_mm512_set1_ps(

@@ -99,6 +99,23 @@ deterministic math test suite.
 
 ---
 
+**Reductions are multi-chain.** `dot_f32`, `sum_f32`, `min_f32` and `max_f32`
+in every vector tier accumulate into 8 independent register chains (4 for
+min/max), expressed through a two-register composite per tier — `f32x32` =
+two `__m512` in AVX-512, `f32x16` = two `__m256` in AVX2/AVX, `f32x8` = two
+`__m128` in SSE4.2. A single accumulator retires one FMA per latency (4
+cycles on Zen 5), so a loop needs pipes × latency = 8 chains to keep both FMA
+pipes busy; the composite is the "software double pump" that gets there with
+four wide ops per iteration. Chains fold pairwise before the horizontal
+reduce, so the error bound is tighter than the sequential loop's, and
+integer-valued inputs still reduce bit-exactly across tiers.
+
+**Testing a specific tier.** `simd::force_backend(Backend)` rebinds the whole
+dispatch table to one tier (refusing tiers the CPU lacks) and
+`simd::best_backend()` reports the tier `init()` chose. `tests/simd` uses
+them to pin every supported tier against a double-precision reference and to
+time the reductions against the original single-chain loops.
+
 ## 6. Compression — `compress/`
 
 Hand-rolled, zero-dependency codecs (the engine had no reachable inflate):

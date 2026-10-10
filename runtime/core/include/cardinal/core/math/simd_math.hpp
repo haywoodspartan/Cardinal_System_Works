@@ -356,4 +356,15 @@ extern void (*morton_encode_3d_array)(u64*       out_codes,
 // ---------------------------------------------------------------------------
 void init();
 
+// The best tier this CPU supports (what init() bound). Never changes.
+Backend best_backend() noexcept;
+
+// Test / benchmark hook: rebind the whole dispatch table to tier `b` (and
+// the ladder below it, exactly as init() would on a CPU whose best tier
+// were `b`). Returns false — and binds nothing — when the CPU lacks `b`.
+// NOT thread-safe: call before workers are up, and restore with
+// force_backend(best_backend()). tests/simd uses this to pin every tier's
+// kernels against a double-precision reference and to time them.
+bool force_backend(Backend b) noexcept;
+
 }  // namespace cardinal::core::simd

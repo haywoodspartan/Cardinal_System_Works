@@ -96,7 +96,7 @@ jobs:
       - name: Build core test suites
         run: >
           cmake --build --preset linux-clang-release --target
-          Cardinal_Test_Math Cardinal_Test_Memory Cardinal_Test_Allocators
+          Cardinal_Test_Math Cardinal_Test_Simd Cardinal_Test_Memory Cardinal_Test_Allocators
           Cardinal_Test_FlatContainers Cardinal_Test_Hash Cardinal_Test_Compress
           Cardinal_Test_Jobs Cardinal_Test_Async Cardinal_Test_Result
           Cardinal_Test_FoundationStd Cardinal_Test_CoreKit
@@ -104,4 +104,4 @@ jobs:
       - name: Run core test suites
         run: >
           ctest --test-dir build/linux-clang-release --output-on-failure
-          -R '^(math|memory|allocators|flat_containers|hash|compress|jobs|async|result|foundation_std|core_kit)$'
+          -R '^(math|simd|memory|allocators|flat_containers|hash|compress|jobs|async|result|foundation_std|core_kit)$'
