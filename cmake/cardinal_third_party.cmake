@@ -39,7 +39,28 @@ function(cardinal_tp_register_dll dll_path)
 endfunction()
 
 # Deploy all registered runtime DLLs next to <target>'s output binary.
-function(cardinal_tp_deploy_runtimes target)
+# Debug-CRT DLL names (MSVC). Debug builds need these next to the exe:
+# they aren't in System32 even on a dev box, so the exe fails to load with
+# STATUS_DLL_NOT_FOUND (0xC0000135) otherwise. Deploy ONLY for Debug —
+# shipping debug CRTs into Release at best confuses the loader and at worst
+# causes heap-mismatch crashes when code loaded against the wrong runtime
+# allocates with one and frees with the other.
+set(_CARDINAL_DEBUG_CRT_DLLS
+    msvcp140d.dll
+    msvcp140_1d.dll
+    msvcp140_2d.dll
+    msvcp140d_atomic_wait.dll
+    msvcp140d_codecvt_ids.dll
+    vcruntime140d.dll
+    vcruntime140_1d.dll
+    vccorlib140d.dll
+    concrt140d.dll)
+
+# Legacy per-target deploy: one POST_BUILD copy per DLL hung on <target>.
+# Kept for multi-config generators (per-config output dirs) and for targets
+# that override RUNTIME_OUTPUT_DIRECTORY. NOT used on single-config Ninja
+# builds — see cardinal_tp_deploy_runtimes for why.
+function(_cardinal_tp_deploy_per_target target)
     get_property(_dlls GLOBAL PROPERTY CARDINAL_TP_RUNTIME_DLLS)
     foreach(_dll ${_dlls})
         get_filename_component(_name "${_dll}" NAME)
@@ -49,21 +70,6 @@ function(cardinal_tp_deploy_runtimes target)
             COMMENT "Deploying ${_name} -> ${target}")
     endforeach()
 
-    # MSVC Debug builds need the Debug CRT (MSVCP140D, VCRUNTIME140D,
-    # VCRUNTIME140_1D) — these aren't in System32 even on a dev box, so
-    # the exe fails to load with STATUS_DLL_NOT_FOUND (0xC0000135) unless
-    # the Debug-CRT DLLs sit alongside it.
-    #
-    # Critical: deploy ONLY for Debug. Shipping debug CRTs into Release at
-    # best confuses the loader and at worst causes MSVC heap-mismatch
-    # crashes if any code loaded against the wrong runtime allocates with
-    # one and frees with the other.
-    #
-    # Single-config generator (Ninja, Make): CMAKE_BUILD_TYPE is known
-    # right here so we just gate the whole loop. Multi-config generator
-    # (Visual Studio): CMAKE_BUILD_TYPE is empty; we still emit the copy
-    # commands but wrap each one's COMMAND in a $<CONFIG:Debug> genex so
-    # the file copy expands to a no-op for non-Debug configs.
     if(MSVC AND CARDINAL_DEBUG_CRT_DIR)
         set(_is_multi_config FALSE)
         get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
@@ -73,24 +79,13 @@ function(cardinal_tp_deploy_runtimes target)
         elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
             set(_emit_debug_crt TRUE)
         endif()
-
         if(_emit_debug_crt)
-            foreach(_crt
-                msvcp140d.dll
-                msvcp140_1d.dll
-                msvcp140_2d.dll
-                msvcp140d_atomic_wait.dll
-                msvcp140d_codecvt_ids.dll
-                vcruntime140d.dll
-                vcruntime140_1d.dll
-                vccorlib140d.dll
-                concrt140d.dll)
+            foreach(_crt ${_CARDINAL_DEBUG_CRT_DLLS})
                 if(EXISTS "${CARDINAL_DEBUG_CRT_DIR}/${_crt}")
                     if(_is_multi_config)
-                        # Wrap the destination path in a $<CONFIG:Debug>
-                        # genex — when the active config is not Debug the
-                        # path expands to empty and CMake -E copy_if_different
-                        # silently no-ops on a missing arg.
+                        # Wrap the destination in a $<CONFIG:Debug> genex —
+                        # for non-Debug configs the command collapses to
+                        # `cmake -E true` (a no-op).
                         add_custom_command(TARGET ${target} POST_BUILD
                             COMMAND ${CMAKE_COMMAND} -E
                                 $<$<CONFIG:Debug>:copy_if_different>
@@ -110,6 +105,77 @@ function(cardinal_tp_deploy_runtimes target)
             endforeach()
         endif()
     endif()
+endfunction()
+
+# Deploy every registered runtime DLL next to <target>'s binary.
+#
+# Single-config generators (Ninja — the dev + CI path): all executables share
+# CMAKE_RUNTIME_OUTPUT_DIRECTORY, so the DLLs are copied ONCE by a shared
+# `cardinal_tp_deploy` target (one OUTPUT-based custom command per DLL, so
+# it is also incremental) and <target> merely depends on it. The previous
+# scheme hung a POST_BUILD copy on EVERY executable: with 7 executables
+# linking in parallel, two `copy_if_different` of the same DLL into the same
+# destination raced and one failed with "Error copying file ... .dll",
+# killing an otherwise clean build (a known, transient, retry-until-green
+# failure on the dev box and in CI). A single writer per file removes the
+# race instead of retrying it.
+#
+# Multi-config generators, or a target that overrides RUNTIME_OUTPUT_DIRECTORY
+# (so its binary is not in the shared bin/), keep the per-target path.
+function(cardinal_tp_deploy_runtimes target)
+    get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    get_target_property(_rod ${target} RUNTIME_OUTPUT_DIRECTORY)
+    if(_is_multi_config OR NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY
+       OR (_rod AND NOT _rod STREQUAL CMAKE_RUNTIME_OUTPUT_DIRECTORY))
+        _cardinal_tp_deploy_per_target(${target})
+        return()
+    endif()
+
+    if(NOT TARGET cardinal_tp_deploy)
+        set(_dst "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+        set(_outputs "")
+        get_property(_dlls GLOBAL PROPERTY CARDINAL_TP_RUNTIME_DLLS)
+        # Two SDKs can ship a DLL under the same FILE NAME (Reflex and
+        # Streamline both carry NvLowLatencyVk.dll). The destination is one
+        # file, so emit one rule per name; walking the registry in reverse
+        # lets the LAST registration win — the same file the old per-target
+        # POST_BUILD chain left behind, since its copies ran in order.
+        if(_dlls)
+            list(REVERSE _dlls)
+        endif()
+        set(_seen "")
+        foreach(_dll ${_dlls})
+            get_filename_component(_name "${_dll}" NAME)
+            if(_name IN_LIST _seen)
+                continue()
+            endif()
+            list(APPEND _seen "${_name}")
+            add_custom_command(OUTPUT "${_dst}/${_name}"
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${_dst}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_dll}" "${_dst}/${_name}"
+                DEPENDS "${_dll}"
+                COMMENT "Deploying ${_name} -> bin/"
+                VERBATIM)
+            list(APPEND _outputs "${_dst}/${_name}")
+        endforeach()
+        if(MSVC AND CARDINAL_DEBUG_CRT_DIR AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+            foreach(_crt ${_CARDINAL_DEBUG_CRT_DLLS})
+                if(EXISTS "${CARDINAL_DEBUG_CRT_DIR}/${_crt}")
+                    add_custom_command(OUTPUT "${_dst}/${_crt}"
+                        COMMAND ${CMAKE_COMMAND} -E make_directory "${_dst}"
+                        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                            "${CARDINAL_DEBUG_CRT_DIR}/${_crt}" "${_dst}/${_crt}"
+                        DEPENDS "${CARDINAL_DEBUG_CRT_DIR}/${_crt}"
+                        COMMENT "Deploying Debug CRT ${_crt} -> bin/"
+                        VERBATIM)
+                    list(APPEND _outputs "${_dst}/${_crt}")
+                endif()
+            endforeach()
+        endif()
+        add_custom_target(cardinal_tp_deploy DEPENDS ${_outputs})
+        set_target_properties(cardinal_tp_deploy PROPERTIES FOLDER third_party)
+    endif()
+    add_dependencies(${target} cardinal_tp_deploy)
 endfunction()
 
 # ---------------------------------------------------------------------------
