@@ -145,6 +145,15 @@ struct AegisFeatureRequest {
     bool variable_rate_shading {false};
     bool bindless_resources    {false};
     bool direct_storage        {false};
+    // Screen-space GI (Block 8). Pure request — no device gate: it is a
+    // compute pass over buffers every device already produces.
+    bool  screen_space_gi   {true};
+    float ssgi_radius       {1.0f};
+    float ssgi_intensity    {1.0f};
+    float ssgi_ao_strength  {1.0f};
+    int   ssgi_steps        {4};
+    // Hi-Z occlusion culling (Block 4); the frustum reject stays on regardless.
+    bool  hiz_occlusion     {true};
 };
 
 // Returns `base` with caps (fp16/fp8/fp4 = device truth), max_tier (the

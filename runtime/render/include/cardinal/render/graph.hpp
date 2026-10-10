@@ -59,6 +59,13 @@ struct BufferDesc {
     usize            size_bytes  {0};
     u32              stride_bytes{0};   // 0 = raw buffer; >0 = structured (for compute)
     bool             transient   {true};// true = managed by the graph
+    // Contents survive across execute() calls on EVERY backend: the CPU
+    // backends keep the storage when the size is unchanged instead of
+    // re-zeroing it, RhiBackend already retains its buffer cache. The first
+    // execute sees zeros on the CPU backends and undefined bytes on the GPU,
+    // so a consumer of history must gate on a host-fed validity flag. Used
+    // by the Hi-Z pyramid (this frame's test reads last frame's build).
+    bool             persistent  {false};
 };
 
 struct TextureDesc {

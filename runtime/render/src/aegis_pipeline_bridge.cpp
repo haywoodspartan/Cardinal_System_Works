@@ -98,7 +98,9 @@ public:
         int backend_mode {-1}, max_tier {-1}, max_tier_fp8 {-1},
             max_tier_fp4 {-1}, async_compute {-1}, variable_rate_shading {-1},
             bindless_resources {-1}, direct_storage {-1}, gpu_execute {-1},
-            view_mode {-1}, aegis_present {-1};
+            view_mode {-1}, aegis_present {-1},
+            ssgi_enabled {-1}, ssgi_radius {-1}, ssgi_intensity {-1},
+            ssgi_ao_strength {-1}, ssgi_steps {-1}, hiz_occlusion {-1};
     };
     void cache_knob_indices() {
         auto find = [&](const char* id) -> int {
@@ -117,6 +119,12 @@ public:
         kidx_.gpu_execute           = find("gpu_execute");
         kidx_.view_mode             = find("view_mode");
         kidx_.aegis_present         = find("aegis_present");
+        kidx_.ssgi_enabled          = find("ssgi_enabled");
+        kidx_.ssgi_radius           = find("ssgi_radius");
+        kidx_.ssgi_intensity        = find("ssgi_intensity");
+        kidx_.ssgi_ao_strength      = find("ssgi_ao_strength");
+        kidx_.ssgi_steps            = find("ssgi_steps");
+        kidx_.hiz_occlusion         = find("hiz_occlusion");
     }
     bool kb(int idx) const {
         return idx >= 0 && knobs_[static_cast<cardinal::usize>(idx)].kind == KnobKind::Bool
@@ -125,6 +133,14 @@ public:
     int ke(int idx, int dflt) const {
         return idx >= 0 && knobs_[static_cast<cardinal::usize>(idx)].kind == KnobKind::Enum
              ? knobs_[static_cast<cardinal::usize>(idx)].e : dflt;
+    }
+    float kf(int idx, float dflt) const {
+        return idx >= 0 && knobs_[static_cast<cardinal::usize>(idx)].kind == KnobKind::Float
+             ? knobs_[static_cast<cardinal::usize>(idx)].f : dflt;
+    }
+    int ki(int idx, int dflt) const {
+        return idx >= 0 && knobs_[static_cast<cardinal::usize>(idx)].kind == KnobKind::Int
+             ? knobs_[static_cast<cardinal::usize>(idx)].i : dflt;
     }
 
     // Read the backend_mode Knob value at the top of render() and swap
@@ -137,6 +153,7 @@ public:
         const auto desired = static_cast<AegisBackendMode>(k->e);
         if (desired == current_mode_) return;
         current_mode_ = desired;
+        hiz_valid_data_ = 0u;     // a fresh backend has no pyramid history yet
         rhi_backend_ = nullptr;   // only set for the Rhi backend below
         switch (desired) {
             case AegisBackendMode::Null:
@@ -172,6 +189,12 @@ public:
         r.variable_rate_shading = kb(kidx_.variable_rate_shading);
         r.bindless_resources    = kb(kidx_.bindless_resources);
         r.direct_storage        = kb(kidx_.direct_storage);
+        r.screen_space_gi       = kidx_.ssgi_enabled >= 0 ? kb(kidx_.ssgi_enabled) : true;
+        r.ssgi_radius           = kf(kidx_.ssgi_radius,      1.0f);
+        r.ssgi_intensity        = kf(kidx_.ssgi_intensity,   1.0f);
+        r.ssgi_ao_strength      = kf(kidx_.ssgi_ao_strength, 1.0f);
+        r.ssgi_steps            = ki(kidx_.ssgi_steps,       4);
+        r.hiz_occlusion         = kidx_.hiz_occlusion >= 0 ? kb(kidx_.hiz_occlusion) : true;
         return r;
     }
 
@@ -532,6 +555,12 @@ public:
             // V-Buf resolve from the ambient proxy to tile-lit Cook-Torrance.
             in.inv_view_proj = gr.import_buffer("ivp",  ivp_data_,    64, 4);
             in.camera_pos    = gr.import_buffer("cpos", campos_data_, 12, 4);
+            // Previous-frame VP (motion vectors + the Hi-Z occlusion test
+            // against last frame's pyramid) and the pyramid's validity flag:
+            // 0 on the first execute after any (re)build, 1 from then on.
+            in.view_proj_prev    = gr.import_buffer("vpp",  vpp_data_, 64, 4);
+            in.hiz_history_valid = gr.import_buffer("hizv", &hiz_valid_data_, 4, 4);
+            hiz_valid_data_ = 0u;
             runner_->build(in);
         }
 
@@ -541,11 +570,15 @@ public:
         // pack. A raw memcpy would compile and silently mis-cull (identity
         // matrices in tests are transpose-symmetric and hide it).
         {
+            // Last frame's VP first (the Hi-Z pyramid was built with it);
+            // the first frame has no "last", so it sees zero motion.
+            if (vpp_primed_) for (int k = 0; k < 16; ++k) vpp_data_[k] = vp_data_[k];
             const float safe_aspect = (aspect > 0.001f) ? aspect : 1.0f;
             const auto vp = scn.camera().proj(safe_aspect) * scn.camera().view();
             for (int r = 0; r < 4; ++r)
                 for (int c = 0; c < 4; ++c)
                     vp_data_[r * 4 + c] = vp.m[c][r];
+            if (!vpp_primed_) { for (int k = 0; k < 16; ++k) vpp_data_[k] = vp_data_[k]; vpp_primed_ = true; }
             const auto ivp = vp.inverse();
             for (int r = 0; r < 4; ++r)
                 for (int c = 0; c < 4; ++c)
@@ -577,6 +610,7 @@ public:
             rhi_backend_->set_post_record(nullptr, nullptr);
         }
         runner_->execute();
+        hiz_valid_data_ = 1u;   // the persistent pyramid now holds this frame -> valid history next frame
         real_dispatches_ = 0;
         if (rhi_backend_)
             for (const auto& ev : rhi_backend_->events()) if (ev.real_dispatch) ++real_dispatches_;
@@ -730,6 +764,27 @@ private:
             "-> tonemap) in the viewport instead of the ForwardRenderer draw. Needs "
             "GPU Compute Execute + Async Compute. Editor gizmos are not drawn in "
             "this mode yet.", false);
+
+        // ---- Global Illumination (AEGIS Block 8) ----------------------
+        add_bool_("ssgi_enabled", "Screen-Space GI + AO", "Global Illumination",
+            "Screen-space final gather after the V-Buffer resolve: marches 8 "
+            "directions through the depth buffer, darkens the flat ambient term "
+            "by ambient occlusion and adds one bounce of the direct radiance "
+            "already shaded on screen (colour bleed). One compute dispatch; needs "
+            "the PBR resolve (inverse view-proj + camera position).", true);
+        add_float_("ssgi_radius", "GI Gather Radius (m)", "Global Illumination",
+            "World-space radius a pixel gathers occlusion and bounce from. Larger "
+            "= softer, wider contact darkening and bleed, more off-screen misses.",
+            1.0f, 0.05f, 10.0f, 0.05f);
+        add_float_("ssgi_intensity", "GI Bounce Intensity", "Global Illumination",
+            "Scale on the gathered one-bounce diffuse. 0 leaves only the ambient "
+            "occlusion.", 1.0f, 0.0f, 4.0f, 0.05f);
+        add_float_("ssgi_ao_strength", "AO Strength", "Global Illumination",
+            "How far ambient occlusion can darken the flat ambient term: 0 = none, "
+            "1 = fully occluded pixels lose all ambient.", 1.0f, 0.0f, 1.0f, 0.05f);
+        add_int_("ssgi_steps", "GI Steps per Direction", "Global Illumination",
+            "Taps per direction (8 directions). 4 = 32 taps per pixel; 8 = 64.",
+            4, 1, 8);
 
         // ---- Quality / Resolution -------------------------------------
         add_float_("resolution_scale", "Resolution Scale", "Quality",
@@ -989,6 +1044,9 @@ private:
     // graph keeps raw pointers into these across frames (persistent graph).
     float amb_data_[3] {0.1f, 0.1f, 0.12f};
     float vp_data_[16] {};
+    float vpp_data_[16] {};              // last frame's view-proj (motion vectors + Hi-Z history)
+    bool  vpp_primed_ {false};
+    cardinal::u32 hiz_valid_data_ {0};   // 1 once the persistent pyramid holds a frame built on this graph
     float dir_data_[3] {0.0f, 0.0f, 1.0f};
     float ivp_data_[16] {};
     float campos_data_[3] {};

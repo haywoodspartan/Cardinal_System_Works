@@ -554,11 +554,14 @@ void bin_record(rg::ExecutionContext& ec, void* uctx) noexcept {
     const float* mat = static_cast<const float*>(ec.map_buffer_read(st->in_matrix));
     const cardinal::u32* aux_in = st->in_aux_per_tri.is_valid()
         ? static_cast<const cardinal::u32*>(ec.map_buffer_read(st->in_aux_per_tri)) : nullptr;
+    const cardinal::u8* vis_in = st->in_vis_per_group.is_valid()
+        ? static_cast<const cardinal::u8*>(ec.map_buffer_read(st->in_vis_per_group)) : nullptr;
+    const cardinal::u32 gs = st->vis_group_size == 0 ? 1u : st->vis_group_size;
     auto* setup  = static_cast<cardinal::u32*>(ec.map_buffer_write(st->out_setup));
     auto* counts = static_cast<cardinal::u32*>(ec.map_buffer_write(st->out_bin_counts));
     auto* bins   = static_cast<cardinal::u32*>(ec.map_buffer_write(st->out_bins));
     st->tris_binned = st->tris_rejected = st->bin_entries = st->overflow_tiles = 0;
-    st->tiles_rejected = 0;
+    st->tiles_rejected = 0; st->tris_culled = 0;
     if (!setup || !counts || !bins || W == 0 || H == 0) { ec.dispatch(0, 1, 1); return; }
     const cardinal::u32 cap = st->bin_capacity;
     const cardinal::usize npad = setup_npad(T);
@@ -566,6 +569,13 @@ void bin_record(rg::ExecutionContext& ec, void* uctx) noexcept {
     for (int i = 0; i < 16; ++i) m[i] = mat ? fzf(mat[i], (i % 5 == 0) ? 1.0f : 0.0f)
                                             : ((i % 5 == 0) ? 1.0f : 0.0f);
     for (cardinal::u32 t = 0; t < T; ++t) {
+        if (vis_in && vis_in[t / gs] == 0u) {
+            // Culled group (frustum / occlusion): an all-zero record keeps the
+            // overflow walk honest, nothing is set up or binned.
+            store_setup(setup, npad, t, TriSetup{});
+            ++st->tris_culled;
+            continue;
+        }
         TriSetup s;
         if (tris) setup_tri(tris + t * 9, m, W, H, t, mat_ids, aux_in, s);
         else      s = TriSetup{};
@@ -607,13 +617,17 @@ cardinal::shared_ptr<TriangleBinPass::State> TriangleBinPass::add_to_graph(
     rg::ResourceHandle in_aux_per_tri,
     cardinal::u32 width, cardinal::u32 height,
     cardinal::u32 triangle_count,
-    cardinal::u32 bin_capacity)
+    cardinal::u32 bin_capacity,
+    rg::ResourceHandle in_vis_per_group,
+    cardinal::u32 vis_group_size)
 {
     auto st = cardinal::shared_ptr<State>(new State());
     st->in_tris        = in_tris;
     st->in_mat_ids     = in_mat_ids;
     st->in_matrix      = in_matrix;
     st->in_aux_per_tri = in_aux_per_tri;
+    st->in_vis_per_group = in_vis_per_group;
+    st->vis_group_size = vis_group_size == 0 ? 1u : vis_group_size;
     st->width          = width;
     st->height         = height;
     st->triangle_count = triangle_count;
@@ -633,6 +647,9 @@ cardinal::shared_ptr<TriangleBinPass::State> TriangleBinPass::add_to_graph(
     rg::ResourceHandle aux_bind = in_aux_per_tri;
     if (!aux_bind.is_valid())
         aux_bind = g.declare_buffer(rg::BufferDesc{"bin.noaux", 4, 4, true});
+    rg::ResourceHandle vis_bind = in_vis_per_group;
+    if (!vis_bind.is_valid())
+        vis_bind = g.declare_buffer(rg::BufferDesc{"bin.novis", 4, 4, true});
 
     auto push_u32 = [](rg::PassDesc& pd, cardinal::u32 x) {
         for (int k = 0; k < 4; ++k)
@@ -655,24 +672,27 @@ cardinal::shared_ptr<TriangleBinPass::State> TriangleBinPass::add_to_graph(
         rg::PassDesc pd;
         pd.name = "TriangleBinPass";
         pd.kind = rg::PassKind::Compute;
-        // t0 tris, t1 mat ids, t2 matrix, t3 aux (or dummy); u0 setup, u1 counts, u2 bins.
+        // t0 tris, t1 mat ids, t2 matrix, t3 aux (or dummy), t4 group visibility
+        // (or dummy); u0 setup, u1 counts, u2 bins.
         pd.accesses.push_back(rg::ResourceAccess{in_tris,            rg::AccessMode::Read,      0});
         pd.accesses.push_back(rg::ResourceAccess{in_mat_ids,         rg::AccessMode::Read,      1});
         pd.accesses.push_back(rg::ResourceAccess{in_matrix,          rg::AccessMode::Read,      2});
         pd.accesses.push_back(rg::ResourceAccess{aux_bind,           rg::AccessMode::Read,      3});
-        pd.accesses.push_back(rg::ResourceAccess{st->out_setup,      rg::AccessMode::Write,     4});
-        pd.accesses.push_back(rg::ResourceAccess{st->out_bin_counts, rg::AccessMode::ReadWrite, 5});
-        pd.accesses.push_back(rg::ResourceAccess{st->out_bins,       rg::AccessMode::Write,     6});
+        pd.accesses.push_back(rg::ResourceAccess{vis_bind,           rg::AccessMode::Read,      4});
+        pd.accesses.push_back(rg::ResourceAccess{st->out_setup,      rg::AccessMode::Write,     5});
+        pd.accesses.push_back(rg::ResourceAccess{st->out_bin_counts, rg::AccessMode::ReadWrite, 6});
+        pd.accesses.push_back(rg::ResourceAccess{st->out_bins,       rg::AccessMode::Write,     7});
         pd.record     = bin_record;
         pd.user_ctx   = st.get();
         pd.dispatch_x = grid_stride_groups(triangle_count);
         pd.compute_hlsl = TriangleBinPass::hlsl_source();
-        pd.push_constant_size = 32;
+        pd.push_constant_size = 48;
         push_u32(pd, width); push_u32(pd, height); push_u32(pd, triangle_count);
-        push_u32(pd, in_aux_per_tri.is_valid() ? 1u : 0u);
+        push_u32(pd, (in_aux_per_tri.is_valid() ? 1u : 0u) | (in_vis_per_group.is_valid() ? 2u : 0u));
         push_u32(pd, st->tiles_x); push_u32(pd, st->bin_capacity);
         push_u32(pd, pd.dispatch_x);                                          // groups (grid stride)
         push_u32(pd, static_cast<cardinal::u32>(setup_npad(triangle_count))); // SoAoV plane stride
+        push_u32(pd, st->vis_group_size); push_u32(pd, 0u); push_u32(pd, 0u); push_u32(pd, 0u);
         g.add_pass(cardinal::move(pd));
     }
     return st;
@@ -702,10 +722,12 @@ const char* TriangleBinPass::hlsl_source() noexcept {
     "ByteAddressBuffer   InMatIds  : register(t1);   // u32 per tri\n"
     "ByteAddressBuffer   InMatrix  : register(t2);   // 16 floats row-major VP\n"
     "ByteAddressBuffer   InAux     : register(t3);   // u32 per tri (or dummy)\n"
+    "ByteAddressBuffer   InVis     : register(t4);   // u8 per tri group (or dummy)\n"
     "RWByteAddressBuffer OutSetup  : register(u0);   // 64 B per tri\n"
     "RWByteAddressBuffer OutCounts : register(u1);   // u32 per tile\n"
     "RWByteAddressBuffer OutBins   : register(u2);   // cap u32 per tile\n"
-    "struct PushT { uint w; uint h; uint triCount; uint hasAux; uint tilesX; uint cap; uint groups; uint npad; };\n"
+    "struct PushT { uint w; uint h; uint triCount; uint flags; uint tilesX; uint cap; uint groups; uint npad;\n"
+    "               uint groupSize; uint p0; uint p1; uint p2; };   // flags: bit0 aux, bit1 visibility gate\n"
     "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
     "float edge_fn(float ax, float ay, float bx, float by, float cx, float cy) {\n"
     "  return (bx-ax)*(cy-ay) - (by-ay)*(cx-ax);\n"
@@ -728,6 +750,17 @@ const char* TriangleBinPass::hlsl_source() noexcept {
     "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
     "  uint stride = max(pc.groups, 1u) * 256u;\n"
     "  for (uint t = tid.x; t < pc.triCount; t += stride) {\n"
+    "  if ((pc.flags & 2u) != 0u) {\n"
+    "    uint gi = t / max(pc.groupSize, 1u);\n"
+    "    uint gv = (InVis.Load(gi & ~3u) >> ((gi & 3u) * 8u)) & 0xFFu;\n"
+    "    if (gv == 0u) {   // culled group: zero record, nothing binned\n"
+    "      OutSetup.Store4((0u*pc.npad + t)*16u, uint4(0u,0u,0u,0u));\n"
+    "      OutSetup.Store4((1u*pc.npad + t)*16u, uint4(0u,0u,0u,0u));\n"
+    "      OutSetup.Store4((2u*pc.npad + t)*16u, uint4(0u,0u,0u,0u));\n"
+    "      OutSetup.Store4((3u*pc.npad + t)*16u, uint4(0u,0u,0u,0u));\n"
+    "      continue;\n"
+    "    }\n"
+    "  }\n"
     "  uint b = t*36u;\n"
     "  float3 v0 = asfloat(InTris.Load3(b+0));\n"
     "  float3 v1 = asfloat(InTris.Load3(b+12));\n"
@@ -778,7 +811,7 @@ const char* TriangleBinPass::hlsl_source() noexcept {
     "  float  nl  = sqrt(dot(nrm, nrm));\n"
     "  nrm = (nl > 1.0e-8) ? nrm / nl : float3(0, 1, 0);\n"
     "  uint mid = valid ? InMatIds.Load(t*4u) : 0u;\n"
-    "  uint aux = valid ? ((pc.hasAux != 0u) ? InAux.Load(t*4u) : t) : 0u;\n"
+    "  uint aux = valid ? (((pc.flags & 1u) != 0u) ? InAux.Load(t*4u) : t) : 0u;\n"
     "  if (!valid) { px[0]=px[1]=px[2]=0.0; py[0]=py[1]=py[2]=0.0; pz[0]=pz[1]=pz[2]=0.0; x0=y0=x1=y1=0; }\n"
     "  // SoAoV planes: plane k of record t at (k*npad + t)*16 — each Store4 is\n"
     "  // contiguous across the wave (16 B per lane) instead of 64 B strided.\n"
@@ -1110,31 +1143,30 @@ cardinal::u32 compute_mip_layout(cardinal::u32 W, cardinal::u32 H,
     return off;   // total float count
 }
 
-void hiz_build_record(rg::ExecutionContext& ec, void* uctx) noexcept {
+// One pass per mip. Mip 0 copies the depth (non-finite -> 1.0 = far); mip m
+// reduces mip m-1 with a conservative-far max of each 2x2 footprint (edge
+// texels clamp). The CPU record and the kernel both do exactly ONE mip per
+// invocation, so a 1920x1080 pyramid is 11 dispatches of shrinking size.
+void hiz_mip_record(rg::ExecutionContext& ec, void* uctx) noexcept {
     if (!uctx) return;
-    auto* st = static_cast<HiZBuildPass::State*>(uctx);
-    const cardinal::u32 W = st->width, H = st->height;
-    if (W == 0 || H == 0 || st->mip_count == 0) {
-        ec.dispatch(0, 1, 1);
-        return;
-    }
-    const float* depth = static_cast<const float*>(ec.map_buffer_read(st->in_depth));
-    float*       pyr   = static_cast<float*>      (ec.map_buffer_write(st->out_pyramid));
-    if (!depth || !pyr) { ec.dispatch(0, 1, 1); return; }
-
-    // Copy mip 0 from the input depth.
-    for (cardinal::u32 i = 0; i < W * H; ++i) {
-        pyr[st->mip_offsets_f[0] + i] = fzf(depth[i], 1.0f);
-    }
-
-    // Build each subsequent mip as max-of-2x2 footprint.
-    for (cardinal::u32 m = 1; m < st->mip_count; ++m) {
+    auto* cx = static_cast<HiZBuildPass::MipCtx*>(uctx);
+    HiZBuildPass::State* st = cx->st;
+    const cardinal::u32 m = cx->mip;
+    if (!st || m >= st->mip_count) { ec.dispatch(0, 1, 1); return; }
+    const cardinal::u32 cur_w = st->mip_widths[m], cur_h = st->mip_heights[m];
+    const cardinal::u32 cur_off = st->mip_offsets_f[m];
+    float* pyr = static_cast<float*>(ec.map_buffer_write(st->out_pyramid));
+    if (!pyr) { ec.dispatch(0, 1, 1); return; }
+    if (m == 0) {
+        const float* depth = static_cast<const float*>(ec.map_buffer_read(st->in_depth));
+        if (!depth) { ec.dispatch(0, 1, 1); return; }
+        const cardinal::usize n = static_cast<cardinal::usize>(cur_w) * cur_h;
+        for (cardinal::usize i = 0; i < n; ++i) pyr[cur_off + i] = fzf(depth[i], 1.0f);
+        st->mips_built = 1;
+    } else {
         const cardinal::u32 prev_off = st->mip_offsets_f[m - 1];
         const cardinal::u32 prev_w   = st->mip_widths[m - 1];
         const cardinal::u32 prev_h   = st->mip_heights[m - 1];
-        const cardinal::u32 cur_off  = st->mip_offsets_f[m];
-        const cardinal::u32 cur_w    = st->mip_widths[m];
-        const cardinal::u32 cur_h    = st->mip_heights[m];
         for (cardinal::u32 y = 0; y < cur_h; ++y) {
             for (cardinal::u32 x = 0; x < cur_w; ++x) {
                 const cardinal::u32 px0 = x * 2;
@@ -1153,66 +1185,113 @@ void hiz_build_record(rg::ExecutionContext& ec, void* uctx) noexcept {
                 pyr[cur_off + y * cur_w + x] = zmax;
             }
         }
+        st->mips_built = m + 1;
     }
-    st->mips_built = st->mip_count;
-    st->max_depth  = pyr[st->mip_offsets_f[st->mip_count - 1]];
+    if (m + 1 == st->mip_count) st->max_depth = pyr[st->mip_offsets_f[st->mip_count - 1]];
+    ec.dispatch((cur_w + 7) / 8, (cur_h + 7) / 8, 1);
+}
 
-    ec.dispatch((W + 7) / 8, (H + 7) / 8, 1);
+inline void hiz_push_u32(rg::PassDesc& pd, cardinal::u32 x) {
+    for (int k = 0; k < 4; ++k)
+        pd.push_constants.push_back(static_cast<cardinal::u8>((x >> (8 * k)) & 0xFFu));
 }
 
 }  // namespace
 
-cardinal::shared_ptr<HiZBuildPass::State> HiZBuildPass::add_to_graph(
-    rg::Graph& g, rg::ResourceHandle in_depth,
-    cardinal::u32 width, cardinal::u32 height)
+cardinal::shared_ptr<HiZBuildPass::State> HiZBuildPass::declare(
+    rg::Graph& g, cardinal::u32 width, cardinal::u32 height, bool persistent)
 {
     auto st = cardinal::shared_ptr<State>(new State());
-    st->in_depth = in_depth;
-    st->width    = width;
-    st->height   = height;
+    st->width      = width;
+    st->height     = height;
+    st->persistent = persistent;
     const cardinal::u32 total_floats = compute_mip_layout(width, height, *st);
 
     rg::BufferDesc od;
     od.name         = "hiz.pyramid";
-    od.size_bytes   = static_cast<cardinal::usize>(total_floats) * sizeof(float);
+    od.size_bytes   = static_cast<cardinal::usize>(total_floats == 0 ? 1u : total_floats) * sizeof(float);
     od.stride_bytes = sizeof(float);
+    od.persistent   = persistent;
     st->out_pyramid = g.declare_buffer(od);
+    return st;
+}
 
-    rg::PassDesc pd;
-    pd.name = "HiZBuildPass";
-    pd.kind = rg::PassKind::Compute;
-    pd.accesses.push_back(rg::ResourceAccess{in_depth,        rg::AccessMode::Read,  0});
-    pd.accesses.push_back(rg::ResourceAccess{st->out_pyramid, rg::AccessMode::Write, 1});
-    pd.record   = hiz_build_record;
-    pd.user_ctx = st.get();
-    pd.dispatch_x = (width + 7) / 8;
-    pd.dispatch_y = (height + 7) / 8;
-    pd.dispatch_z = 1;
-    g.add_pass(cardinal::move(pd));
+void HiZBuildPass::add_passes(rg::Graph& g, State& st, rg::ResourceHandle in_depth)
+{
+    st.in_depth = in_depth;
+    st.mip_ctx.clear();
+    st.mip_ctx.resize(st.mip_count);
+    for (cardinal::u32 m = 0; m < st.mip_count; ++m) {
+        st.mip_ctx[m].st  = &st;
+        st.mip_ctx[m].mip = m;
+        rg::PassDesc pd;
+        pd.name = "HiZBuildPass";
+        pd.kind = rg::PassKind::Compute;
+        // t0 depth (read by mip 0 only — declared on every mip so the binding
+        // layout is fixed); u0 pyramid read+write (mip m reads m-1).
+        pd.accesses.push_back(rg::ResourceAccess{in_depth,       rg::AccessMode::Read,      0});
+        pd.accesses.push_back(rg::ResourceAccess{st.out_pyramid, rg::AccessMode::ReadWrite, 1});
+        pd.record   = hiz_mip_record;
+        pd.user_ctx = &st.mip_ctx[m];
+        pd.dispatch_x = (st.mip_widths[m]  + 7) / 8;
+        pd.dispatch_y = (st.mip_heights[m] + 7) / 8;
+        pd.dispatch_z = 1;
+        pd.compute_hlsl = HiZBuildPass::hlsl_source();
+        pd.push_constant_size = 32;
+        hiz_push_u32(pd, m);
+        hiz_push_u32(pd, st.mip_widths[m]);
+        hiz_push_u32(pd, st.mip_heights[m]);
+        hiz_push_u32(pd, m ? st.mip_widths[m - 1]  : st.mip_widths[0]);
+        hiz_push_u32(pd, m ? st.mip_heights[m - 1] : st.mip_heights[0]);
+        hiz_push_u32(pd, m ? st.mip_offsets_f[m - 1] : 0u);
+        hiz_push_u32(pd, st.mip_offsets_f[m]);
+        hiz_push_u32(pd, 0u);
+        g.add_pass(cardinal::move(pd));
+    }
+}
+
+cardinal::shared_ptr<HiZBuildPass::State> HiZBuildPass::add_to_graph(
+    rg::Graph& g, rg::ResourceHandle in_depth,
+    cardinal::u32 width, cardinal::u32 height, bool persistent)
+{
+    auto st = declare(g, width, height, persistent);
+    add_passes(g, *st, in_depth);
     return st;
 }
 
 const char* HiZBuildPass::hlsl_source() noexcept {
-    return R"(// Cardinal — HiZBuildPass.hlsl
-//
-// One dispatch per mip level. Each thread reads 4 texels from mip N-1
-// and writes max(z) to mip N. Conservative-far reduction so the test
-// pass's "is AABB occluded?" check is conservative (never falsely
-// occludes a visible AABB).
-ByteAddressBuffer   in_depth   : register(t0);
-RWByteAddressBuffer out_pyramid : register(u0);
-cbuffer Params : register(b0) {
-    uint mip, mip_w, mip_h, _p0;
-    uint prev_w, prev_h, prev_off_f, cur_off_f;
-};
-float load_f(ByteAddressBuffer b, uint o) { return asfloat(b.Load(o)); }
-[numthreads(8, 8, 1)]
-void main(uint3 tid : SV_DispatchThreadID) {
-    uint x = tid.x, y = tid.y;
-    if (x >= mip_w || y >= mip_h) return;
-    // Body deferred to RHI compute commit.
-}
-)";
+    return
+    "// Cardinal - HiZBuildPass.hlsl - one dispatch per mip. Mip 0 copies depth\n"
+    "// (non-finite -> 1.0 = far); mip m stores the max of its 2x2 footprint in\n"
+    "// mip m-1 (edge texels clamp). Mirrors hiz_mip_record op-for-op.\n"
+    "ByteAddressBuffer   InDepth : register(t0);\n"
+    "RWByteAddressBuffer Pyr     : register(u0);\n"
+    "struct PushT { uint mip; uint mw; uint mh; uint pw; uint ph; uint poff; uint coff; uint pad; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "[numthreads(8,8,1)]\n"
+    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
+    "  uint x = tid.x, y = tid.y;\n"
+    "  if (x >= pc.mw || y >= pc.mh) return;\n"
+    "  uint o = pc.coff + y * pc.mw + x;\n"
+    "  if (pc.mip == 0u) {\n"
+    "    float z = asfloat(InDepth.Load((y * pc.mw + x) * 4u));\n"
+    "    if (!isfinite(z)) z = 1.0;\n"
+    "    Pyr.Store(o * 4u, asuint(z));\n"
+    "    return;\n"
+    "  }\n"
+    "  uint px0 = x * 2u, py0 = y * 2u;\n"
+    "  uint px1 = (px0 + 1u < pc.pw) ? px0 + 1u : px0;\n"
+    "  uint py1 = (py0 + 1u < pc.ph) ? py0 + 1u : py0;\n"
+    "  float z00 = asfloat(Pyr.Load((pc.poff + py0 * pc.pw + px0) * 4u));\n"
+    "  float z01 = asfloat(Pyr.Load((pc.poff + py0 * pc.pw + px1) * 4u));\n"
+    "  float z10 = asfloat(Pyr.Load((pc.poff + py1 * pc.pw + px0) * 4u));\n"
+    "  float z11 = asfloat(Pyr.Load((pc.poff + py1 * pc.pw + px1) * 4u));\n"
+    "  float zmax = z00;\n"
+    "  if (z01 > zmax) zmax = z01;\n"
+    "  if (z10 > zmax) zmax = z10;\n"
+    "  if (z11 > zmax) zmax = z11;\n"
+    "  Pyr.Store(o * 4u, asuint(zmax));\n"
+    "}\n";
 }
 
 // =============================================================================
@@ -1220,70 +1299,105 @@ void main(uint3 tid : SV_DispatchThreadID) {
 // =============================================================================
 namespace {
 
+// Project the 8 corners of a box through a row-major view-proj. Returns false
+// when any corner lands behind the camera (w <= 0 or non-finite) — the caller
+// keeps that box visible (conservative). Otherwise fills the NDC rect and the
+// nearest depth mapped to [0, 1].
+inline bool project_box(const float* m,
+                        float ax, float ay, float az, float bx, float by, float bz,
+                        float& min_sx, float& max_sx, float& min_sy, float& max_sy,
+                        float& min_sz) noexcept
+{
+    min_sx = 1.0e30f; max_sx = -1.0e30f;
+    min_sy = 1.0e30f; max_sy = -1.0e30f;
+    min_sz = 1.0e30f;
+    for (int c = 0; c < 8; ++c) {
+        const float X = (c & 1) ? bx : ax;
+        const float Y = (c & 2) ? by : ay;
+        const float Z = (c & 4) ? bz : az;
+        const float cx = m[0]  * X + m[1]  * Y + m[2]  * Z + m[3];
+        const float cy = m[4]  * X + m[5]  * Y + m[6]  * Z + m[7];
+        const float cz = m[8]  * X + m[9]  * Y + m[10] * Z + m[11];
+        const float cw = m[12] * X + m[13] * Y + m[14] * Z + m[15];
+        if (cw <= 0.0f || !isf(cw)) return false;
+        const float nx = cx / cw;
+        const float ny = cy / cw;
+        const float nz = 0.5f * (cz / cw + 1.0f);
+        if (nx < min_sx) min_sx = nx; if (nx > max_sx) max_sx = nx;
+        if (ny < min_sy) min_sy = ny; if (ny > max_sy) max_sy = ny;
+        if (nz < min_sz) min_sz = nz;
+    }
+    return true;
+}
+
 void hiz_test_record(rg::ExecutionContext& ec, void* uctx) noexcept {
     if (!uctx) return;
     auto* st = static_cast<HiZOcclusionTestPass::State*>(uctx);
     const cardinal::u32 N = st->aabb_count;
-    if (N == 0 || st->mip_count == 0) {
-        cardinal::u8* vis_short = static_cast<cardinal::u8*>(ec.map_buffer_write(st->out_visibility));
-        if (vis_short) { for (cardinal::u32 i = 0; i < N; ++i) vis_short[i] = 1; }
-        st->visible = N; st->occluded = 0;
-        ec.dispatch(0, 1, 1);
+    st->visible = st->occluded = st->frustum_culled = st->prior_culled = 0;
+    st->history_used = false;
+    cardinal::u8* vis = static_cast<cardinal::u8*>(ec.map_buffer_write(st->out_visibility));
+    if (!vis) { ec.dispatch(0, 1, 1); return; }
+    const cardinal::u32 words = (N + 3u) / 4u;
+    for (cardinal::u32 i = 0; i < words * 4u; ++i) vis[i] = 0;   // pad bytes = 0 (kernel stores words)
+    if (N == 0) { ec.dispatch(0, 1, 1); return; }
+
+    const float* bounds = static_cast<const float*>(ec.map_buffer_read(st->in_aabbs));
+    const float* mat    = static_cast<const float*>(ec.map_buffer_read(st->in_matrix));
+    const float* pmat_in = st->in_prev_matrix.is_valid()
+        ? static_cast<const float*>(ec.map_buffer_read(st->in_prev_matrix)) : mat;
+    const float* pyr    = static_cast<const float*>(ec.map_buffer_read(st->in_pyramid));
+    const cardinal::u8*  prior = st->in_prior_vis.is_valid()
+        ? static_cast<const cardinal::u8*>(ec.map_buffer_read(st->in_prior_vis)) : nullptr;
+    const cardinal::u32* hist  = st->in_history_valid.is_valid()
+        ? static_cast<const cardinal::u32*>(ec.map_buffer_read(st->in_history_valid)) : nullptr;
+    if (!bounds || !mat) {
+        for (cardinal::u32 i = 0; i < N; ++i) vis[i] = 1;
+        st->visible = N;
+        ec.dispatch((words + 63) / 64, 1, 1);
         return;
     }
-    const float* aabbs = static_cast<const float*>(ec.map_buffer_read(st->in_aabbs));
-    const float* mat   = static_cast<const float*>(ec.map_buffer_read(st->in_matrix));
-    const float* pyr   = static_cast<const float*>(ec.map_buffer_read(st->in_pyramid));
-    cardinal::u8* vis  = static_cast<cardinal::u8*>(ec.map_buffer_write(st->out_visibility));
-    if (!aabbs || !mat || !pyr || !vis) {
-        ec.dispatch(0, 1, 1);
-        return;
+    float m[16], pm[16];
+    for (int i = 0; i < 16; ++i) {
+        m[i]  = fzf(mat[i], (i % 5 == 0) ? 1.0f : 0.0f);
+        pm[i] = fzf(pmat_in ? pmat_in[i] : mat[i], (i % 5 == 0) ? 1.0f : 0.0f);
     }
-
-    float m[16];
-    for (int i = 0; i < 16; ++i) m[i] = fzf(mat[i], (i % 5 == 0) ? 1.0f : 0.0f);
-
-    const float* mn_x = aabbs + 0 * N;
-    const float* mn_y = aabbs + 1 * N;
-    const float* mn_z = aabbs + 2 * N;
-    const float* mx_x = aabbs + 3 * N;
-    const float* mx_y = aabbs + 4 * N;
-    const float* mx_z = aabbs + 5 * N;
+    const bool use_pyramid = st->occlusion && pyr && st->mip_count > 0 &&
+                             (!hist || hist[0] != 0u);
+    st->history_used = use_pyramid;
 
     const cardinal::u32 W = st->width;
     const cardinal::u32 H = st->height;
     const float hw = 0.5f * static_cast<float>(W);
     const float hh = 0.5f * static_cast<float>(H);
+    const bool meshlets = (st->layout == HiZOcclusionTestPass::Layout::MeshletRecords);
 
     cardinal::u32 nv = 0, no = 0;
-
     for (cardinal::u32 i = 0; i < N; ++i) {
-        const float ax = fzf(mn_x[i], 0.0f), ay = fzf(mn_y[i], 0.0f), az = fzf(mn_z[i], 0.0f);
-        const float bx = fzf(mx_x[i], 0.0f), by = fzf(mx_y[i], 0.0f), bz = fzf(mx_z[i], 0.0f);
-        const float corners[8][3] = {
-            {ax, ay, az}, {bx, ay, az}, {ax, by, az}, {bx, by, az},
-            {ax, ay, bz}, {bx, ay, bz}, {ax, by, bz}, {bx, by, bz},
-        };
-        float min_sx = 1.0e30f, max_sx = -1.0e30f;
-        float min_sy = 1.0e30f, max_sy = -1.0e30f;
-        float min_sz = 1.0e30f, max_sz = -1.0e30f;
-        bool  any_behind = false;
-        for (int c = 0; c < 8; ++c) {
-            const float cx = m[0]  * corners[c][0] + m[1]  * corners[c][1] + m[2]  * corners[c][2] + m[3];
-            const float cy = m[4]  * corners[c][0] + m[5]  * corners[c][1] + m[6]  * corners[c][2] + m[7];
-            const float cz = m[8]  * corners[c][0] + m[9]  * corners[c][1] + m[10] * corners[c][2] + m[11];
-            const float cw = m[12] * corners[c][0] + m[13] * corners[c][1] + m[14] * corners[c][2] + m[15];
-            if (cw <= 0.0f || !isf(cw)) { any_behind = true; continue; }
-            const float nx = cx / cw;
-            const float ny = cy / cw;
-            const float nz = 0.5f * (cz / cw + 1.0f);
-            if (nx < min_sx) min_sx = nx; if (nx > max_sx) max_sx = nx;
-            if (ny < min_sy) min_sy = ny; if (ny > max_sy) max_sy = ny;
-            if (nz < min_sz) min_sz = nz; if (nz > max_sz) max_sz = nz;
+        float ax, ay, az, bx, by, bz;
+        if (meshlets) {
+            const float* rec = bounds + static_cast<cardinal::usize>(i) * 12u;
+            ax = fzf(rec[2], 0.0f); ay = fzf(rec[3], 0.0f); az = fzf(rec[4], 0.0f);
+            bx = fzf(rec[5], 0.0f); by = fzf(rec[6], 0.0f); bz = fzf(rec[7], 0.0f);
+        } else {
+            ax = fzf(bounds[0 * N + i], 0.0f); ay = fzf(bounds[1 * N + i], 0.0f); az = fzf(bounds[2 * N + i], 0.0f);
+            bx = fzf(bounds[3 * N + i], 0.0f); by = fzf(bounds[4 * N + i], 0.0f); bz = fzf(bounds[5 * N + i], 0.0f);
         }
-        // If anything is behind the camera, take the conservative path
-        // and mark visible (the cluster cull will narrow this down later).
-        if (any_behind || min_sx > max_sx) {
+        if (prior && prior[i] == 0u) { vis[i] = 0; ++st->prior_culled; continue; }
+
+        float min_sx, max_sx, min_sy, max_sy, min_sz;
+        // 1. Frustum reject with the CURRENT view-proj: fully outside the
+        //    screen rect -> culled. A corner behind the camera -> visible.
+        if (!project_box(m, ax, ay, az, bx, by, bz, min_sx, max_sx, min_sy, max_sy, min_sz)) {
+            vis[i] = 1; ++nv; continue;
+        }
+        if (max_sx < -1.0f || min_sx > 1.0f || max_sy < -1.0f || min_sy > 1.0f) {
+            vis[i] = 0; ++st->frustum_culled; continue;
+        }
+        if (!use_pyramid) { vis[i] = 1; ++nv; continue; }
+
+        // 2. Occlusion against the pyramid, through the view-proj that BUILT it.
+        if (!project_box(pm, ax, ay, az, bx, by, bz, min_sx, max_sx, min_sy, max_sy, min_sz)) {
             vis[i] = 1; ++nv; continue;
         }
         // Clamp to NDC + map to pixel-rect.
@@ -1308,7 +1422,7 @@ void hiz_test_record(rg::ExecutionContext& ec, void* uctx) noexcept {
         const cardinal::u32 mw = st->mip_widths[mip];
         const cardinal::u32 mh = st->mip_heights[mip];
         const cardinal::u32 off = st->mip_offsets_f[mip];
-        // Convert px rect → mip-coordinates by scaling W → mw.
+        // Convert px rect -> mip coordinates by scaling W -> mw.
         const float scale_x = static_cast<float>(mw) / static_cast<float>(W);
         const float scale_y = static_cast<float>(mh) / static_cast<float>(H);
         int mx0 = static_cast<int>(px_min * scale_x);
@@ -1328,14 +1442,97 @@ void hiz_test_record(rg::ExecutionContext& ec, void* uctx) noexcept {
                 if (z > max_pyramid) max_pyramid = z;
             }
         }
-        // Occluded if AABB's nearest-z is BEHIND the pyramid's max-z.
+        // Occluded if the box's nearest depth is BEHIND the pyramid's max.
         const bool occluded = (min_sz > max_pyramid);
         if (occluded) { vis[i] = 0; ++no; }
         else          { vis[i] = 1; ++nv; }
     }
     st->visible  = nv;
     st->occluded = no;
-    ec.dispatch((N + 63) / 64, 1, 1);
+    ec.dispatch((words + 63) / 64, 1, 1);
+}
+
+cardinal::shared_ptr<HiZOcclusionTestPass::State> make_hiz_test(
+    rg::Graph& g,
+    HiZOcclusionTestPass::Layout layout,
+    rg::ResourceHandle in_bounds, cardinal::u32 count,
+    rg::ResourceHandle in_matrix, rg::ResourceHandle in_prev_matrix,
+    rg::ResourceHandle in_prior_vis, rg::ResourceHandle in_history_valid,
+    const HiZBuildPass::State& hiz, bool occlusion)
+{
+    auto st = cardinal::shared_ptr<HiZOcclusionTestPass::State>(new HiZOcclusionTestPass::State());
+    st->in_aabbs         = in_bounds;
+    st->in_matrix        = in_matrix;
+    st->in_prev_matrix   = in_prev_matrix;
+    st->in_pyramid       = hiz.out_pyramid;
+    st->in_prior_vis     = in_prior_vis;
+    st->in_history_valid = in_history_valid;
+    st->layout           = layout;
+    st->occlusion        = occlusion;
+    st->width            = hiz.width;
+    st->height           = hiz.height;
+    st->mip_count        = hiz.mip_count;
+    for (cardinal::u32 i = 0; i < kMaxHiZMips; ++i) {
+        st->mip_widths[i]    = (i < hiz.mip_count) ? hiz.mip_widths[i]    : 0u;
+        st->mip_heights[i]   = (i < hiz.mip_count) ? hiz.mip_heights[i]   : 0u;
+        st->mip_offsets_f[i] = (i < hiz.mip_count) ? hiz.mip_offsets_f[i] : 0u;
+        st->layout_words[i]                   = st->mip_widths[i];
+        st->layout_words[kMaxHiZMips + i]     = st->mip_heights[i];
+        st->layout_words[2 * kMaxHiZMips + i] = st->mip_offsets_f[i];
+    }
+    st->aabb_count = count;
+    // Mip table for the kernel (push constants are capped at 64 B). The State
+    // owns the bytes; it outlives the graph (hosts hold the shared_ptr).
+    st->in_layout = g.import_buffer("hiz.layout", st->layout_words, sizeof(st->layout_words), 4);
+
+    rg::BufferDesc od;
+    od.name         = "hiz.vis";
+    // Rounded up to a whole u32: the kernel packs 4 visibility bytes per
+    // 32-bit store, and a root-descriptor UAV has no bounds checking.
+    od.size_bytes   = (static_cast<cardinal::usize>(count) + 3u) & ~static_cast<cardinal::usize>(3u);
+    if (od.size_bytes == 0) od.size_bytes = 4;
+    od.stride_bytes = 1;
+    st->out_visibility = g.declare_buffer(od);
+
+    rg::ResourceHandle prev_bind  = in_prev_matrix.is_valid() ? in_prev_matrix : in_matrix;
+    rg::ResourceHandle prior_bind = in_prior_vis;
+    rg::ResourceHandle hist_bind  = in_history_valid;
+    if (!prior_bind.is_valid()) prior_bind = g.declare_buffer(rg::BufferDesc{"hiz.noprior", 4, 4, true});
+    if (!hist_bind.is_valid())  hist_bind  = g.declare_buffer(rg::BufferDesc{"hiz.nohist",  4, 4, true});
+
+    rg::PassDesc pd;
+    pd.name = "HiZOcclusionTestPass";
+    pd.kind = rg::PassKind::Compute;
+    // t0 bounds, t1 view-proj, t2 pyramid view-proj, t3 pyramid, t4 prior
+    // (or dummy), t5 history flag (or dummy), t6 mip table; u0 visibility.
+    pd.accesses.push_back(rg::ResourceAccess{in_bounds,          rg::AccessMode::Read,  0});
+    pd.accesses.push_back(rg::ResourceAccess{in_matrix,          rg::AccessMode::Read,  1});
+    pd.accesses.push_back(rg::ResourceAccess{prev_bind,          rg::AccessMode::Read,  2});
+    pd.accesses.push_back(rg::ResourceAccess{hiz.out_pyramid,    rg::AccessMode::Read,  3});
+    pd.accesses.push_back(rg::ResourceAccess{prior_bind,         rg::AccessMode::Read,  4});
+    pd.accesses.push_back(rg::ResourceAccess{hist_bind,          rg::AccessMode::Read,  5});
+    pd.accesses.push_back(rg::ResourceAccess{st->in_layout,      rg::AccessMode::Read,  6});
+    pd.accesses.push_back(rg::ResourceAccess{st->out_visibility, rg::AccessMode::Write, 7});
+    pd.record   = hiz_test_record;
+    pd.user_ctx = st.get();
+    const cardinal::u32 words = (count + 3u) / 4u;
+    pd.dispatch_x = (words + 63) / 64;
+    if (pd.dispatch_x == 0) pd.dispatch_x = 1;
+    pd.dispatch_y = 1; pd.dispatch_z = 1;
+    pd.compute_hlsl = HiZOcclusionTestPass::hlsl_source();
+    pd.push_constant_size = 32;
+    hiz_push_u32(pd, count);
+    hiz_push_u32(pd, hiz.width);
+    hiz_push_u32(pd, hiz.height);
+    hiz_push_u32(pd, hiz.mip_count);
+    hiz_push_u32(pd, static_cast<cardinal::u32>(layout));
+    hiz_push_u32(pd, (in_prior_vis.is_valid() ? 1u : 0u) |
+                     (in_history_valid.is_valid() ? 2u : 0u) |
+                     (occlusion ? 4u : 0u));
+    hiz_push_u32(pd, 0u);
+    hiz_push_u32(pd, 0u);
+    g.add_pass(cardinal::move(pd));
+    return st;
 }
 
 }  // namespace
@@ -1347,60 +1544,149 @@ cardinal::shared_ptr<HiZOcclusionTestPass::State> HiZOcclusionTestPass::add_to_g
     cardinal::u32 aabb_count,
     const HiZBuildPass::State& hiz)
 {
-    auto st = cardinal::shared_ptr<State>(new State());
-    st->in_aabbs   = in_aabbs;
-    st->in_matrix  = in_matrix;
-    st->in_pyramid = hiz.out_pyramid;
-    st->width      = hiz.width;
-    st->height     = hiz.height;
-    st->mip_count  = hiz.mip_count;
-    for (cardinal::u32 i = 0; i < hiz.mip_count; ++i) {
-        st->mip_widths[i]    = hiz.mip_widths[i];
-        st->mip_heights[i]   = hiz.mip_heights[i];
-        st->mip_offsets_f[i] = hiz.mip_offsets_f[i];
-    }
-    st->aabb_count = aabb_count;
+    return make_hiz_test(g, Layout::AabbSoA, in_aabbs, aabb_count, in_matrix,
+                         rg::ResourceHandle{}, rg::ResourceHandle{}, rg::ResourceHandle{},
+                         hiz, true);
+}
 
-    rg::BufferDesc od;
-    od.name         = "hiz.vis";
-    od.size_bytes   = static_cast<cardinal::usize>(aabb_count);
-    od.stride_bytes = 1;
-    st->out_visibility = g.declare_buffer(od);
-
-    rg::PassDesc pd;
-    pd.name = "HiZOcclusionTestPass";
-    pd.kind = rg::PassKind::Compute;
-    pd.accesses.push_back(rg::ResourceAccess{in_aabbs,           rg::AccessMode::Read,  0});
-    pd.accesses.push_back(rg::ResourceAccess{in_matrix,          rg::AccessMode::Read,  1});
-    pd.accesses.push_back(rg::ResourceAccess{hiz.out_pyramid,    rg::AccessMode::Read,  2});
-    pd.accesses.push_back(rg::ResourceAccess{st->out_visibility, rg::AccessMode::Write, 3});
-    pd.record   = hiz_test_record;
-    pd.user_ctx = st.get();
-    pd.dispatch_x = (aabb_count + 63) / 64;
-    pd.dispatch_y = 1; pd.dispatch_z = 1;
-    g.add_pass(cardinal::move(pd));
-    return st;
+cardinal::shared_ptr<HiZOcclusionTestPass::State> HiZOcclusionTestPass::add_to_graph(
+    rg::Graph& g,
+    Layout layout,
+    rg::ResourceHandle in_bounds,
+    cardinal::u32 count,
+    rg::ResourceHandle in_matrix,
+    rg::ResourceHandle in_prev_matrix,
+    rg::ResourceHandle in_prior_vis,
+    rg::ResourceHandle in_history_valid,
+    const HiZBuildPass::State& hiz,
+    bool occlusion)
+{
+    return make_hiz_test(g, layout, in_bounds, count, in_matrix, in_prev_matrix,
+                         in_prior_vis, in_history_valid, hiz, occlusion);
 }
 
 const char* HiZOcclusionTestPass::hlsl_source() noexcept {
-    return R"(// Cardinal — HiZOcclusionTestPass.hlsl
-//
-// One thread per AABB. Project 8 corners, derive screen rect, sample
-// the appropriate pyramid mip, compare AABB's nearest-z to mip's
-// max-z. Output: 1 byte per AABB (1 = visible, 0 = occluded). Drop-in
-// chain after FrustumCullPass.
-ByteAddressBuffer   in_aabbs    : register(t0);
-ByteAddressBuffer   in_matrix   : register(t1);
-ByteAddressBuffer   in_pyramid  : register(t2);
-RWByteAddressBuffer out_vis     : register(u0);
-cbuffer Params : register(b0) {
-    uint aabb_count, width, height, mip_count;
-};
-[numthreads(64, 1, 1)]
-void main(uint3 tid : SV_DispatchThreadID) {
-    // Body deferred to RHI compute commit.
-}
-)";
+    return
+    "// Cardinal - HiZOcclusionTestPass.hlsl - one thread per PACKED WORD (4 boxes).\n"
+    "// Per box: screen-rect frustum reject with the current view-proj, then (when\n"
+    "// enabled + history valid) project through the view-proj that built the\n"
+    "// pyramid, pick the mip covering the rect, compare nearest depth to its max.\n"
+    "// Mirrors hiz_test_record op-for-op (no dot(): explicit products keep the\n"
+    "// CPU/GPU rounding identical).\n"
+    "ByteAddressBuffer   InBounds  : register(t0);   // SoA AABBs or 12-float meshlet records\n"
+    "ByteAddressBuffer   InMatrix  : register(t1);   // 16 floats, current view-proj\n"
+    "ByteAddressBuffer   InPrevMat : register(t2);   // 16 floats, the pyramid's view-proj\n"
+    "ByteAddressBuffer   InPyramid : register(t3);   // f32 mips\n"
+    "ByteAddressBuffer   InPrior   : register(t4);   // u8 per box (or dummy)\n"
+    "ByteAddressBuffer   InHist    : register(t5);   // u32 (or dummy)\n"
+    "ByteAddressBuffer   InLayout  : register(t6);   // widths[16], heights[16], offsets[16]\n"
+    "RWByteAddressBuffer OutVis    : register(u0);   // u8 per box, packed 4 per store\n"
+    "struct PushT { uint count; uint width; uint height; uint mipCount; uint layout; uint flags; uint p0; uint p1; };\n"
+    "[[vk::push_constant]] ConstantBuffer<PushT> pc : register(b0);\n"
+    "float fz(float v, float fb) { return isfinite(v) ? v : fb; }\n"
+    "float4 load_row(ByteAddressBuffer b, uint o, float4 id) {\n"
+    "  float4 r = asfloat(b.Load4(o));\n"
+    "  return float4(fz(r.x, id.x), fz(r.y, id.y), fz(r.z, id.z), fz(r.w, id.w));\n"
+    "}\n"
+    "bool project_box(float4 r0, float4 r1, float4 r2, float4 r3, float3 a, float3 b,\n"
+    "                 out float min_sx, out float max_sx, out float min_sy, out float max_sy, out float min_sz) {\n"
+    "  min_sx = 1.0e30; max_sx = -1.0e30; min_sy = 1.0e30; max_sy = -1.0e30; min_sz = 1.0e30;\n"
+    "  [unroll] for (uint c = 0u; c < 8u; ++c) {\n"
+    "    float X = (c & 1u) ? b.x : a.x;\n"
+    "    float Y = (c & 2u) ? b.y : a.y;\n"
+    "    float Z = (c & 4u) ? b.z : a.z;\n"
+    "    float cx = r0.x * X + r0.y * Y + r0.z * Z + r0.w;\n"
+    "    float cy = r1.x * X + r1.y * Y + r1.z * Z + r1.w;\n"
+    "    float cz = r2.x * X + r2.y * Y + r2.z * Z + r2.w;\n"
+    "    float cw = r3.x * X + r3.y * Y + r3.z * Z + r3.w;\n"
+    "    if (cw <= 0.0 || !isfinite(cw)) return false;\n"
+    "    float nx = cx / cw, ny = cy / cw, nz = 0.5 * (cz / cw + 1.0);\n"
+    "    if (nx < min_sx) min_sx = nx; if (nx > max_sx) max_sx = nx;\n"
+    "    if (ny < min_sy) min_sy = ny; if (ny > max_sy) max_sy = ny;\n"
+    "    if (nz < min_sz) min_sz = nz;\n"
+    "  }\n"
+    "  return true;\n"
+    "}\n"
+    "uint test_box(uint i, float4 m0, float4 m1, float4 m2, float4 m3,\n"
+    "              float4 q0, float4 q1, float4 q2, float4 q3, bool usePyr) {\n"
+    "  float3 a, b;\n"
+    "  if (pc.layout == 1u) {\n"
+    "    uint o = i * 48u;\n"
+    "    a = asfloat(InBounds.Load3(o + 8u));\n"
+    "    b = asfloat(InBounds.Load3(o + 20u));\n"
+    "  } else {\n"
+    "    a = float3(asfloat(InBounds.Load((0u*pc.count + i)*4u)), asfloat(InBounds.Load((1u*pc.count + i)*4u)), asfloat(InBounds.Load((2u*pc.count + i)*4u)));\n"
+    "    b = float3(asfloat(InBounds.Load((3u*pc.count + i)*4u)), asfloat(InBounds.Load((4u*pc.count + i)*4u)), asfloat(InBounds.Load((5u*pc.count + i)*4u)));\n"
+    "  }\n"
+    "  a = float3(fz(a.x, 0.0), fz(a.y, 0.0), fz(a.z, 0.0));\n"
+    "  b = float3(fz(b.x, 0.0), fz(b.y, 0.0), fz(b.z, 0.0));\n"
+    "  if ((pc.flags & 1u) != 0u) {\n"
+    "    uint pw = InPrior.Load(i & ~3u);\n"
+    "    if (((pw >> ((i & 3u) * 8u)) & 0xFFu) == 0u) return 0u;\n"
+    "  }\n"
+    "  float min_sx, max_sx, min_sy, max_sy, min_sz;\n"
+    "  if (!project_box(m0, m1, m2, m3, a, b, min_sx, max_sx, min_sy, max_sy, min_sz)) return 1u;\n"
+    "  if (max_sx < -1.0 || min_sx > 1.0 || max_sy < -1.0 || min_sy > 1.0) return 0u;\n"
+    "  if (!usePyr) return 1u;\n"
+    "  if (!project_box(q0, q1, q2, q3, a, b, min_sx, max_sx, min_sy, max_sy, min_sz)) return 1u;\n"
+    "  if (min_sx < -1.0) min_sx = -1.0;\n"
+    "  if (max_sx >  1.0) max_sx =  1.0;\n"
+    "  if (min_sy < -1.0) min_sy = -1.0;\n"
+    "  if (max_sy >  1.0) max_sy =  1.0;\n"
+    "  float hw = 0.5 * (float)pc.width, hh = 0.5 * (float)pc.height;\n"
+    "  float px_min = min_sx * hw + hw;\n"
+    "  float px_max = max_sx * hw + hw;\n"
+    "  float py_min = hh - max_sy * hh;\n"
+    "  float py_max = hh - min_sy * hh;\n"
+    "  float rect_w = px_max - px_min;\n"
+    "  float rect_h = py_max - py_min;\n"
+    "  float max_dim = (rect_w > rect_h) ? rect_w : rect_h;\n"
+    "  if (max_dim <= 0.0) return 1u;\n"
+    "  uint mip = 0u;\n"
+    "  { float d = max_dim; [loop] while (d > 1.0 && mip + 1u < pc.mipCount) { d *= 0.5; ++mip; } }\n"
+    "  uint mw  = InLayout.Load(mip * 4u);\n"
+    "  uint mh  = InLayout.Load((16u + mip) * 4u);\n"
+    "  uint off = InLayout.Load((32u + mip) * 4u);\n"
+    "  float scale_x = (float)mw / (float)pc.width;\n"
+    "  float scale_y = (float)mh / (float)pc.height;\n"
+    "  int mx0 = (int)(px_min * scale_x);\n"
+    "  int mx1 = (int)(px_max * scale_x) + 1;\n"
+    "  int my0 = (int)(py_min * scale_y);\n"
+    "  int my1 = (int)(py_max * scale_y) + 1;\n"
+    "  if (mx0 < 0) mx0 = 0;\n"
+    "  if (my0 < 0) my0 = 0;\n"
+    "  if (mx1 > (int)mw) mx1 = (int)mw;\n"
+    "  if (my1 > (int)mh) my1 = (int)mh;\n"
+    "  if (mx0 >= mx1 || my0 >= my1) return 1u;\n"
+    "  float max_pyr = 0.0;\n"
+    "  [loop] for (int y = my0; y < my1; ++y) {\n"
+    "    [loop] for (int x = mx0; x < mx1; ++x) {\n"
+    "      float z = asfloat(InPyramid.Load((off + (uint)y * mw + (uint)x) * 4u));\n"
+    "      if (z > max_pyr) max_pyr = z;\n"
+    "    }\n"
+    "  }\n"
+    "  return (min_sz > max_pyr) ? 0u : 1u;\n"
+    "}\n"
+    "[numthreads(64,1,1)]\n"
+    "void CSMain(uint3 tid : SV_DispatchThreadID){\n"
+    "  uint w = tid.x;\n"
+    "  uint words = (pc.count + 3u) / 4u;\n"
+    "  if (w >= words) return;\n"
+    "  float4 id0 = float4(1,0,0,0), id1 = float4(0,1,0,0), id2 = float4(0,0,1,0), id3 = float4(0,0,0,1);\n"
+    "  float4 m0 = load_row(InMatrix,  0u, id0), m1 = load_row(InMatrix,  16u, id1);\n"
+    "  float4 m2 = load_row(InMatrix, 32u, id2), m3 = load_row(InMatrix,  48u, id3);\n"
+    "  float4 q0 = load_row(InPrevMat, 0u, id0), q1 = load_row(InPrevMat, 16u, id1);\n"
+    "  float4 q2 = load_row(InPrevMat, 32u, id2), q3 = load_row(InPrevMat, 48u, id3);\n"
+    "  bool usePyr = ((pc.flags & 4u) != 0u) && (pc.mipCount > 0u) &&\n"
+    "                (((pc.flags & 2u) == 0u) || InHist.Load(0u) != 0u);\n"
+    "  uint word = 0u;\n"
+    "  [unroll] for (uint k = 0u; k < 4u; ++k) {\n"
+    "    uint i = w * 4u + k;\n"
+    "    uint v = (i < pc.count) ? test_box(i, m0, m1, m2, m3, q0, q1, q2, q3, usePyr) : 0u;\n"
+    "    word |= (v & 0xFFu) << (k * 8u);\n"
+    "  }\n"
+    "  OutVis.Store(w * 4u, word);\n"
+    "}\n";
 }
 
 }  // namespace cardinal::render::gpu

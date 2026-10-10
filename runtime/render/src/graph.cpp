@@ -380,7 +380,7 @@ void CpuBackend::reset() noexcept {
 }
 
 void CpuBackend::execute(Graph& g) noexcept {
-    reset();
+    trace_.clear();   // storage_ is kept: persistent buffers carry history, the rest is re-zeroed below
     const auto& order = g.execution_order();
     if (order.empty()) return;
 
@@ -406,7 +406,10 @@ void CpuBackend::execute(Graph& g) noexcept {
         ResourceHandle bh{ rid, ResourceKind::Buffer };
         const BufferDesc& bd = g.buffer(bh);
         if (bd.size_bytes > 0) {
-            storage_[rid].assign(bd.size_bytes, 0u);
+            // Persistent buffers keep last execute's bytes (history); everything
+            // else starts from zero every execute, exactly as before.
+            if (!(bd.persistent && storage_[rid].size() == bd.size_bytes))
+                storage_[rid].assign(bd.size_bytes, 0u);
             // Imported (host-fed) buffers seed their storage from the host
             // bytes — without this every import read back as zeros and any
             // input-consuming pass computed against a blank scene (caught by
@@ -794,7 +797,7 @@ float ThreadedCpuBackend::speedup() const noexcept {
 }
 
 void ThreadedCpuBackend::execute(Graph& g) noexcept {
-    reset();
+    waves_.clear(); total_us_ = 0.0f; serial_est_us_ = 0.0f;   // storage_ kept (persistent buffers)
     const auto& order = g.execution_order();
     const auto& wave_of = g.wave_of_pass();
     const u32   waves   = g.wave_count();
@@ -807,7 +810,10 @@ void ThreadedCpuBackend::execute(Graph& g) noexcept {
         ResourceHandle bh{ rid, ResourceKind::Buffer };
         const BufferDesc& bd = g.buffer(bh);
         if (bd.size_bytes > 0) {
-            storage_[rid].assign(bd.size_bytes, 0u);
+            // Persistent buffers keep last execute's bytes (history); everything
+            // else starts from zero every execute, exactly as before.
+            if (!(bd.persistent && storage_[rid].size() == bd.size_bytes))
+                storage_[rid].assign(bd.size_bytes, 0u);
             if (const void* src = g.buffer_imported(bh))
                 cardinal::memcpy(storage_[rid].data(), src, bd.size_bytes);
         }

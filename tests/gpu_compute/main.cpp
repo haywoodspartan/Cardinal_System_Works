@@ -75,6 +75,7 @@ struct SceneData {
     std::vector<float> cam_pos;     // 3 — drives the PBR view vector
     std::vector<u8>    ui;          // W*H*4
     std::vector<u8>    gizmo;       // W*H*4
+    std::vector<u32>   hiz_valid;   // 1 u32: 0 = no pyramid history yet, 1 = last execute built it
 
     void build() {
         tris.resize(usize(T) * 9);
@@ -138,6 +139,7 @@ struct SceneData {
         cam_pos = { 0.2f, 0.3f, 2.0f };            // in front of the NDC cube
         ui.assign(usize(W) * H * 4, 0);
         gizmo.assign(usize(W) * H * 4, 0);
+        hiz_valid = { 0u };
         for (u32 x = 0; x < 6; ++x) {             // red UI strip, top-left
             ui[(0 * W + x) * 4 + 0] = 200;
             ui[(0 * W + x) * 4 + 3] = 255;
@@ -291,8 +293,12 @@ void gpu_record(rhi::Swapchain* rec, void* user) noexcept {
     auto& cx = *static_cast<GpuRunCtx*>(user);
     // The production dispatch path, verbatim: buffer map + lazy DXC compile +
     // hazard barriers + bind + push + dispatch — recorded onto the async list.
-    *cx.backend = rg::RhiBackend::create(*cx.dev, *rec);
-    (*cx.backend)->set_gpu_execute(true);
+    // The backend is REUSED across a scenario's frames so persistent buffers
+    // (the Hi-Z pyramid) carry frame 1's bytes into frame 2.
+    if (!*cx.backend) {
+        *cx.backend = rg::RhiBackend::create(*cx.dev, *rec);
+        (*cx.backend)->set_gpu_execute(true);
+    }
     (*cx.backend)->execute(*cx.graph);
     for (usize i = 0; i < cx.refs->size(); ++i) {
         const Ref& r = (*cx.refs)[i];
@@ -354,6 +360,9 @@ void run_backend(rhi::Backend be, const char* be_name) {
             // PBR pair: switches the resolve to tile-lit Cook-Torrance.
             in.inv_view_proj  = graph->import_buffer("in.ivp",  sd.ivp.data(), 64, 4);
             in.camera_pos     = graph->import_buffer("in.cpos", sd.cam_pos.data(), 12, 4);
+            // Hi-Z history flag: 0 on the first execute, flipped to 1 for the
+            // second execute of this scenario (see the frame loop below).
+            in.hiz_history_valid = graph->import_buffer("in.hizv", sd.hiz_valid.data(), 4, 4);
         }
 
         gpu::AegisConfig cfg{};
@@ -387,6 +396,10 @@ void run_backend(rhi::Backend be, const char* be_name) {
             { "draw.count",   st.indirect_gen->out_count,        Cmp::Exact     },
             { "draw.cmds",    st.indirect_gen->out_commands,     Cmp::CmdPrefix },
             { "bin.counts",   st.bin->out_bin_counts,            Cmp::Exact     },
+            // Hi-Z: mip 0 copies the (eps-compared) depth, so the pyramid gets
+            // the same tolerance; the per-meshlet visibility bytes are exact.
+            { "hiz.pyramid",  st.hiz->out_pyramid,               Cmp::EpsF32    },
+            { "hiz.vis",      st.hiz_test->out_visibility,       Cmp::Exact     },
             { "tile.counts",  st.light_cull->out_tile_counts,    Cmp::Exact     },
             { "tile.lights",  st.light_cull->out_tile_lights,    Cmp::TilePrefix},
             { "vbuf.depth",   st.vbuf->out_depth,                Cmp::EpsF32    },
@@ -401,6 +414,12 @@ void run_backend(rhi::Backend be, const char* be_name) {
         };
         if (with_opt && st.motion)
             refs.push_back({ "motion.mv", st.motion->out_motion, Cmp::Exact });
+        // Screen-space GI rides on the PBR pair (scenario A only). Radiance is
+        // Cook-Torrance-derived (EpsPbr); AO is a pure sum of weights (EpsF32).
+        if (st.ssgi) {
+            refs.push_back({ "ssgi.rad", st.ssgi->out_radiance, Cmp::EpsPbr });
+            refs.push_back({ "ssgi.ao",  st.ssgi->out_ao,       Cmp::EpsF32 });
+        }
 
         // ---- GPU dispatch + readback --------------------------------------
         std::vector<cardinal::unique_ptr<rhi::Buffer>> rb_owned;
@@ -421,10 +440,24 @@ void run_backend(rhi::Backend be, const char* be_name) {
         GpuRunCtx cx;
         cx.dev = dev.get(); cx.graph = graph.get(); cx.backend = &backend;
         cx.refs = &refs;    cx.readbacks = &rb_ptrs;
+        // Scenario A runs TWO frames: frame 0 with no Hi-Z history (frustum
+        // reject only), frame 1 with the flag set so the occlusion test
+        // samples the pyramid frame 0 built — on the CPU (persistent storage)
+        // and on the GPU (retained buffer cache) alike.
+        const int frames = with_opt ? 2 : 1;
+        for (int frame = 0; frame < frames; ++frame) {
+        if (frame == 1) {
+            sd.hiz_valid[0] = 1u;
+            cpu->execute(*graph);
+            CHECK(st.hiz_test->history_used);
+        } else {
+            CHECK(!st.hiz_test->history_used);
+        }
         // Fence targets must INCREASE across submits — a timeline semaphore
         // cannot re-signal an old value, and wait_cpu(old) returns instantly,
         // racing the readback against in-flight GPU work.
-        const cardinal::u64 target_value = static_cast<cardinal::u64>(scenario) + 1u;
+        const cardinal::u64 target_value = static_cast<cardinal::u64>(scenario) * 2u +
+                                           static_cast<cardinal::u64>(frame) + 1u;
         const cardinal::u64 target = queue->submit(&gpu_record, &cx, fence.get(),
                                                    target_value);
         CHECK(target == target_value);
@@ -440,8 +473,12 @@ void run_backend(rhi::Backend be, const char* be_name) {
         cardinal::log::infof("gputest",
             "%s scenario %c: %u real dispatches, %u stubs, %u pipelines",
             be_name, with_opt ? 'A' : 'B', real, stub, stats.pipelines_compiled);
-        // 10 kernels in A (motion built), 9 in B; HiZ + Adaptive stay stubs.
-        CHECK(real >= (with_opt ? 10u : 9u));
+        // 18 kernels in A (motion + screen-space GI + 6 Hi-Z mips + the
+        // occlusion test), 16 in B; Adaptive stays a stub. Counts accumulate
+        // across the scenario's frames (same backend), hence >=.
+        CHECK(real >= (with_opt ? 18u : 16u));
+        if (with_opt) CHECK(st.ssgi != nullptr);
+        CHECK(st.hiz_test != nullptr);
 
         for (usize i = 0; i < refs.size(); ++i) {
             const Ref& r = refs[i];
@@ -477,6 +514,7 @@ void run_backend(rhi::Backend be, const char* be_name) {
             }
             CHECK(ok);
         }
+        }   // frame loop
 
         // Backend (and its GPU buffers) can die now — the fence retired.
         backend.reset();

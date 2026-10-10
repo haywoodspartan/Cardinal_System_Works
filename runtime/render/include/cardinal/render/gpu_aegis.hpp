@@ -45,6 +45,7 @@
 #include <cardinal/render/gpu_visbuf.hpp>
 #include <cardinal/render/gpu_restir.hpp>
 #include <cardinal/core/types.hpp>
+#include <cardinal/render/gpu_ssgi.hpp>
 
 namespace cardinal::render::gpu {
 
@@ -397,6 +398,22 @@ struct AegisConfig {
     // so the measured whole-graph gain was within noise (1.0–1.1×). It pays
     // when the resolve dominates (many lights per tile, high resolution).
     bool          adaptive_shading_rate {false};
+    // Screen-space GI + AO (ScreenSpaceGIPass, Block 8) over the resolve's
+    // outputs: AO re-weights the flat ambient term, gathered direct radiance
+    // is added as one diffuse bounce. Wired only when the PBR pair
+    // (inv_view_proj + camera_pos) is present — the proxy shade has no world
+    // positions to march. Default ON: first rung of the final gather, one
+    // extra dispatch (8 directions × ssgi.steps integer taps per pixel).
+    bool          screen_space_gi {true};
+    SsgiParams    ssgi;
+    // Hi-Z occlusion (Block 4): test meshlet bounds against LAST frame's depth
+    // pyramid (persistent buffer, projected through view_proj_prev) and skip
+    // binning for meshlets it hides. The screen-rect frustum reject in the
+    // same pass is always on. Needs view_proj_prev + hiz_history_valid in the
+    // scene inputs; without them this flag is moot. Single-pass today: a
+    // meshlet revealed by camera motion can miss one frame (the second,
+    // re-test pass of the classic two-pass scheme is the next slice).
+    bool          hiz_occlusion {true};
 };
 
 struct AegisSceneInputs {
@@ -407,7 +424,8 @@ struct AegisSceneInputs {
     graph::ResourceHandle lights;            // light_count * 16 floats (PackedLight)
     graph::ResourceHandle ambient;           // 3 floats
     graph::ResourceHandle view_proj;         // 16 floats
-    graph::ResourceHandle view_proj_prev;    // optional 16 floats — pass {} for no motion vectors
+    graph::ResourceHandle view_proj_prev;    // optional 16 floats — pass {} for no motion vectors / no occlusion
+    graph::ResourceHandle hiz_history_valid; // optional 1 u32: 1 = last frame built the (persistent) pyramid on this backend
     graph::ResourceHandle camera_dir;        // 3 floats
     graph::ResourceHandle ui_overlay;        // optional w*h*4 bytes
     graph::ResourceHandle gizmo_overlay;     // optional w*h*4 bytes
@@ -447,7 +465,8 @@ struct AegisStageRefs {
     cardinal::shared_ptr<MeshletCullPass::State>        meshlet_cull;
     cardinal::shared_ptr<ScreenSpaceErrorPass::State>   sse;
     cardinal::shared_ptr<FrustumCullPass::State>        frustum_cull;
-    cardinal::shared_ptr<HiZBuildPass::State>           hiz;
+    cardinal::shared_ptr<HiZBuildPass::State>           hiz;       // pyramid of THIS frame's depth (read next frame)
+    cardinal::shared_ptr<HiZOcclusionTestPass::State>   hiz_test;  // frustum + occlusion visibility per meshlet
     cardinal::shared_ptr<DrawIndirectGenPass::State>    indirect_gen;
     cardinal::shared_ptr<AdaptiveGeometryPass::State>   adaptive;
     cardinal::shared_ptr<TriangleBinPass::State>        bin;     // null when binned_raster == false
@@ -457,6 +476,7 @@ struct AegisStageRefs {
     cardinal::shared_ptr<ReSTIRSpatialPass::State>      restir_spatial;
     cardinal::shared_ptr<ReSTIRTemporalPass::State>     restir_temporal;
     cardinal::shared_ptr<VBufResolvePass::State>        resolve;
+    cardinal::shared_ptr<ScreenSpaceGIPass::State>      ssgi;    // null: screen_space_gi off or no PBR pair
     cardinal::shared_ptr<MotionVectorPass::State>       motion;
     cardinal::shared_ptr<TonemapPass::State>            tonemap;
     cardinal::shared_ptr<CompositePresentPass::State>   composite;

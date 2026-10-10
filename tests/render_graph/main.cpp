@@ -20,12 +20,15 @@
 #include <cardinal/render/gpu_aegis.hpp>
 #include <cardinal/render/gpu_restir.hpp>
 #include <cardinal/render/gpu_postvol.hpp>
+#include <cardinal/render/gpu_ssgi.hpp>
 #include <cardinal/render/gpu_color.hpp>
 #include <cardinal/render/frame_pacer.hpp>
 #include <cardinal/render/aegis_runner.hpp>
 #include <cardinal/render/pipeline.hpp>
 #include <cardinal/core/diag/log.hpp>
 #include <cardinal/core/std/utility.hpp>
+#include <cardinal/core/std/cmath.hpp>    // cardinal::isfinite (ssgi tests)
+#include <cardinal/core/std/limits.hpp>   // cardinal::numeric_limits (ssgi tests)
 #include <cardinal/core/math/simd_math.hpp>
 #include <cardinal/core/math/geom.hpp>
 
@@ -3349,7 +3352,9 @@ void test_resolve_quad_rate_semantics() {
         b->execute(*g);
         CHECK(st.resolve->quad_rate == (mode == 1));
         CHECK(st.resolve->pixels_shaded + st.resolve->pixels_sky == W * H);
-        rad[mode]  = b->buffer_contents(o.radiance_hdr);
+        // The resolve's own output: radiance_hdr is the screen-space GI pass's
+        // (per-pixel, not quad-replicated) now that it sits before the tonemap.
+        rad[mode]  = b->buffer_contents(st.resolve->out_radiance);
         prim[mode] = b->buffer_contents(o.vbuf_prim);
         if (mode == 1) { coarse = st.resolve->quads_coarse; fine = st.resolve->quads_fine; }
         else CHECK(st.resolve->quads_coarse == 0u && st.resolve->quads_fine == 0u);
@@ -4964,6 +4969,466 @@ void test_reset_clears_state() {
 
 }  // namespace
 
+// ============================================================================
+// ScreenSpaceGIPass — screen-space AO + one-bounce diffuse (AEGIS Block 8)
+// ============================================================================
+namespace {
+
+// A tiny V-Buffer world for the GI pass: identity inverse view-proj so world
+// == NDC, every pixel's normal is +Z (oct-packed), one white material, and a
+// caller-supplied depth / radiance per pixel.
+struct SsgiWorld {
+    cardinal::u32 W, H;
+    cardinal::vector<float>          depth, rad, mats, ivp, amb;
+    cardinal::vector<cardinal::u32>  prim, norm, mid;
+    rg::ResourceHandle h_depth, h_prim, h_norm, h_mid, h_mats, h_rad, h_ivp, h_amb;
+    InitBlob b[8];
+
+    SsgiWorld(cardinal::u32 w, cardinal::u32 h) : W(w), H(h) {
+        const cardinal::usize n = static_cast<cardinal::usize>(w) * h;
+        depth.assign(n, 0.5f);
+        rad.assign(n * 3u, 0.5f);
+        prim.assign(n, 0u);
+        norm.assign(n, 32767u << 16);          // oct (ox=0, oz=1) -> +Z
+        mid.assign(n, 0u);
+        mats = { 1.0f, 1.0f, 1.0f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f };
+        ivp.assign(16, 0.0f); ivp[0] = ivp[5] = ivp[10] = ivp[15] = 1.0f;
+        amb = { 0.2f, 0.2f, 0.2f };
+    }
+    cardinal::shared_ptr<gpu::ScreenSpaceGIPass::State>
+    run(rg::Graph& g, cardinal::shared_ptr<rg::CpuBackend>& backend,
+        const gpu::SsgiParams& prm = {}) {
+        auto decl = [&](const char* nm, const void* src, cardinal::usize bytes, int k) {
+            auto hh = g.declare_buffer(rg::BufferDesc{nm, bytes, 0, true});
+            b[k] = InitBlob{hh, src, bytes};
+            add_init_pass(g, nm, hh, &b[k]);
+            return hh;
+        };
+        h_depth = decl("sg.depth", depth.data(), depth.size() * 4, 0);
+        h_prim  = decl("sg.prim",  prim.data(),  prim.size()  * 4, 1);
+        h_norm  = decl("sg.norm",  norm.data(),  norm.size()  * 4, 2);
+        h_mid   = decl("sg.mid",   mid.data(),   mid.size()   * 4, 3);
+        h_mats  = decl("sg.mats",  mats.data(),  mats.size()  * 4, 4);
+        h_rad   = decl("sg.rad",   rad.data(),   rad.size()   * 4, 5);
+        h_ivp   = decl("sg.ivp",   ivp.data(),   ivp.size()   * 4, 6);
+        h_amb   = decl("sg.amb",   amb.data(),   amb.size()   * 4, 7);
+        auto st = gpu::ScreenSpaceGIPass::add_to_graph(g, h_depth, h_prim, h_norm, h_mid,
+                                                       h_mats, h_rad, h_ivp, h_amb,
+                                                       W, H, 1u, prm);
+        CHECK(g.compile());
+        backend = rg::CpuBackend::create();
+        backend->execute(g);
+        return st;
+    }
+};
+
+}  // namespace
+
+// Flat facet + a sky row: nothing rises above the tangent plane, so AO stays 1
+// and the radiance passes through untouched (and sky never gathers).
+void test_ssgi_flat_plane_and_sky_pass_through() {
+    SsgiWorld w(8, 8);
+    for (cardinal::u32 x = 0; x < 8; ++x) w.prim[x] = gpu::kInvalidPrimId;   // row 0 = sky
+    auto g = rg::Graph::create();
+    cardinal::shared_ptr<rg::CpuBackend> be;
+    auto st = w.run(*g, be);
+    CHECK(st->pixels_sky == 8u);
+    CHECK(st->pixels_shaded == 56u);
+    CHECK(st->taps_accepted == 0u);                 // co-planar samples reject (bias)
+    auto out = be->buffer_contents(st->out_radiance);
+    auto ao  = be->buffer_contents(st->out_ao);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    const float* af = reinterpret_cast<const float*>(ao.data());
+    bool same = true, unocc = true;
+    for (cardinal::u32 i = 0; i < 64; ++i) {
+        for (int c = 0; c < 3; ++c) same = same && (of[i * 3 + c] == w.rad[i * 3 + c]);
+        unocc = unocc && (af[i] == 1.0f);
+    }
+    CHECK(same);
+    CHECK(unocc);
+    CHECK(st->mean_ao == 1.0f);
+}
+
+// A raised block on the right half (larger depth = larger z = ABOVE the +Z
+// tangent plane of the left half). Left pixels next to the step must be
+// occluded and pick up the block's red radiance as bounce; pixels ON the block
+// look down at the lower plane (below their tangent plane) and stay clean.
+void test_ssgi_step_occludes_and_bleeds() {
+    SsgiWorld w(8, 8);
+    for (cardinal::u32 y = 0; y < 8; ++y)
+        for (cardinal::u32 x = 4; x < 8; ++x) {
+            const cardinal::u32 i = y * 8 + x;
+            w.depth[i] = 0.75f;                          // z = 0.5 (identity VP)
+            w.rad[i * 3 + 0] = 1.0f; w.rad[i * 3 + 1] = 0.0f; w.rad[i * 3 + 2] = 0.0f;
+        }
+    auto g = rg::Graph::create();
+    cardinal::shared_ptr<rg::CpuBackend> be;
+    gpu::SsgiParams prm; prm.radius = 1.5f; prm.steps = 2; prm.base_step_px = 1;
+    auto st = w.run(*g, be, prm);
+    CHECK(st->taps_accepted > 0u);
+    auto out = be->buffer_contents(st->out_radiance);
+    auto ao  = be->buffer_contents(st->out_ao);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    const float* af = reinterpret_cast<const float*>(ao.data());
+    // Left column adjacent to the step (x = 3): occluded + red bleed.
+    bool left_occ = true, left_bleed = true, left_darker_green = true;
+    for (cardinal::u32 y = 1; y < 7; ++y) {
+        const cardinal::u32 i = y * 8 + 3;
+        left_occ          = left_occ && (af[i] < 1.0f);
+        left_darker_green = left_darker_green && (of[i * 3 + 1] < 0.5f);   // only AO touches green
+        left_bleed        = left_bleed && (of[i * 3 + 0] > of[i * 3 + 1]); // red bounce on top
+    }
+    CHECK(left_occ);
+    CHECK(left_darker_green);
+    CHECK(left_bleed);
+    // On the block (x = 5): the lower plane is below the tangent plane -> clean.
+    bool block_clean = true;
+    for (cardinal::u32 y = 1; y < 7; ++y) {
+        const cardinal::u32 i = y * 8 + 5;
+        block_clean = block_clean && (af[i] == 1.0f) &&
+                      (of[i * 3 + 0] == 1.0f) && (of[i * 3 + 1] == 0.0f);
+    }
+    CHECK(block_clean);
+    CHECK(st->mean_ao < 1.0f);
+    // AO strength 0 must leave the ambient term alone (bounce only).
+    auto g2 = rg::Graph::create();
+    cardinal::shared_ptr<rg::CpuBackend> be2;
+    SsgiWorld w2(8, 8);
+    w2.depth = w.depth; w2.rad = w.rad;
+    gpu::SsgiParams p2 = prm; p2.ao_strength = 0.0f;
+    auto st2 = w2.run(*g2, be2, p2);
+    auto ao2 = be2->buffer_contents(st2->out_ao);
+    const float* a2 = reinterpret_cast<const float*>(ao2.data());
+    bool all_one = true;
+    for (cardinal::u32 i = 0; i < 64; ++i) all_one = all_one && (a2[i] == 1.0f);
+    CHECK(all_one);
+}
+
+// Poisoned inputs (NaN depth / matrix / ambient / material) never leak:
+// every output float is finite.
+void test_ssgi_nan_safe() {
+    SsgiWorld w(8, 8);
+    const float nan = cardinal::numeric_limits<float>::quiet_NaN();
+    w.depth[9] = nan; w.depth[20] = nan;
+    w.ivp[3] = nan; w.ivp[15] = nan;
+    w.amb[1] = nan;
+    w.mats[0] = nan; w.mats[4] = nan;
+    w.rad[4 * 3 + 2] = nan;
+    for (cardinal::u32 y = 0; y < 8; ++y) w.depth[y * 8 + 6] = 0.9f;   // give it something to gather
+    auto g = rg::Graph::create();
+    cardinal::shared_ptr<rg::CpuBackend> be;
+    gpu::SsgiParams prm; prm.radius = nan; prm.intensity = nan; prm.ao_strength = nan; prm.steps = 99;
+    auto st = w.run(*g, be, prm);
+    auto out = be->buffer_contents(st->out_radiance);
+    auto ao  = be->buffer_contents(st->out_ao);
+    const float* of = reinterpret_cast<const float*>(out.data());
+    const float* af = reinterpret_cast<const float*>(ao.data());
+    bool finite = cardinal::isfinite(st->mean_ao);
+    for (cardinal::u32 i = 0; i < 64; ++i) {
+        finite = finite && cardinal::isfinite(af[i]) && af[i] >= 0.0f && af[i] <= 1.0f;
+        // Pixels whose own inputs were poisoned may carry the poison through
+        // (the resolve's radiance IS the output's base) — every other pixel
+        // must be finite.
+        if (i == 4 || i == 9 || i == 20) continue;
+        for (int c = 0; c < 3; ++c) finite = finite && cardinal::isfinite(of[i * 3 + c]);
+    }
+    CHECK(finite);
+}
+
+// ============================================================================
+// Persistent buffers + Hi-Z occlusion (AEGIS Block 4) + visibility-gated bins
+// ============================================================================
+namespace {
+
+void rec_bump_first_word(rg::ExecutionContext& ec, void* uctx) noexcept {
+    auto* h = static_cast<rg::ResourceHandle*>(uctx);
+    auto* w = static_cast<cardinal::u32*>(ec.map_buffer_write(*h));
+    if (w) w[0] += 1u;
+}
+
+// 12-float meshlet record: first_tri, tri_count, bounds_min, bounds_max, cone axis, cutoff.
+void put_meshlet(cardinal::vector<float>& v, cardinal::u32 i, float ax, float ay, float az,
+                 float bx, float by, float bz) {
+    float* r = v.data() + static_cast<cardinal::usize>(i) * 12u;
+    r[0] = 0.0f; r[1] = 0.0f;
+    r[2] = ax; r[3] = ay; r[4] = az; r[5] = bx; r[6] = by; r[7] = bz;
+    r[8] = 0.0f; r[9] = 0.0f; r[10] = 1.0f; r[11] = 1.0f;
+}
+
+}  // namespace
+
+// A persistent buffer keeps its bytes across executes on the CPU backend; a
+// transient one restarts from zero every time.
+void test_graph_persistent_buffer_survives_execute() {
+    auto g = rg::Graph::create();
+    rg::BufferDesc pdsc; pdsc.name = "hist"; pdsc.size_bytes = 16; pdsc.stride_bytes = 4; pdsc.persistent = true;
+    rg::BufferDesc tdsc; tdsc.name = "tmp";  tdsc.size_bytes = 16; tdsc.stride_bytes = 4;
+    auto h_p = g->declare_buffer(pdsc);
+    auto h_t = g->declare_buffer(tdsc);
+    rg::PassDesc a; a.name = "bumpP"; a.kind = rg::PassKind::Compute;
+    a.accesses.push_back(rg::ResourceAccess{h_p, rg::AccessMode::ReadWrite, 0});
+    a.record = rec_bump_first_word; a.user_ctx = &h_p;
+    g->add_pass(cardinal::move(a));
+    rg::PassDesc b; b.name = "bumpT"; b.kind = rg::PassKind::Compute;
+    b.accesses.push_back(rg::ResourceAccess{h_t, rg::AccessMode::ReadWrite, 0});
+    b.record = rec_bump_first_word; b.user_ctx = &h_t;
+    g->add_pass(cardinal::move(b));
+    CHECK(g->compile());
+    auto be = rg::CpuBackend::create();
+    be->execute(*g); be->execute(*g); be->execute(*g);
+    auto pb = be->buffer_contents(h_p);
+    auto tb = be->buffer_contents(h_t);
+    CHECK(pb.size() == 16u && tb.size() == 16u);
+    CHECK(reinterpret_cast<const cardinal::u32*>(pb.data())[0] == 3u);
+    CHECK(reinterpret_cast<const cardinal::u32*>(tb.data())[0] == 1u);
+    // reset() drops everything, persistent included.
+    be->reset();
+    be->execute(*g);
+    auto pb2 = be->buffer_contents(h_p);
+    CHECK(reinterpret_cast<const cardinal::u32*>(pb2.data())[0] == 1u);
+}
+
+// The per-mip build matches the single-record reference: one pass per mip,
+// stats and contents as before.
+void test_hiz_build_is_one_pass_per_mip() {
+    constexpr cardinal::u32 W = 8, H = 4;   // 8x4 -> 4x2 -> 2x1 -> 1x1 = 4 mips
+    cardinal::vector<float> dep(W * H, 0.25f);
+    dep[0] = 0.9f;                            // one far texel propagates to the root
+    auto g = rg::Graph::create();
+    auto h_d = g->declare_buffer(rg::BufferDesc{"dep", dep.size() * sizeof(float), 0, true});
+    InitBlob bd{h_d, dep.data(), dep.size() * sizeof(float)};
+    add_init_pass(*g, "id", h_d, &bd);
+    const cardinal::usize passes_before = g->pass_count();
+    auto hiz = gpu::HiZBuildPass::add_to_graph(*g, h_d, W, H);
+    CHECK(hiz->mip_count == 4u);
+    CHECK(g->pass_count() == passes_before + 4u);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+    b->execute(*g);
+    CHECK(hiz->mips_built == 4u);
+    CHECK(hiz->max_depth == 0.9f);
+    auto pyr = b->buffer_contents(hiz->out_pyramid);
+    const float* pf = reinterpret_cast<const float*>(pyr.data());
+    CHECK(pf[hiz->mip_offsets_f[1] + 0] == 0.9f);     // mip 1 texel (0,0) covers dep[0]
+    CHECK(pf[hiz->mip_offsets_f[1] + 1] == 0.25f);
+    CHECK(pf[hiz->mip_offsets_f[3]] == 0.9f);
+}
+
+// Meshlet-record layout, screen-rect frustum reject, prior visibility and the
+// host history flag — then the same boxes with history valid.
+void test_hiz_occlusion_meshlet_layout_frustum_prior_history() {
+    constexpr cardinal::u32 W = 8, H = 8;
+    cardinal::vector<float> dep(W * H);
+    for (cardinal::u32 y = 0; y < H; ++y)
+        for (cardinal::u32 x = 0; x < W; ++x) dep[y * W + x] = (x < 4) ? 0.2f : 0.9f;   // near left, far right
+    auto g = rg::Graph::create();
+    auto h_d = g->declare_buffer(rg::BufferDesc{"dep", dep.size() * sizeof(float), 0, true});
+    InitBlob bd{h_d, dep.data(), dep.size() * sizeof(float)};
+    add_init_pass(*g, "id", h_d, &bd);
+    auto hiz = gpu::HiZBuildPass::add_to_graph(*g, h_d, W, H);
+
+    constexpr cardinal::u32 N = 4;
+    cardinal::vector<float> rec(N * 12u, 0.0f);
+    // z = 0.5 -> NDC depth 0.75 (identity VP): behind the near left half (0.2),
+    // in front of the far right half (0.9). Small so the mip texel stays local.
+    put_meshlet(rec, 0, -0.9f, -0.9f, 0.5f, -0.6f, -0.6f, 0.5f);   // left  -> occluded with history
+    put_meshlet(rec, 1,  0.6f, -0.9f, 0.5f,  0.9f, -0.6f, 0.5f);   // right -> visible
+    put_meshlet(rec, 2,  2.0f, -0.5f, 0.5f,  3.0f,  0.5f, 0.5f);   // off-screen -> frustum culled
+    put_meshlet(rec, 3, -0.9f, -0.9f, 0.5f, -0.6f, -0.6f, 0.5f);   // like 0 but prior = 0
+    cardinal::vector<cardinal::u8>  prior = { 1, 1, 1, 0 };
+    cardinal::vector<cardinal::u32> hist  = { 0u };
+    cardinal::vector<float> mat = { 1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1 };
+    auto h_r = g->declare_buffer(rg::BufferDesc{"rec",   rec.size() * sizeof(float), 0, true});
+    auto h_m = g->declare_buffer(rg::BufferDesc{"mat",   mat.size() * sizeof(float), 0, true});
+    auto h_p = g->declare_buffer(rg::BufferDesc{"prior", prior.size(), 0, true});
+    auto h_h = g->declare_buffer(rg::BufferDesc{"hist",  4, 0, true});
+    InitBlob br{h_r, rec.data(), rec.size() * sizeof(float)};
+    InitBlob bm{h_m, mat.data(), mat.size() * sizeof(float)};
+    InitBlob bp{h_p, prior.data(), prior.size()};
+    InitBlob bh{h_h, hist.data(), 4};
+    add_init_pass(*g, "ir", h_r, &br);
+    add_init_pass(*g, "im", h_m, &bm);
+    add_init_pass(*g, "ip", h_p, &bp);
+    add_init_pass(*g, "ih", h_h, &bh);
+    auto t = gpu::HiZOcclusionTestPass::add_to_graph(
+        *g, gpu::HiZOcclusionTestPass::Layout::MeshletRecords, h_r, N, h_m, h_m, h_p, h_h, *hiz, true);
+    CHECK(g->compile());
+    auto b = rg::CpuBackend::create();
+
+    // History invalid: frustum + prior only.
+    b->execute(*g);
+    CHECK(!t->history_used);
+    CHECK(t->visible == 2u && t->occluded == 0u && t->frustum_culled == 1u && t->prior_culled == 1u);
+    {
+        auto v = b->buffer_contents(t->out_visibility);
+        CHECK(v.size() == 4u);
+        CHECK(v[0] == 1 && v[1] == 1 && v[2] == 0 && v[3] == 0);
+    }
+    // History valid: meshlet 0 is behind the near left half.
+    hist[0] = 1u;
+    b->execute(*g);
+    CHECK(t->history_used);
+    CHECK(t->visible == 1u && t->occluded == 1u && t->frustum_culled == 1u && t->prior_culled == 1u);
+    {
+        auto v = b->buffer_contents(t->out_visibility);
+        CHECK(v[0] == 0 && v[1] == 1 && v[2] == 0 && v[3] == 0);
+    }
+    // Occlusion disabled: the pyramid is never consulted even with history.
+    auto g2 = rg::Graph::create();
+    auto h_d2 = g2->declare_buffer(rg::BufferDesc{"dep", dep.size() * sizeof(float), 0, true});
+    InitBlob bd2{h_d2, dep.data(), dep.size() * sizeof(float)};
+    add_init_pass(*g2, "id", h_d2, &bd2);
+    auto hiz2 = gpu::HiZBuildPass::add_to_graph(*g2, h_d2, W, H);
+    auto h_r2 = g2->declare_buffer(rg::BufferDesc{"rec", rec.size() * sizeof(float), 0, true});
+    auto h_m2 = g2->declare_buffer(rg::BufferDesc{"mat", mat.size() * sizeof(float), 0, true});
+    InitBlob br2{h_r2, rec.data(), rec.size() * sizeof(float)};
+    InitBlob bm2{h_m2, mat.data(), mat.size() * sizeof(float)};
+    add_init_pass(*g2, "ir", h_r2, &br2);
+    add_init_pass(*g2, "im", h_m2, &bm2);
+    auto t2 = gpu::HiZOcclusionTestPass::add_to_graph(
+        *g2, gpu::HiZOcclusionTestPass::Layout::MeshletRecords, h_r2, N, h_m2, h_m2,
+        rg::ResourceHandle{}, rg::ResourceHandle{}, *hiz2, false);
+    CHECK(g2->compile());
+    auto b2 = rg::CpuBackend::create();
+    b2->execute(*g2);
+    CHECK(!t2->history_used);
+    CHECK(t2->visible == 3u && t2->occluded == 0u && t2->frustum_culled == 1u);
+}
+
+// The bin pass skips every triangle of a group whose visibility byte is 0:
+// no setup, no bin entry, counted as culled.
+void test_bin_visibility_gate_skips_culled_groups() {
+    constexpr cardinal::u32 W = 16, H = 16, T = 4;
+    cardinal::vector<float> tris(T * 9u);
+    for (cardinal::u32 t = 0; t < T; ++t) {
+        float* v = tris.data() + t * 9u;
+        const float z = 0.1f * static_cast<float>(t);
+        v[0] = -0.5f; v[1] = -0.5f; v[2] = z;
+        v[3] =  0.5f; v[4] = -0.5f; v[5] = z;
+        v[6] =  0.0f; v[7] =  0.5f; v[8] = z;
+    }
+    cardinal::vector<cardinal::u32> mids(T, 0u);
+    cardinal::vector<float> vp = { 1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1 };
+    cardinal::vector<cardinal::u8> vis = { 1, 0, 0, 0 };   // groups of 2: tris 2,3 culled (buffer padded to 4)
+
+    auto run = [&](bool gate, cardinal::u32& culled, cardinal::u32& binned, bool& ids_ok) {
+        auto g = rg::Graph::create();
+        auto h_t = g->declare_buffer(rg::BufferDesc{"tris", tris.size() * sizeof(float), 0, true});
+        auto h_m = g->declare_buffer(rg::BufferDesc{"mids", mids.size() * 4u, 0, true});
+        auto h_v = g->declare_buffer(rg::BufferDesc{"vp",   vp.size() * sizeof(float), 0, true});
+        auto h_s = g->declare_buffer(rg::BufferDesc{"vis",  vis.size(), 0, true});
+        InitBlob bt{h_t, tris.data(), tris.size() * sizeof(float)};
+        InitBlob bm{h_m, mids.data(), mids.size() * 4u};
+        InitBlob bv{h_v, vp.data(), vp.size() * sizeof(float)};
+        InitBlob bs{h_s, vis.data(), vis.size()};
+        add_init_pass(*g, "it", h_t, &bt);
+        add_init_pass(*g, "im", h_m, &bm);
+        add_init_pass(*g, "iv", h_v, &bv);
+        add_init_pass(*g, "is", h_s, &bs);
+        auto st = gpu::TriangleBinPass::add_to_graph(*g, h_t, h_m, h_v, rg::ResourceHandle{}, W, H, T,
+                                                     gpu::kDefaultBinCapacity,
+                                                     gate ? h_s : rg::ResourceHandle{}, 2u);
+        CHECK(g->compile());
+        auto b = rg::CpuBackend::create();
+        b->execute(*g);
+        culled = st->tris_culled; binned = st->tris_binned;
+        auto counts = b->buffer_contents(st->out_bin_counts);
+        auto bins   = b->buffer_contents(st->out_bins);
+        const cardinal::u32* cnt = reinterpret_cast<const cardinal::u32*>(counts.data());
+        const cardinal::u32* ids = reinterpret_cast<const cardinal::u32*>(bins.data());
+        ids_ok = true;
+        const cardinal::u32 tiles = st->tiles_x * st->tiles_y;
+        for (cardinal::u32 tile = 0; tile < tiles; ++tile) {
+            const cardinal::u32 n = cnt[tile] < st->bin_capacity ? cnt[tile] : st->bin_capacity;
+            for (cardinal::u32 k = 0; k < n; ++k)
+                if (gate && ids[tile * st->bin_capacity + k] >= 2u) ids_ok = false;
+        }
+    };
+    cardinal::u32 c0, b0; bool ok0;
+    run(false, c0, b0, ok0);
+    CHECK(c0 == 0u && b0 == 4u && ok0);
+    cardinal::u32 c1, b1; bool ok1;
+    run(true, c1, b1, ok1);
+    CHECK(c1 == 2u && b1 == 2u && ok1);
+}
+
+// Full AEGIS graph, two executes. Meshlet 0 = one triangle covering the whole
+// screen in front; meshlet 1 = 64 small triangles behind it. Frame 1 has no
+// history (both binned); frame 2 culls meshlet 1 against frame 1's pyramid,
+// and the V-Buffer is byte-identical because those triangles were hidden anyway.
+void test_aegis_hiz_two_frames_cull_occluded_meshlet_keeps_image() {
+    constexpr cardinal::u32 W = 32, H = 32, T = 128;
+    cardinal::vector<float> tris(T * 9u, 0.0f);
+    // Tri 0: covers [-1,1]^2 with margin at z = 0 (depth 0.5). Tris 1..63: degenerate points.
+    { float* v = tris.data();
+      v[0] = -5.0f; v[1] = -5.0f; v[2] = 0.0f;
+      v[3] =  5.0f; v[4] = -5.0f; v[5] = 0.0f;
+      v[6] =  0.0f; v[7] =  5.0f; v[8] = 0.0f; }
+    // Tris 64..127: an 8x8 grid of small triangles in the centre at z = 0.5 (depth 0.75).
+    for (cardinal::u32 k = 0; k < 64; ++k) {
+        float* v = tris.data() + (64u + k) * 9u;
+        const float cx = -0.3f + static_cast<float>(k % 8) * 0.075f;
+        const float cy = -0.3f + static_cast<float>(k / 8) * 0.075f;
+        v[0] = cx - 0.03f; v[1] = cy - 0.03f; v[2] = 0.5f;
+        v[3] = cx + 0.03f; v[4] = cy - 0.03f; v[5] = 0.5f;
+        v[6] = cx;         v[7] = cy + 0.04f; v[8] = 0.5f;
+    }
+    cardinal::vector<cardinal::u32> mids(T, 0u);
+    cardinal::vector<float> mats = { 0.8f, 0.8f, 0.8f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f };
+    cardinal::vector<float> lts(16, 0.0f);
+    cardinal::vector<float> amb = { 0.1f, 0.1f, 0.1f };
+    cardinal::vector<float> vp  = { 1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1 };
+    cardinal::vector<float> dir = { 0.0f, 0.0f, 1.0f };
+    cardinal::vector<cardinal::u32> hizv = { 0u };
+
+    auto g = rg::Graph::create();
+    gpu::AegisSceneInputs in;
+    in.triangle_count = T;
+    in.tris             = g->import_buffer("in.tris", tris.data(), tris.size() * 4, 4);
+    in.material_ids     = g->import_buffer("in.mids", mids.data(), mids.size() * 4, 4);
+    in.materials        = g->import_buffer("in.mats", mats.data(), mats.size() * 4, 4);
+    in.lights           = g->import_buffer("in.lts",  lts.data(),  lts.size() * 4, 4);
+    in.ambient          = g->import_buffer("in.amb",  amb.data(),  12, 4);
+    in.view_proj        = g->import_buffer("in.vp",   vp.data(),   64, 4);
+    in.view_proj_prev   = g->import_buffer("in.vpp",  vp.data(),   64, 4);
+    in.camera_dir       = g->import_buffer("in.dir",  dir.data(),  12, 4);
+    in.hiz_history_valid = g->import_buffer("in.hizv", hizv.data(), 4, 4);
+    gpu::AegisConfig cfg;
+    cfg.width = W; cfg.height = H; cfg.material_count = 1; cfg.light_count = 1;
+    auto pipeline = gpu::AegisPipeline::create(cfg);
+    gpu::AegisOutputs o; gpu::AegisStageRefs st;
+    pipeline->build(*g, in, o, st);
+    CHECK(g->compile());
+    CHECK(st.hiz_test != nullptr && st.bin != nullptr);
+    CHECK(st.meshlets->meshlet_count == 2u);
+    auto b = rg::CpuBackend::create();
+
+    // Frame 1: no history -> nothing occluded, everything binned.
+    b->execute(*g);
+    CHECK(!st.hiz_test->history_used);
+    CHECK(st.hiz_test->visible == 2u && st.hiz_test->occluded == 0u);
+    CHECK(st.bin->tris_culled == 0u);
+    CHECK(st.hiz->mips_built == st.hiz->mip_count);
+    CHECK(st.hiz->max_depth > 0.49f && st.hiz->max_depth < 0.51f);   // the big tri covers every pixel
+    auto prim1  = b->buffer_contents(o.vbuf_prim);
+    auto depth1 = b->buffer_contents(o.vbuf_depth);
+
+    // Frame 2: history valid -> meshlet 1 (behind the big triangle) is culled
+    // before binning, and the image does not change.
+    hizv[0] = 1u;
+    b->execute(*g);
+    CHECK(st.hiz_test->history_used);
+    CHECK(st.hiz_test->visible == 1u && st.hiz_test->occluded == 1u);
+    CHECK(st.bin->tris_culled == 64u);
+    auto prim2  = b->buffer_contents(o.vbuf_prim);
+    auto depth2 = b->buffer_contents(o.vbuf_depth);
+    CHECK(prim1 == prim2);
+    CHECK(depth1 == depth2);
+    // And the centre pixel really is the big triangle in both frames.
+    const cardinal::u32* pp = reinterpret_cast<const cardinal::u32*>(prim2.data());
+    CHECK(pp[(H / 2) * W + W / 2] == 0u);
+}
+
 int main() {
     test_empty_graph_compiles();
     test_resource_declaration();
@@ -5106,6 +5571,16 @@ int main() {
     test_taa_zero_motion_blends_history();
     test_taa_history_within_neighbourhood_blends_uniformly();
     test_taa_nan_safe();
+
+    test_ssgi_flat_plane_and_sky_pass_through();
+    test_ssgi_step_occludes_and_bleeds();
+    test_ssgi_nan_safe();
+
+    test_graph_persistent_buffer_survives_execute();
+    test_hiz_build_is_one_pass_per_mip();
+    test_hiz_occlusion_meshlet_layout_frustum_prior_history();
+    test_bin_visibility_gate_skips_culled_groups();
+    test_aegis_hiz_two_frames_cull_occluded_meshlet_keeps_image();
     test_fog_no_lights_only_ambient();
     test_fog_zero_density_zero_fog();
     test_fog_nan_safe();

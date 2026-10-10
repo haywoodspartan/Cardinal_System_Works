@@ -68,6 +68,13 @@ gpu::AegisConfig aegis_resolve_config(gpu::AegisConfig cfg,
     cfg.features.bindless_resources    = dev.bindless_resources    && req.bindless_resources;
     cfg.features.direct_storage        = dev.direct_storage        && req.direct_storage;
 
+    cfg.screen_space_gi      = req.screen_space_gi;
+    cfg.ssgi.radius          = req.ssgi_radius;
+    cfg.ssgi.intensity       = req.ssgi_intensity;
+    cfg.ssgi.ao_strength     = req.ssgi_ao_strength;
+    cfg.ssgi.steps           = static_cast<cardinal::u32>(req.ssgi_steps < 1 ? 1 : req.ssgi_steps);
+    cfg.hiz_occlusion        = req.hiz_occlusion;
+
     if (width)  cfg.width  = width;
     if (height) cfg.height = height;
     return cfg;
@@ -85,7 +92,12 @@ bool aegis_config_equal(const gpu::AegisConfig& a, const gpu::AegisConfig& b) no
            a.features.async_compute         == b.features.async_compute &&
            a.features.variable_rate_shading == b.features.variable_rate_shading &&
            a.features.bindless_resources    == b.features.bindless_resources &&
-           a.features.direct_storage        == b.features.direct_storage;
+           a.features.direct_storage        == b.features.direct_storage &&
+           a.screen_space_gi == b.screen_space_gi &&
+           a.ssgi.radius == b.ssgi.radius && a.ssgi.intensity == b.ssgi.intensity &&
+           a.ssgi.ao_strength == b.ssgi.ao_strength && a.ssgi.steps == b.ssgi.steps &&
+           a.ssgi.base_step_px == b.ssgi.base_step_px &&
+           a.hiz_occlusion == b.hiz_occlusion;
 }
 
 graph::Graph& AegisPipelineRunner::begin_build() {

@@ -1535,14 +1535,23 @@ void AegisPipeline::build(rg::Graph& g, const AegisSceneInputs& in,
                                                         in.view_proj,
                                                         s.meshlets->meshlet_count, H);
 
-    // Block 4 — Visibility & Culling + Indirect generation
-    s.hiz          = HiZBuildPass::add_to_graph(g, /*depth fed from V-Buf later*/
-                                                /*placeholder zero-depth*/
-                                                g.declare_buffer(graph::BufferDesc{
-                                                    "hiz.placeholder",
-                                                    static_cast<cardinal::usize>(W) * H * sizeof(float),
-                                                    sizeof(float), true}),
-                                                W, H);
+    // Block 4 — Hi-Z occlusion. The pyramid is PERSISTENT: this frame's test
+    // reads LAST frame's pyramid (through view_proj_prev, the VP that built
+    // it) before this frame's V-Buf depth rebuilds it — the graph's WAR
+    // ordering runs the test first. The screen-rect frustum reject (current
+    // VP) is always on; the occlusion half needs view_proj_prev AND the
+    // host's history flag (the first execute after a rebuild has no pyramid).
+    s.hiz = HiZBuildPass::declare(g, W, H, /*persistent*/ true);
+    {
+        const bool occl = cfg_.hiz_occlusion && in.view_proj_prev.is_valid() &&
+                          in.hiz_history_valid.is_valid();
+        s.hiz_test = HiZOcclusionTestPass::add_to_graph(
+            g, HiZOcclusionTestPass::Layout::MeshletRecords,
+            s.meshlets->out_meshlets, s.meshlets->meshlet_count,
+            in.view_proj, occl ? in.view_proj_prev : in.view_proj,
+            rg::ResourceHandle{}, occl ? in.hiz_history_valid : rg::ResourceHandle{},
+            *s.hiz, occl);
+    }
     s.indirect_gen = DrawIndirectGenPass::add_to_graph(g, s.meshlet_cull->out_visibility,
                                                        s.meshlets->out_meshlets,
                                                        s.meshlets->meshlet_count);
@@ -1556,8 +1565,11 @@ void AegisPipeline::build(rg::Graph& g, const AegisSceneInputs& in,
     // per-pixel kernel walks only its tile's list (O(px × tris-in-tile) vs the
     // reference's O(px × tris)). Same bytes either way.
     if (cfg_.binned_raster) {
+        // Gated on the Hi-Z pass's per-meshlet visibility: culled meshlets are
+        // never set up or binned, so the raster never sees them.
         s.bin  = TriangleBinPass::add_to_graph(g, in.tris, in.material_ids, in.view_proj,
-                                               {}, W, H, M, cfg_.bin_capacity);
+                                               {}, W, H, M, cfg_.bin_capacity,
+                                               s.hiz_test->out_visibility, kMaxTrisPerMeshlet);
         s.vbuf = VisibilityBufferPass::add_to_graph(g, *s.bin, {}, W, H, M);
     } else {
         s.vbuf = VisibilityBufferPass::add_to_graph(g, in.tris, in.material_ids, in.view_proj,
@@ -1568,6 +1580,9 @@ void AegisPipeline::build(rg::Graph& g, const AegisSceneInputs& in,
     out.vbuf_mat    = s.vbuf->out_mat_id;
     out.vbuf_normal = s.vbuf->out_normal;
     out.vbuf_motion = s.vbuf->out_motion;
+
+    // This frame's depth -> the pyramid the NEXT frame's occlusion test reads.
+    HiZBuildPass::add_passes(g, *s.hiz, s.vbuf->out_depth);
 
     // Block 7 — Tiled light cull
     s.light_cull = TiledLightCullPass::add_to_graph(g, in.lights, s.vbuf->out_depth,
@@ -1615,12 +1630,26 @@ void AegisPipeline::build(rg::Graph& g, const AegisSceneInputs& in,
                                               cfg_.adaptive_shading_rate);
     out.radiance_hdr = s.resolve->out_radiance;
 
+    // Block 8 — Screen-space final gather (AO + one-bounce diffuse) over the
+    // resolve's outputs. Needs the PBR pair for world positions; without it
+    // the resolve ran the proxy shade and there is nothing to march.
+    rg::ResourceHandle shaded = s.resolve->out_radiance;
+    if (cfg_.screen_space_gi && in.inv_view_proj.is_valid() && in.camera_pos.is_valid()) {
+        s.ssgi = ScreenSpaceGIPass::add_to_graph(g, s.vbuf->out_depth, s.vbuf->out_prim_id,
+                                                 s.vbuf->out_normal, s.vbuf->out_mat_id,
+                                                 in.materials, s.resolve->out_radiance,
+                                                 in.inv_view_proj, in.ambient,
+                                                 W, H, cfg_.material_count, cfg_.ssgi);
+        shaded = s.ssgi->out_radiance;
+        out.radiance_hdr = shaded;
+    }
+
     // Block 12 — Post: motion vectors + tonemap
     if (in.view_proj_prev.is_valid()) {
         s.motion = MotionVectorPass::add_to_graph(g, s.vbuf->out_depth,
                                                   in.view_proj, in.view_proj_prev, W, H);
     }
-    s.tonemap = TonemapPass::add_to_graph(g, s.resolve->out_radiance, W, H, cfg_.exposure);
+    s.tonemap = TonemapPass::add_to_graph(g, shaded, W, H, cfg_.exposure);
     out.tonemapped = s.tonemap->out_rgba;
 
     // Block 13 — Composite + present
