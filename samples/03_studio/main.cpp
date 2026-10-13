@@ -103,6 +103,7 @@ namespace cardinal::input {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <optional>
 #include <exception>
 #include <filesystem>
@@ -694,6 +695,9 @@ int main(int argc, char** argv) {
     const long  profile_seconds = arg_value(argc, argv, "--profile-seconds=", 0);
     std::vector<float> profile_ms;
     cardinal::u32      profile_warmup = 0;
+    // Per-pass GPU ms from the async lane, accumulated over the run.
+    std::map<std::string, std::pair<double, unsigned>> profile_gpu;
+    std::pair<double, unsigned>                        profile_gpu_graph{0.0, 0u};
     if (profile_seconds > 0) profile_ms.reserve(200000);
     struct PhaseAcc { double total_ms{0.0}; double max_ms{0.0}; cardinal::u32 frames{0}; };
     std::vector<std::pair<std::string, PhaseAcc>> profile_phases;   // exact, whole run
@@ -2367,6 +2371,19 @@ int main(int argc, char** argv) {
         }
         if (rpass_applied.active) render_passes.restore(scene, rpass_applied);
         ph_.reset();
+        if (profile_seconds > 0 && profile_warmup >= 120) {
+            // Per-pass GPU times of the retired async submission (AEGIS lane).
+            if (auto* ap = pipelines->active()) {
+                for (const auto& t : ap->gpu_pass_times()) {
+                    auto& acc = profile_gpu[std::string(t.name.c_str())];
+                    acc.first += static_cast<double>(t.ms); ++acc.second;
+                }
+                if (ap->gpu_graph_ms() > 0.0f) {
+                    profile_gpu_graph.first += static_cast<double>(ap->gpu_graph_ms());
+                    ++profile_gpu_graph.second;
+                }
+            }
+        }
         // NOTE: set_viewport_camera does NOT re-derive aspect — it just
         // stores the view/proj it is given. The per-panel overlay camera
         // is set inside the viewport-panel draw loop below (each panel
@@ -5131,6 +5148,17 @@ int main(int argc, char** argv) {
                     static_cast<usize>(n), avg, 1000.0 / avg, static_cast<double>(pct(0.50)),
                     static_cast<double>(pct(0.90)), static_cast<double>(pct(0.99)),
                     static_cast<double>(v[n - 1]));
+        if (profile_gpu_graph.second > 0) {
+            clog::infof("profile", "GPU async lane: graph %.3f ms avg over %u retired submissions",
+                        profile_gpu_graph.first / profile_gpu_graph.second, profile_gpu_graph.second);
+            std::vector<std::pair<std::string, double>> rows;
+            for (const auto& kv : profile_gpu)
+                rows.push_back({kv.first, kv.second.first / static_cast<double>(kv.second.second)});
+            std::sort(rows.begin(), rows.end(),
+                      [](const auto& a, const auto& b) { return a.second > b.second; });
+            for (const auto& r : rows)
+                clog::infof("profile", "  gpu %-28s avg %7.3f ms", r.first.c_str(), r.second);
+        }
         std::sort(profile_phases.begin(), profile_phases.end(),
                   [](const std::pair<std::string, PhaseAcc>& a, const std::pair<std::string, PhaseAcc>& b) {
                       return a.second.total_ms > b.second.total_ms;

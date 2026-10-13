@@ -3587,6 +3587,23 @@ public:
                 if (fs.tessellation_factor_avg > 0)
                     ImGui::Text("Tess factor avg: %u", fs.tessellation_factor_avg);
             }
+            // Per-pass GPU times from the async compute lane (AEGIS on the
+            // GPU). The lane reports the submission that retired two
+            // submits ago, so this is live but lags by two frames.
+            const auto& gt = p->gpu_pass_times();
+            if (!gt.empty()) {
+                ImGui::SeparatorText("GPU Pass Times (async lane)");
+                ImGui::Text("Graph total: %.3f ms", static_cast<double>(p->gpu_graph_ms()));
+                if (ImGui::BeginTable("gpu_pass_times", 2,
+                                      ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
+                    for (const auto& t : gt) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(t.name.c_str());
+                        ImGui::TableSetColumnIndex(1); ImGui::Text("%7.3f ms", static_cast<double>(t.ms));
+                    }
+                    ImGui::EndTable();
+                }
+            }
         }
 
         // Knobs grouped by Knob::group.

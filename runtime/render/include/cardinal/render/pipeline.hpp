@@ -160,6 +160,19 @@ public:
     // override this; the default returns zeros for everything.
     virtual FrameStats stats() const noexcept { return {}; }
 
+    // Per-pass GPU time of the last retired async-compute submission (AEGIS
+    // on the GPU lane); empty for pipelines that do not run one. ms per
+    // pass, in dispatch order; gpu_graph_ms = the whole submission.
+    struct GpuPassTime {
+        cardinal::string name;
+        f32              ms {0.0f};
+    };
+    virtual const cardinal::vector<GpuPassTime>& gpu_pass_times() const noexcept {
+        static const cardinal::vector<GpuPassTime> none;
+        return none;
+    }
+    virtual f32 gpu_graph_ms() const noexcept { return 0.0f; }
+
 protected:
     Pipeline() = default;
 };

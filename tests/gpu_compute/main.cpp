@@ -597,6 +597,30 @@ void run_backend(rhi::Backend be, const char* be_name) {
                 if (!ok) cardinal::log::errorf("gputest", "%s async hook present.rgba: %s", be_name, why.c_str());
                 CHECK(ok);
             }
+            // Per-pass GPU timestamps: the lane reports the submission that
+            // retired two submits ago. Every real dispatch gets a stamp pair;
+            // the intervals must be sane and the graph total must cover them.
+            {
+                for (int k = 0; k < 2; ++k) {   // two more: whatever ran above, one has retired
+                    abackend->execute(*graph);
+                    abackend->async_fence()->wait_cpu(abackend->async_fence_value(), 0);
+                }
+                const auto& gt = abackend->gpu_pass_times();
+                if (queue->timestamp_capacity() == 0) {
+                    cardinal::log::infof("gputest", "%s: compute family has no timestamps (skipped)", be_name);
+                } else {
+                    CHECK(gt.size() == static_cast<usize>(areal));
+                    bool sane = true;
+                    float sum = 0.0f;
+                    for (const auto& t : gt) { if (!(t.ms >= 0.0f && t.ms < 1000.0f)) sane = false; sum += t.ms; }
+                    CHECK(sane);
+                    CHECK(abackend->gpu_graph_ms() > 0.0f && abackend->gpu_graph_ms() < 1000.0f);
+                    CHECK(abackend->gpu_graph_ms() + 0.05f >= sum * 0.5f);   // total spans the passes
+                    cardinal::log::infof("gputest", "%s gpu timestamps: %zu passes, graph %.3f ms, sum %.3f ms",
+                                         be_name, static_cast<usize>(gt.size()),
+                                         static_cast<double>(abackend->gpu_graph_ms()), static_cast<double>(sum));
+                }
+            }
             abackend.reset();                       // dtor drain must not hang
             cardinal::log::infof("gputest",
                 "%s async routing: %u real dispatches via ComputeQueue", be_name, areal);

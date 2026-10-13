@@ -819,6 +819,21 @@ public:
     // copies of it (RhiBackend's imported buffers do).
     virtual u32 frames_in_flight() const noexcept { return 1; }
 
+    // ---- Per-submission GPU timestamps ----------------------------------
+    // The recorder handed to `record` accepts write_timestamp(0, index) for
+    // index < timestamp_capacity(); the lane owns one query pool per ring
+    // slot, resets it at the top of the submission and reads it back once
+    // that submission has retired (frames_in_flight() submits later).
+    // ticks / timestamp_ticks_per_second() = seconds. Capacity 0 = the
+    // queue family cannot timestamp (or the backend does not implement it).
+    virtual u32 timestamp_capacity() const noexcept { return 0; }
+    virtual u64 timestamp_ticks_per_second() const noexcept { return 0; }
+    // Timestamps of the most recently RETIRED submission: `signal_value`
+    // is the value that submission signalled through its Fence, `ticks`
+    // the entries written, in index order. False until one has retired.
+    virtual bool retired_timestamps(u64& /*signal_value*/,
+                                    cardinal::vector<u64>& /*ticks*/) const { return false; }
+
 protected:
     ComputeQueue() = default;
 };

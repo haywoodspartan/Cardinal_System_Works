@@ -36,11 +36,11 @@ exists today, and whether it runs on the GPU:
 | Post | `MotionVectorPass`, `TonemapPass`, `CompositePresentPass` | ✓ | |
 | | `TAAPass`, `VolumetricFogPass`, `ColorGradingPass`, `DepthOfFieldPass` | CPU only | Passes exist but are **not wired into `AegisPipeline::build`**. |
 | Scene feed | Bridge zero-copy streaming | ✓ | 200k-triangle stream at ~0.9 ms/frame into unified memory. |
-| Execution | Async compute lane, 2 submissions in flight | ✓ | `ComputeQueue::submit` waits for N-2, not N-1: the host records frame N while the GPU runs N-1. Imports rotate `frames_in_flight()+1` slots; the Vulkan lane opens each submission with one global compute/transfer barrier. |
+| Execution | Async compute lane, 2 submissions in flight, per-pass GPU timestamps | ✓ | `ComputeQueue::submit` waits for N-2, not N-1: the host records frame N while the GPU runs N-1. Imports rotate `frames_in_flight()+1` slots; the Vulkan lane opens each submission with one global compute/transfer barrier. Every real dispatch is bracketed by timestamp queries (per-slot pool / heap); `Pipeline::gpu_pass_times()` + the Studio AEGIS panel and `--profile-seconds` show per-pass GPU ms of the last retired submission. |
 
 Not present anywhere yet: image-based lighting / environment maps,
 screen-space reflections, a world-space distance field, hardware ray-tracing
-pipelines in the RHI (BLAS skeleton only), subsurface / hair / eye shading
+pipelines in the RHI (Vulkan builds a BLAS; no TLAS, no RT shader stages, nothing on D3D12), subsurface / hair / eye shading
 models.
 
 ---

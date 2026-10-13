@@ -399,6 +399,19 @@ public:
     };
     const cardinal::vector<PassEvent>& events() const noexcept { return events_; }
 
+    // Per-pass GPU time of the most recently RETIRED async submission (the
+    // lane keeps frames_in_flight() submissions in flight, so this lags by
+    // that many executes). Only real dispatches on the async lane are
+    // timed; empty until one has retired or when the queue family cannot
+    // timestamp. gpu_graph_ms is first-stamp to last-stamp of that
+    // submission — the whole graph's GPU wall time.
+    struct GpuPassTime {
+        cardinal::string name;
+        f32              ms {0.0f};
+    };
+    const cardinal::vector<GpuPassTime>& gpu_pass_times() const noexcept { return gpu_times_; }
+    f32 gpu_graph_ms() const noexcept { return gpu_graph_ms_; }
+
     struct Stats {
         u32 passes_dispatched_real    {0};   // create_compute_pipeline succeeded
         u32 passes_dispatched_stub    {0};   // backend returned null pipeline
@@ -469,6 +482,19 @@ private:
     // Fence-wait any in-flight async submission (attach/detach/reset/dtor).
     void drain_async_() noexcept;
     u32  import_slots_() const noexcept;   // ring depth + 1, capped at kMaxSlots
+    void collect_gpu_times_() noexcept;    // after submit: retired stamps -> gpu_times_
+    // Pass names of the last few submissions, keyed by fence value, so the
+    // retired stamps (which arrive frames_in_flight() executes later) can be
+    // matched to the passes that wrote them even if the graph was rebuilt.
+    struct TimedSubmission {
+        u64                              value {0};
+        cardinal::vector<cardinal::string> names;
+    };
+    static constexpr u32              kTimedRing = 4;
+    TimedSubmission                   timed_[kTimedRing];
+    cardinal::vector<GpuPassTime>     gpu_times_;
+    f32                               gpu_graph_ms_ {0.0f};
+    cardinal::vector<u64>             ticks_scratch_;
 
     cardinal::rhi::Device*    dev_ {nullptr};
     cardinal::rhi::Swapchain* sw_  {nullptr};

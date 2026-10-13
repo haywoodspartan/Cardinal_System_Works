@@ -489,6 +489,28 @@ void RhiBackend::drain_async_() noexcept {
     async_fence_->wait_cpu(async_submitted_value_, 0);
 }
 
+void RhiBackend::collect_gpu_times_() noexcept {
+    if (async_q_ == nullptr) return;
+    u64 value = 0;
+    if (!async_q_->retired_timestamps(value, ticks_scratch_)) return;
+    const TimedSubmission& ts = timed_[value % kTimedRing];
+    if (ts.value != value) return;                       // overwritten / not ours
+    const u64 freq = async_q_->timestamp_ticks_per_second();
+    if (freq == 0) return;
+    const double to_ms = 1000.0 / static_cast<double>(freq);
+    const usize n = ts.names.size() < ticks_scratch_.size() / 2
+                  ? ts.names.size() : ticks_scratch_.size() / 2;
+    gpu_times_.resize(n);
+    for (usize i = 0; i < n; ++i) {
+        const u64 t0 = ticks_scratch_[2 * i], t1 = ticks_scratch_[2 * i + 1];
+        gpu_times_[i].name = ts.names[i];
+        gpu_times_[i].ms   = t1 >= t0 ? static_cast<f32>(static_cast<double>(t1 - t0) * to_ms) : 0.0f;
+    }
+    gpu_graph_ms_ = n > 0 && ticks_scratch_[2 * n - 1] >= ticks_scratch_[0]
+        ? static_cast<f32>(static_cast<double>(ticks_scratch_[2 * n - 1] - ticks_scratch_[0]) * to_ms)
+        : 0.0f;
+}
+
 u32 RhiBackend::import_slots_() const noexcept {
     const u32 in_flight = async_q_ ? async_q_->frames_in_flight() : 1u;
     const u32 want      = in_flight + 1u;
@@ -588,6 +610,7 @@ void RhiBackend::execute(Graph& g) noexcept {
             },
             &cx, async_fence_.get(), ++async_fence_value_);
         async_submitted_value_ = async_fence_value_;   // now in flight (see drain_async_)
+        collect_gpu_times_();
         return;
     }
 
@@ -689,6 +712,18 @@ void RhiBackend::execute_on(cardinal::rhi::Swapchain* target, Graph& g) noexcept
     final_use_.clear();
     auto& buf_use = final_use_;
 
+    // Per-pass GPU timestamps: only on the async lane (the recorder owns the
+    // query pool); two stamps per real dispatch, names kept per submission.
+    const u32 ts_pairs = (in_async_record_ && async_q_ != nullptr)
+                       ? async_q_->timestamp_capacity() / 2u : 0u;
+    TimedSubmission* timed = nullptr;
+    if (ts_pairs > 0) {
+        timed = &timed_[async_fence_value_ % kTimedRing];
+        timed->value = async_fence_value_;
+        timed->names.clear();
+    }
+    u32 ts_next = 0;
+
     for (u32 pid : order) {
         const PassDesc& pd = g.pass(pid);
         PassEvent ev;
@@ -777,7 +812,14 @@ void RhiBackend::execute_on(cardinal::rhi::Swapchain* target, Graph& g) noexcept
                 if (a.mode == AccessMode::Read) { if (buf) sw_->bind_storage_buffer(t, buf);     ++t; }
                 else                            { if (buf) sw_->bind_storage_buffer_uav(u, buf); ++u; }
             }
+            const bool stamp = timed != nullptr && ts_next < ts_pairs;
+            if (stamp) sw_->write_timestamp(0, 2u * ts_next);
             sw_->dispatch(pd.dispatch_x, pd.dispatch_y, pd.dispatch_z);
+            if (stamp) {
+                sw_->write_timestamp(0, 2u * ts_next + 1u);
+                timed->names.push_back(pd.name);
+                ++ts_next;
+            }
             ev.real_dispatch = true;
             ++stats_.passes_dispatched_real;
         } else {

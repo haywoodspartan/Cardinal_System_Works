@@ -44,8 +44,18 @@ constexpr UINT kPixAnsi = 1u;
 // ---------------------------------------------------------------------------
 class D3D12ComputeRecorder final : public Swapchain {
 public:
-    D3D12ComputeRecorder(ID3D12Device* dev, ID3D12GraphicsCommandList* cmd)
-        : dev_(dev), cmd_(cmd) {}
+    D3D12ComputeRecorder(ID3D12Device* dev, ID3D12GraphicsCommandList* cmd,
+                         ID3D12QueryHeap* timestamps, u32 heap_base, u32 timestamp_cap)
+        : dev_(dev), cmd_(cmd), qh_(timestamps), qh_base_(heap_base), qh_cap_(timestamp_cap) {}
+
+    // Per-pass GPU timing into the lane's timestamp heap (this slot's range).
+    // TIMESTAMP is the one query type a COMPUTE list may issue and resolve.
+    void write_timestamp(u32 /*heap*/, u32 index) override {
+        if (!cmd_ || !qh_ || index >= qh_cap_) return;
+        cmd_->EndQuery(qh_, D3D12_QUERY_TYPE_TIMESTAMP, qh_base_ + index);
+        if (index + 1 > qh_used_) qh_used_ = index + 1;
+    }
+    u32 timestamps_written() const noexcept { return qh_used_; }
 
     // ---- real ops (valid on a COMPUTE command list) ----
     void copy_buffer(Buffer* src, usize src_off,
@@ -167,6 +177,10 @@ public:
 private:
     ID3D12Device*              dev_{nullptr};
     ID3D12GraphicsCommandList* cmd_{nullptr};
+    ID3D12QueryHeap*           qh_{nullptr};      // lane timestamp heap
+    u32                        qh_base_{0};       // this slot's first query
+    u32                        qh_cap_{0};
+    u32                        qh_used_{0};       // highest index written + 1
     D3D12Pipeline*             bound_{nullptr};   // for SetComputeRoot* binding
 };
 
@@ -221,11 +235,39 @@ private:
 // ---------------------------------------------------------------------------
 class D3D12ComputeQueue final : public ComputeQueue {
 public:
-    static constexpr u32 kRing = 2;
+    static constexpr u32 kRing         = 2;
+    static constexpr u32 kTimestampCap = 128;   // 64 timed passes per submission
 
     bool initialize(ID3D12Device* dev, ID3D12CommandQueue* queue) {
         if (!dev || !queue) return false;
         dev_ = dev; queue_ = queue;
+        // Per-pass timestamps: one heap with a kTimestampCap range per ring
+        // slot, resolved into a READBACK buffer at the end of each list and
+        // read once that submission's fence retired. Frequency is the
+        // COMPUTE queue's (it can differ from the graphics queue's).
+        if (SUCCEEDED(queue->GetTimestampFrequency(&ts_freq_)) && ts_freq_ > 0) {
+            D3D12_QUERY_HEAP_DESC qd{};
+            qd.Type  = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+            qd.Count = kRing * kTimestampCap;
+            D3D12_HEAP_PROPERTIES hp{};
+            hp.Type = D3D12_HEAP_TYPE_READBACK;
+            D3D12_RESOURCE_DESC rd{};
+            rd.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+            rd.Width            = u64(kRing) * kTimestampCap * sizeof(u64);
+            rd.Height           = 1;
+            rd.DepthOrArraySize = 1;
+            rd.MipLevels        = 1;
+            rd.SampleDesc.Count = 1;
+            rd.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            if (FAILED(dev->CreateQueryHeap(&qd, IID_PPV_ARGS(&ts_heap_))) ||
+                FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                                    D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                    IID_PPV_ARGS(&ts_readback_)))) {
+                ts_heap_.Reset(); ts_readback_.Reset(); ts_freq_ = 0;   // timing off, lane works
+            }
+        } else {
+            ts_freq_ = 0;
+        }
         for (u32 i = 0; i < kRing; ++i)
             if (FAILED(dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE,
                                                    IID_PPV_ARGS(&alloc_[i])))) return false;
@@ -250,6 +292,15 @@ public:
 
     u32 frames_in_flight() const noexcept override { return kRing; }
 
+    u32 timestamp_capacity() const noexcept override { return ts_heap_ ? kTimestampCap : 0u; }
+    u64 timestamp_ticks_per_second() const noexcept override { return ts_freq_; }
+    bool retired_timestamps(u64& signal_value, cardinal::vector<u64>& ticks) const override {
+        if (retired_value_ == 0) return false;
+        signal_value = retired_value_;
+        ticks        = retired_ticks_;
+        return true;
+    }
+
     u64 submit(RecordFn record, void* user,
                Fence* signal_fence, u64 signal_value) override {
         if (!queue_ || !list_ || !alloc_[0]) return 0;
@@ -262,13 +313,35 @@ public:
             if (SUCCEEDED(done_->SetEventOnCompletion(slot_signal_[slot], done_event_)))
                 WaitForSingleObject(done_event_, INFINITE);
         }
+        // That submission's resolved timestamps are final: read its range.
+        if (ts_readback_ && slot_ts_written_[slot] > 0) {
+            const usize first = usize(slot) * kTimestampCap;
+            D3D12_RANGE rr{ first * sizeof(u64), (first + slot_ts_written_[slot]) * sizeof(u64) };
+            void* p = nullptr;
+            if (SUCCEEDED(ts_readback_->Map(0, &rr, &p)) && p) {
+                const u64* src = static_cast<const u64*>(p) + first;
+                retired_ticks_.assign(src, src + slot_ts_written_[slot]);
+                D3D12_RANGE none{ 0, 0 };
+                ts_readback_->Unmap(0, &none);
+                retired_value_ = slot_sig_value_[slot];
+            }
+        }
 
         if (FAILED(alloc_[slot]->Reset())) return 0;
         if (FAILED(list_->Reset(alloc_[slot].Get(), nullptr))) return 0;
+        u32 ts_written = 0;
         if (record) {
-            D3D12ComputeRecorder rec(dev_, list_.Get());
+            D3D12ComputeRecorder rec(dev_, list_.Get(), ts_heap_.Get(),
+                                     slot * kTimestampCap, ts_heap_ ? kTimestampCap : 0u);
             record(&rec, user);
+            ts_written = rec.timestamps_written();
         }
+        if (ts_written > 0 && ts_heap_ && ts_readback_)
+            list_->ResolveQueryData(ts_heap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                                    slot * kTimestampCap, ts_written, ts_readback_.Get(),
+                                    u64(slot) * kTimestampCap * sizeof(u64));
+        slot_ts_written_[slot] = ts_written;
+        slot_sig_value_[slot]  = signal_value;
         if (FAILED(list_->Close())) return 0;
 
         ID3D12CommandList* lists[] = { list_.Get() };
@@ -292,6 +365,14 @@ private:
     u64                               last_signal_{0};
     u64                               slot_signal_[kRing]{};
     u32                               cur_{0};
+    // Per-pass timestamps (see initialize).
+    ComPtr<ID3D12QueryHeap>           ts_heap_;
+    ComPtr<ID3D12Resource>            ts_readback_;
+    u64                               ts_freq_{0};
+    u32                               slot_ts_written_[kRing]{};
+    u64                               slot_sig_value_[kRing]{};
+    u64                               retired_value_{0};
+    cardinal::vector<u64>             retired_ticks_;
 };
 
 }  // namespace

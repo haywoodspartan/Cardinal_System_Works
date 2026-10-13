@@ -99,7 +99,7 @@ The renderer is organised as a **render graph** (`cardinal::render`,
 **AEGIS Render Pipeline 2.0** (`PipelineId::Aegis`, the Studio default) is a
 graph-driven GPU pipeline: virtual-geometry classify → meshlet build/cull →
 screen-space-error LOD → frustum/Hi-Z cull → V-Buffer → tile light cull →
-ReSTIR DI (opt-in) → TAA → Tonemap → Composite. An **adaptive math-division
+tile-binned V-Buffer resolve (Cook-Torrance) → screen-space GI → Motion Vectors → Tonemap → Composite. ReSTIR DI and TAA exist as CPU passes but are not in the GPU chain yet (see docs/feature_coverage.md). An **adaptive math-division
 tier** (`GeometryTier` = FP32 / FP16 / FP8 / FP4) escalates precision based on
 device caps + the requested ceiling.
 

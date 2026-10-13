@@ -610,6 +610,12 @@ public:
             rhi_backend_->set_post_record(nullptr, nullptr);
         }
         runner_->execute();
+        if (rhi_backend_) {   // per-pass GPU times of the retired submission
+            const auto& gt = rhi_backend_->gpu_pass_times();
+            gpu_times_.resize(gt.size());
+            for (usize i = 0; i < gt.size(); ++i) { gpu_times_[i].name = gt[i].name; gpu_times_[i].ms = gt[i].ms; }
+            gpu_graph_ms_ = rhi_backend_->gpu_graph_ms();
+        }
         hiz_valid_data_ = 1u;   // the persistent pyramid now holds this frame -> valid history next frame
         real_dispatches_ = 0;
         if (rhi_backend_)
@@ -1029,6 +1035,9 @@ private:
     }
 
 public:
+    const cardinal::vector<GpuPassTime>& gpu_pass_times() const noexcept override { return gpu_times_; }
+    f32 gpu_graph_ms() const noexcept override { return gpu_graph_ms_; }
+
     ~AegisGraphPipeline() override {
         // Retire the async lane while the queue is alive, then drop the
         // owners of the backend before the queue goes (see async_queue_).
@@ -1074,6 +1083,8 @@ private:
     cardinal::vector<scene::Mat4>     skin_scratch_global_, skin_scratch_palette_;
     bool                              gpu_gate_logged_ {false};
     cardinal::u32                     real_dispatches_ {0};
+    cardinal::vector<GpuPassTime>     gpu_times_;        // last retired async submission
+    f32                               gpu_graph_ms_ {0.0f};
     cardinal::u32                     frame_counter_ {0};
     bool                              zero_copy_ok_ {false};        // per frame: GPU lane live
     cardinal::u32                     zero_copy_frames_ {0};

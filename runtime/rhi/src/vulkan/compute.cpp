@@ -62,8 +62,22 @@ private:
 // previous submission retires) — sets stay alive until the GPU is done.
 class VulkanComputeRecorder final : public Swapchain {
 public:
-    VulkanComputeRecorder(VkDevice dev, VkCommandBuffer cmd, VkDescriptorPool pool)
-        : dev_(dev), cmd_(cmd), pool_(pool) {}
+    VulkanComputeRecorder(VkDevice dev, VkCommandBuffer cmd, VkDescriptorPool pool,
+                          VkQueryPool timestamps, u32 timestamp_cap)
+        : dev_(dev), cmd_(cmd), pool_(pool), qp_(timestamps), qp_cap_(timestamp_cap) {}
+
+    // Per-pass GPU timing: the lane's per-slot query pool. ALL_COMMANDS on
+    // both ends: the "begin" stamp lands once every earlier command has
+    // completed, the "end" stamp once the pass has — so a pass's interval is
+    // its own time only when the recorder serialised it against its
+    // predecessor (the hazard barriers do that for dependent passes;
+    // independent passes may overlap and then share the interval).
+    void write_timestamp(u32 /*heap*/, u32 index) override {
+        if (!cmd_ || qp_ == VK_NULL_HANDLE || index >= qp_cap_) return;
+        vkCmdWriteTimestamp2(cmd_, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, qp_, index);
+        if (index + 1 > qp_used_) qp_used_ = index + 1;
+    }
+    u32 timestamps_written() const noexcept { return qp_used_; }
 
     void copy_buffer(Buffer* src, usize src_off,
                      Buffer* dst, usize dst_off, usize size) override {
@@ -251,6 +265,9 @@ private:
     VkDevice         dev_{VK_NULL_HANDLE};
     VkCommandBuffer  cmd_{VK_NULL_HANDLE};
     VkDescriptorPool pool_{VK_NULL_HANDLE};
+    VkQueryPool      qp_{VK_NULL_HANDLE};   // this slot's timestamp pool
+    u32              qp_cap_{0};
+    u32              qp_used_{0};           // highest index written + 1
     VulkanPipeline*  bound_{nullptr};
     Buffer*          pending_sb_ [kMaxSlots_]{};
     Buffer*          pending_uav_[kMaxSlots_]{};
@@ -265,11 +282,18 @@ private:
 // serialised the host against the whole AEGIS graph: ~2.5 ms a frame.)
 class VulkanComputeQueue final : public ComputeQueue {
 public:
-    static constexpr u32 kRing = 2;
+    static constexpr u32 kRing         = 2;
+    static constexpr u32 kTimestampCap = 128;   // 64 timed passes per submission
 
-    bool initialize(VkDevice dev, VkQueue queue, u32 family) {
+    // timestamp_period_ns / timestamp_valid_bits: VkPhysicalDeviceLimits::
+    // timestampPeriod and the compute family's timestampValidBits (0 = the
+    // family cannot timestamp; the pools are then not created).
+    bool initialize(VkDevice dev, VkQueue queue, u32 family,
+                    float timestamp_period_ns, u32 timestamp_valid_bits) {
         if (!dev || queue == VK_NULL_HANDLE) return false;
         dev_ = dev; queue_ = queue;
+        ts_period_ns_  = timestamp_period_ns;
+        ts_valid_bits_ = timestamp_valid_bits;
         VkCommandPoolCreateInfo pci{};
         pci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         pci.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -300,6 +324,14 @@ public:
             dpci.poolSizeCount = 1;
             dpci.pPoolSizes    = &ps;
             if (vkCreateDescriptorPool(dev, &dpci, nullptr, &sl.desc_pool) != VK_SUCCESS) return false;
+            if (ts_valid_bits_ > 0 && ts_period_ns_ > 0.0f) {
+                VkQueryPoolCreateInfo qci{};
+                qci.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+                qci.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+                qci.queryCount = kTimestampCap;
+                if (vkCreateQueryPool(dev, &qci, nullptr, &sl.timestamps) != VK_SUCCESS)
+                    sl.timestamps = VK_NULL_HANDLE;   // timing off, lane still works
+            }
         }
         return true;
     }
@@ -309,13 +341,27 @@ public:
         for (Slot& sl : slots_)
             if (sl.submitted && sl.done) vkWaitForFences(dev_, 1, &sl.done, VK_TRUE, ~0ull);
         for (Slot& sl : slots_) {
-            if (sl.desc_pool) vkDestroyDescriptorPool(dev_, sl.desc_pool, nullptr);
-            if (sl.done)      vkDestroyFence(dev_, sl.done, nullptr);
+            if (sl.timestamps) vkDestroyQueryPool(dev_, sl.timestamps, nullptr);
+            if (sl.desc_pool)  vkDestroyDescriptorPool(dev_, sl.desc_pool, nullptr);
+            if (sl.done)       vkDestroyFence(dev_, sl.done, nullptr);
         }
         if (pool_) vkDestroyCommandPool(dev_, pool_, nullptr);   // frees the cmds
     }
 
     u32 frames_in_flight() const noexcept override { return kRing; }
+
+    u32 timestamp_capacity() const noexcept override {
+        return slots_[0].timestamps != VK_NULL_HANDLE ? kTimestampCap : 0u;
+    }
+    u64 timestamp_ticks_per_second() const noexcept override {
+        return ts_period_ns_ > 0.0f ? static_cast<u64>(1.0e9 / static_cast<double>(ts_period_ns_)) : 0u;
+    }
+    bool retired_timestamps(u64& signal_value, cardinal::vector<u64>& ticks) const override {
+        if (retired_value_ == 0) return false;
+        signal_value = retired_value_;
+        ticks        = retired_ticks_;
+        return true;
+    }
 
     u64 submit(RecordFn record, void* user,
                Fence* signal_fence, u64 signal_value) override {
@@ -328,6 +374,21 @@ public:
         if (sl.submitted) {
             vkWaitForFences(dev_, 1, &sl.done, VK_TRUE, ~0ull);
             vkResetFences(dev_, 1, &sl.done);
+            // Its timestamps are final now: read them before the pool is reset.
+            if (sl.timestamps != VK_NULL_HANDLE && sl.ts_written > 0) {
+                retired_ticks_.assign(sl.ts_written, 0);
+                const VkResult r = vkGetQueryPoolResults(
+                    dev_, sl.timestamps, 0, sl.ts_written,
+                    static_cast<usize>(sl.ts_written) * sizeof(u64), retired_ticks_.data(),
+                    sizeof(u64), VK_QUERY_RESULT_64_BIT);
+                if (r == VK_SUCCESS) {
+                    if (ts_valid_bits_ < 64)
+                        for (u64& t : retired_ticks_) t &= (1ull << ts_valid_bits_) - 1ull;
+                    retired_value_ = sl.signal_value;
+                } else {
+                    retired_ticks_.clear();
+                }
+            }
         }
         if (sl.desc_pool) vkResetDescriptorPool(dev_, sl.desc_pool, 0);
 
@@ -336,6 +397,8 @@ public:
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vkBeginCommandBuffer(sl.cmd, &bi);
+        if (sl.timestamps != VK_NULL_HANDLE)
+            vkCmdResetQueryPool(sl.cmd, sl.timestamps, 0, kTimestampCap);
 
         // Submission N-1 may still be executing on this queue when N starts:
         // its shader / copy writes must be complete and visible before N reads
@@ -356,10 +419,15 @@ public:
         di.pMemoryBarriers    = &mb;
         vkCmdPipelineBarrier2(sl.cmd, &di);
 
+        u32 ts_written = 0;
         if (record) {
-            VulkanComputeRecorder rec(dev_, sl.cmd, sl.desc_pool);
+            VulkanComputeRecorder rec(dev_, sl.cmd, sl.desc_pool, sl.timestamps,
+                                      sl.timestamps != VK_NULL_HANDLE ? kTimestampCap : 0u);
             record(&rec, user);
+            ts_written = rec.timestamps_written();
         }
+        sl.ts_written   = ts_written;
+        sl.signal_value = signal_value;
         vkEndCommandBuffer(sl.cmd);
 
         VkCommandBufferSubmitInfo csi{};
@@ -392,6 +460,9 @@ private:
         VkCommandBuffer  cmd{VK_NULL_HANDLE};
         VkFence          done{VK_NULL_HANDLE};        // this slot's reuse fence
         VkDescriptorPool desc_pool{VK_NULL_HANDLE};   // recorder SSBO sets
+        VkQueryPool      timestamps{VK_NULL_HANDLE};  // per-pass GPU timing
+        u32              ts_written{0};               // stamps the last record wrote
+        u64              signal_value{0};             // what that submission signalled
         bool             submitted{false};
     };
     VkDevice      dev_{VK_NULL_HANDLE};
@@ -399,6 +470,10 @@ private:
     VkCommandPool pool_{VK_NULL_HANDLE};
     Slot          slots_[kRing]{};
     u32           cur_{0};
+    float         ts_period_ns_{0.0f};
+    u32           ts_valid_bits_{0};
+    u64           retired_value_{0};        // submission whose stamps are below
+    cardinal::vector<u64> retired_ticks_;
 };
 
 // ---- VulkanDevice async-compute factories ----
@@ -411,7 +486,18 @@ cardinal::unique_ptr<Fence> VulkanDevice::create_fence(u64 initial_value) {
 cardinal::unique_ptr<ComputeQueue> VulkanDevice::create_async_compute_queue() {
     if (compute_queue_ == VK_NULL_HANDLE) return nullptr;   // caps.async_compute == false
     auto q = cardinal::make_unique<VulkanComputeQueue>();
-    if (!q->initialize(device_, compute_queue_, compute_queue_family_)) return nullptr;
+    // Timestamp support of the compute family: period from the device
+    // limits, validity from the family (0 bits = no timestamps there).
+    VkPhysicalDeviceProperties pdp{};
+    vkGetPhysicalDeviceProperties(physical_, &pdp);
+    u32 qf_count = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(physical_, &qf_count, nullptr);
+    cardinal::vector<VkQueueFamilyProperties> qfs(qf_count);
+    vkGetPhysicalDeviceQueueFamilyProperties(physical_, &qf_count, qfs.data());
+    const u32 valid_bits = compute_queue_family_ < qf_count
+        ? qfs[compute_queue_family_].timestampValidBits : 0u;
+    if (!q->initialize(device_, compute_queue_, compute_queue_family_,
+                       pdp.limits.timestampPeriod, valid_bits)) return nullptr;
     return q;
 }
 
