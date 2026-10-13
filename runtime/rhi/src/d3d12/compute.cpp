@@ -210,18 +210,27 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// D3D12ComputeQueue — records + submits one compute submission at a time onto
-// the device's dedicated COMPUTE queue.
+// D3D12ComputeQueue — records + submits onto the device's dedicated COMPUTE
+// queue through a ring of kRing command allocators: submit() waits only for
+// the allocator's previous submission (N - kRing), so the host records frame
+// N while N-1 still executes. One command list suffices (a list may be reset
+// right after ExecuteCommandLists; only its allocator must wait for the GPU).
+// Lists on one queue execute in order and ExecuteCommandLists boundaries make
+// prior UAV writes visible (that is what lets resources decay to COMMON
+// there), so no cross-list barrier is needed — unlike the Vulkan lane.
 // ---------------------------------------------------------------------------
 class D3D12ComputeQueue final : public ComputeQueue {
 public:
+    static constexpr u32 kRing = 2;
+
     bool initialize(ID3D12Device* dev, ID3D12CommandQueue* queue) {
         if (!dev || !queue) return false;
         dev_ = dev; queue_ = queue;
-        if (FAILED(dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE,
-                                               IID_PPV_ARGS(&alloc_)))) return false;
+        for (u32 i = 0; i < kRing; ++i)
+            if (FAILED(dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE,
+                                                   IID_PPV_ARGS(&alloc_[i])))) return false;
         if (FAILED(dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE,
-                                          alloc_.Get(), nullptr,
+                                          alloc_[0].Get(), nullptr,
                                           IID_PPV_ARGS(&list_)))) return false;
         list_->Close();   // submit() resets before recording
         if (FAILED(dev->CreateFence(0, D3D12_FENCE_FLAG_NONE,
@@ -229,21 +238,33 @@ public:
         done_event_ = CreateEventA(nullptr, FALSE, FALSE, nullptr);
         return done_event_ != nullptr;
     }
-    ~D3D12ComputeQueue() override { if (done_event_) CloseHandle(done_event_); }
+    ~D3D12ComputeQueue() override {
+        // An allocator may not be released while the GPU still reads it.
+        if (done_ && done_event_ && last_signal_ != 0 &&
+            done_->GetCompletedValue() < last_signal_) {
+            if (SUCCEEDED(done_->SetEventOnCompletion(last_signal_, done_event_)))
+                WaitForSingleObject(done_event_, INFINITE);
+        }
+        if (done_event_) CloseHandle(done_event_);
+    }
+
+    u32 frames_in_flight() const noexcept override { return kRing; }
 
     u64 submit(RecordFn record, void* user,
                Fence* signal_fence, u64 signal_value) override {
-        if (!queue_ || !list_ || !alloc_) return 0;
+        if (!queue_ || !list_ || !alloc_[0]) return 0;
+        const u32 slot = cur_;
+        cur_ = (cur_ + 1) % kRing;
 
-        // Wait for the PREVIOUS submission to retire before reusing the single
-        // allocator + list (keeps a busy host from clobbering in-flight work).
-        if (last_ != 0 && done_->GetCompletedValue() < last_) {
-            if (SUCCEEDED(done_->SetEventOnCompletion(last_, done_event_)))
+        // Wait for THIS allocator's previous submission (N - kRing) to retire
+        // before resetting it; N-1 keeps executing.
+        if (slot_signal_[slot] != 0 && done_->GetCompletedValue() < slot_signal_[slot]) {
+            if (SUCCEEDED(done_->SetEventOnCompletion(slot_signal_[slot], done_event_)))
                 WaitForSingleObject(done_event_, INFINITE);
         }
 
-        if (FAILED(alloc_->Reset())) return 0;
-        if (FAILED(list_->Reset(alloc_.Get(), nullptr))) return 0;
+        if (FAILED(alloc_[slot]->Reset())) return 0;
+        if (FAILED(list_->Reset(alloc_[slot].Get(), nullptr))) return 0;
         if (record) {
             D3D12ComputeRecorder rec(dev_, list_.Get());
             record(&rec, user);
@@ -256,18 +277,21 @@ public:
         // Caller's cross-queue fence first, then our internal reuse fence.
         if (auto* df = static_cast<D3D12Fence*>(signal_fence); df && df->d3d())
             queue_->Signal(df->d3d(), signal_value);
-        queue_->Signal(done_.Get(), ++last_);
+        queue_->Signal(done_.Get(), ++last_signal_);
+        slot_signal_[slot] = last_signal_;
         return signal_value;
     }
 
 private:
     ID3D12Device*                     dev_{nullptr};
     ID3D12CommandQueue*               queue_{nullptr};   // device-owned COMPUTE queue
-    ComPtr<ID3D12CommandAllocator>    alloc_;
+    ComPtr<ID3D12CommandAllocator>    alloc_[kRing];
     ComPtr<ID3D12GraphicsCommandList> list_;
     ComPtr<ID3D12Fence>               done_;             // internal allocator-reuse fence
     HANDLE                            done_event_{nullptr};
-    u64                               last_{0};
+    u64                               last_signal_{0};
+    u64                               slot_signal_[kRing]{};
+    u32                               cur_{0};
 };
 
 }  // namespace

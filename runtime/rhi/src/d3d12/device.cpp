@@ -53,6 +53,7 @@ bool D3D12Device::initialize(const DeviceDesc& desc) {
     {
         const NvAPI_Status s = NvAPI_Initialize();
         nvapi_initialised_ = (s == NVAPI_OK);
+        nvapi_lifetime_.armed = nvapi_initialised_;   // unloaded after the device objects
         if (nvapi_initialised_) {
             cardinal::log::infof("rhi/d3d12",
                 "NvAPI initialised — Reflex available on NVIDIA adapters");

@@ -721,6 +721,20 @@ private:
 // D3D12Device
 // -----------------------------------------------------------------------------
 class D3D12Device final : public Device {
+    // Declared FIRST so it is destroyed LAST: NvAPI_Unload has to run after
+    // every D3D12 object below has been released. The runtime's device
+    // teardown still calls into the NVIDIA driver, and unloading nvapi64
+    // first (the old destructor body) left D3D12Core reading unmapped code —
+    // an ACCESS_VIOLATION on every Studio exit with Reflex initialised.
+    struct NvApiLifetime {
+        bool armed{false};
+        ~NvApiLifetime() {
+#if CARDINAL_HAS_NVAPI
+            if (armed) NvAPI_Unload();
+#endif
+        }
+    } nvapi_lifetime_;
+
 public:
     Backend backend() const noexcept override { return Backend::D3D12; }
     const char* adapter_name() const noexcept override { return adapter_name_; }
@@ -799,11 +813,7 @@ private:
     bool            tearing_supported_{false};
     bool            nvapi_initialised_{false};
 public:
-    ~D3D12Device() override {
-#if CARDINAL_HAS_NVAPI
-        if (nvapi_initialised_) NvAPI_Unload();
-#endif
-    }
+    ~D3D12Device() override = default;   // NvAPI unload: nvapi_lifetime_ (last member out)
 };
 
 }  // namespace cardinal::rhi

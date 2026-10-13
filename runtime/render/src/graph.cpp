@@ -476,12 +476,23 @@ RhiBackend::~RhiBackend() {
 }
 
 void RhiBackend::drain_async_() noexcept {
-    if (async_q_ == nullptr || async_fence_ == nullptr) return;
-    // An empty submission serialises behind any in-flight one (both backends
-    // CPU-wait the previous submission at the top of submit), then signals.
-    const u64 v = ++async_fence_value_;
-    async_q_->submit(nullptr, nullptr, async_fence_.get(), v);
-    async_fence_->wait_cpu(v, 0);
+    if (async_q_ == nullptr || async_fence_ == nullptr || async_submitted_value_ == 0) return;
+    // Every submission signalled the fence with its own value, and each one
+    // orders behind its predecessor on the queue (the Vulkan lane's top-of-
+    // submission barrier, D3D12's in-order lists), so the latest SUBMITTED
+    // value retiring means nothing of ours is in flight. It must be the
+    // submitted value, not async_fence_value_: execute() bumps that before
+    // recording, and a drain from inside the recording (a buffer resize in
+    // execute_on) would otherwise wait on the submission being recorded —
+    // a deadlock the hang watchdog caught. No command buffer is recorded:
+    // this also runs from destructors, late in teardown.
+    async_fence_->wait_cpu(async_submitted_value_, 0);
+}
+
+u32 RhiBackend::import_slots_() const noexcept {
+    const u32 in_flight = async_q_ ? async_q_->frames_in_flight() : 1u;
+    const u32 want      = in_flight + 1u;
+    return want < CachedBuffer::kMaxSlots ? want : CachedBuffer::kMaxSlots;
 }
 
 void RhiBackend::set_async_queue(cardinal::rhi::ComputeQueue* q) noexcept {
@@ -511,7 +522,7 @@ void* RhiBackend::import_write_ptr(const cardinal::string& name, usize size) noe
     const auto it = buffer_cache_.find(name);
     if (it == buffer_cache_.end()) return nullptr;
     const CachedBuffer& slot = it->second;
-    if (!slot.host_visible || !slot.alt || slot.size != size) return nullptr;
+    if (!slot.host_visible || slot.count < 2 || slot.size != size) return nullptr;
     cardinal::rhi::Buffer* nb = slot.next();
     return nb ? nb->map_write() : nullptr;
 }
@@ -527,7 +538,7 @@ void RhiBackend::make_copy_source(const cardinal::string& name) noexcept {
     // hook (sw_ is the live recorder there).
     if (async_q_ != nullptr && !in_async_record_) return;
     const auto slot_it = buffer_cache_.find(name);
-    if (slot_it == buffer_cache_.end() || !slot_it->second.buf || !sw_) return;
+    if (slot_it == buffer_cache_.end() || !slot_it->second.bufs[0] || !sw_) return;
     cardinal::rhi::Buffer* buf = slot_it->second.current();
     // Host-visible (imported / UPLOAD-heap) buffers take NO barrier: on D3D12
     // they are pinned in GENERIC_READ — which already includes COPY_SOURCE —
@@ -576,6 +587,7 @@ void RhiBackend::execute(Graph& g) noexcept {
                 self.sw_ = saved;
             },
             &cx, async_fence_.get(), ++async_fence_value_);
+        async_submitted_value_ = async_fence_value_;   // now in flight (see drain_async_)
         return;
     }
 
@@ -621,7 +633,9 @@ void RhiBackend::execute_on(cardinal::rhi::Swapchain* target, Graph& g) noexcept
                 // its size changed (e.g. a swapchain resize). Only then create.
                 CachedBuffer& slot = buffer_cache_[bdesc.name];
                 const bool wants_host = g.buffer_imported(h) != nullptr;
-                if (!slot.buf || slot.size != sz || slot.host_visible != wants_host) {
+                const u32  want_slots = wants_host ? import_slots_() : 1u;
+                if (!slot.bufs[0] || slot.size != sz || slot.host_visible != wants_host ||
+                    slot.count != want_slots) {
                     cardinal::rhi::BufferDesc bd{};
                     bd.size  = sz;
                     bd.usage = static_cast<u32>(cardinal::rhi::BufferUsage::Storage)
@@ -636,17 +650,21 @@ void RhiBackend::execute_on(cardinal::rhi::Swapchain* target, Graph& g) noexcept
                     // never inherit a wrong-heap buffer.
                     bd.cpu_writable = wants_host;
                     bd.unified      = wants_host;   // VRAM-resident, CPU-mapped (ReBAR / GPU upload heap)
-                    slot.buf  = dev_->create_buffer(bd);
-                    // Imports are double-buffered so a host can write the next
-                    // frame's bytes (import_write_ptr) while the in-flight
-                    // submission still reads the other slot.
-                    slot.alt  = wants_host ? dev_->create_buffer(bd) : nullptr;
-                    slot.cur  = 0;
-                    slot.size = sz;
+                    // Replacing a buffer the previous submission may still read
+                    // (resize) — retire it first. Rare; never on the steady path.
+                    if (slot.bufs[0]) drain_async_();
+                    for (auto& b : slot.bufs) b.reset();
+                    // Imports rotate ring+1 slots so the host can write the next
+                    // frame's bytes (import_write_ptr) while in-flight
+                    // submissions still read the others.
+                    for (u32 i = 0; i < want_slots; ++i) slot.bufs[i] = dev_->create_buffer(bd);
+                    slot.count = want_slots;
+                    slot.cur   = 0;
+                    slot.size  = sz;
                     slot.host_visible = wants_host;
                     host_written_.erase(bdesc.name);   // any mark targeted the old buffers
-                } else if (wants_host && slot.alt) {
-                    slot.cur ^= 1;                     // flip to the slot the GPU isn't reading
+                } else if (wants_host && slot.count > 1) {
+                    slot.cur = (slot.cur + 1) % slot.count;   // advance to the slot the host wrote
                 }
                 cardinal::rhi::Buffer* curb = slot.current();
                 if (curb) {

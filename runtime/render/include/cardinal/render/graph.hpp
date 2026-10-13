@@ -468,12 +468,14 @@ private:
     void execute_on(cardinal::rhi::Swapchain* target, Graph& g) noexcept;
     // Fence-wait any in-flight async submission (attach/detach/reset/dtor).
     void drain_async_() noexcept;
+    u32  import_slots_() const noexcept;   // ring depth + 1, capped at kMaxSlots
 
     cardinal::rhi::Device*    dev_ {nullptr};
     cardinal::rhi::Swapchain* sw_  {nullptr};
     cardinal::rhi::ComputeQueue*          async_q_ {nullptr};   // non-owning
     cardinal::unique_ptr<cardinal::rhi::Fence> async_fence_;    // drain sync
     u64                                    async_fence_value_ {0};
+    u64 async_submitted_value_ {0};   // last value handed to submit(); drain waits on THIS
     // Pass NAME → compiled compute pipeline (lazy, cached across executes).
     // Keyed by name, not pass id: the graph is rebuilt per frame and pass ids
     // SHIFT when the topology changes (ReSTIR / MotionVector wire in
@@ -491,14 +493,19 @@ private:
     // that bled FPS / crashed allocators). buffers_ is a per-frame non-owning
     // ResourceHandle.id → Buffer* view rebuilt from the cache each execute.
     struct CachedBuffer {
-        cardinal::unique_ptr<cardinal::rhi::Buffer> buf;
-        cardinal::unique_ptr<cardinal::rhi::Buffer> alt;   // host-visible imports: 2nd slot
-        u32                                         cur {0};  // slot the GPU binds this execute
-        usize                                       size {0};
-        bool host_visible {false};   // imported/unified-heap (never a UAV; no
-                                     // barriers — implicit promotion / GENERIC_READ)
-        cardinal::rhi::Buffer* current() const noexcept { return (cur && alt) ? alt.get() : buf.get(); }
-        cardinal::rhi::Buffer* next()    const noexcept { return (cur || !alt) ? buf.get() : alt.get(); }
+        // Host-written imports rotate frames_in_flight() + 1 copies: with the
+        // async queue keeping N-1 in flight, the slot the host writes for N+1
+        // must be one no in-flight submission reads (N-2's, retired at submit
+        // N). Transient pass outputs are a single slot.
+        static constexpr u32 kMaxSlots = 3;
+        cardinal::unique_ptr<cardinal::rhi::Buffer> bufs[kMaxSlots];
+        u32   count {1};   // live slots: 1 (transient) or ring + 1 (import)
+        u32   cur   {0};   // slot the GPU binds this execute
+        usize size  {0};
+        bool  host_visible {false};   // imported/unified-heap (never a UAV; no
+                                      // barriers — implicit promotion / GENERIC_READ)
+        cardinal::rhi::Buffer* current() const noexcept { return bufs[cur].get(); }
+        cardinal::rhi::Buffer* next()    const noexcept { return bufs[(cur + 1) % count].get(); }
     };
     cardinal::unordered_map<cardinal::string, CachedBuffer> buffer_cache_;
     cardinal::unordered_map<cardinal::string, bool>         host_written_;   // consumed per execute

@@ -1028,6 +1028,17 @@ private:
             "OUTSIDE it to see what's being culled.", false);
     }
 
+public:
+    ~AegisGraphPipeline() override {
+        // Retire the async lane while the queue is alive, then drop the
+        // owners of the backend before the queue goes (see async_queue_).
+        if (rhi_backend_) rhi_backend_->set_async_queue(nullptr);
+        runner_.reset();
+        rhi_backend_.reset();
+        async_queue_.reset();
+    }
+
+private:
     rhi::Device*                                      dev_  {nullptr};
     rhi::Swapchain*                                   sw_   {nullptr};
     cardinal::shared_ptr<scene::ForwardRenderer>      renderer_;
@@ -1036,8 +1047,10 @@ private:
     KnobIdx                                            kidx_;   // hot-knob indices
     AegisBackendMode                                   current_mode_ {AegisBackendMode::Null};
     AegisDeviceSupport                                 dev_caps_ {};   // from on_caps
-    // Async lane BEFORE the backend: members destruct in reverse order, and
-    // the RhiBackend dtor drains through this queue (non-owning pointer).
+    // The RhiBackend holds a NON-owning pointer to this queue and drains
+    // through it in its destructor. runner_ (above) co-owns the backend and
+    // is destroyed after this member, so member order alone cannot keep the
+    // queue alive long enough: ~AegisGraphPipeline detaches explicitly.
     cardinal::unique_ptr<cardinal::rhi::ComputeQueue>  async_queue_;
     cardinal::shared_ptr<graph::RhiBackend>            rhi_backend_;   // when mode==Rhi
     // Persistent host storage for the graph's imported camera inputs — the

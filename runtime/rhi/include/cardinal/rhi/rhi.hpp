@@ -813,6 +813,12 @@ public:
                        Fence* /*signal_fence*/ = nullptr,
                        u64    /*signal_value*/ = 0) { return 0; }
 
+    // Submissions the queue keeps in flight: submit() blocks only until the
+    // submission N - frames_in_flight() has retired. A host that writes a
+    // buffer the GPU reads must therefore rotate frames_in_flight() + 1
+    // copies of it (RhiBackend's imported buffers do).
+    virtual u32 frames_in_flight() const noexcept { return 1; }
+
 protected:
     ComputeQueue() = default;
 };
