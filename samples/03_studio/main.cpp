@@ -540,6 +540,14 @@ int main(int argc, char** argv) {
     viewports.push_back(make_slot(scn::ViewMode::Wireframe));
     viewports.push_back(make_slot(scn::ViewMode::Heightmap));
     viewports.push_back(make_slot(scn::ViewMode::Normals));
+    // --viewports=N: open only the first N panels. Every visible viewport
+    // renders the full pipeline (AEGIS runs its whole graph per viewport),
+    // so a benchmark of ONE view runs with --viewports=1.
+    {
+        const long want_vp = arg_value(argc, argv, "--viewports=", 0);
+        if (want_vp > 0 && want_vp < static_cast<long>(viewports.size()))
+            viewports.resize(static_cast<usize>(want_vp));
+    }
 
     // ---- Asset catalog ----------------------------------------------------
     // Register the engine-shipped primitives + tree + terrain chunk so the
@@ -698,6 +706,10 @@ int main(int argc, char** argv) {
     // Per-pass GPU ms from the async lane, accumulated over the run.
     std::map<std::string, std::pair<double, unsigned>> profile_gpu;
     std::pair<double, unsigned>                        profile_gpu_graph{0.0, 0u};
+    // AEGIS CPU stage timers (FrameStats cull/submit/phase1/phase2/sort us).
+    double   profile_cpu[7] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    cardinal::u32 profile_calls_prev = 0, profile_calls_sum = 0;
+    unsigned profile_cpu_n  = 0;
     if (profile_seconds > 0) profile_ms.reserve(200000);
     struct PhaseAcc { double total_ms{0.0}; double max_ms{0.0}; cardinal::u32 frames{0}; };
     std::vector<std::pair<std::string, PhaseAcc>> profile_phases;   // exact, whole run
@@ -2181,6 +2193,14 @@ int main(int argc, char** argv) {
         pacer->set_limit(cardinal::core::kPaceMainLoop, lim);
         clog::infof("studio", "profile: frame caps lifted (settings file ignored for the run)");
     }
+    {
+        // --viewports=N again: the saved viewport.count cvar just re-grew the
+        // vector to last session's panel count (4 by default), and every panel
+        // renders the full pipeline each frame.
+        const long want_vp = arg_value(argc, argv, "--viewports=", 0);
+        if (want_vp > 0 && want_vp < static_cast<long>(viewports.size()))
+            viewports.resize(static_cast<usize>(want_vp));
+    }
 
     // AEGIS Pipeline 2.0 is the default on every start (RhiBackend-driven via
     // its own knob default). render::Registry already defaults to it, but the
@@ -2329,6 +2349,9 @@ int main(int argc, char** argv) {
             if (!vps.show)      continue;
             if (vps.minimized)  continue;
             if (maximized_idx >= 0 && i != maximized_idx) continue;
+            // Per-viewport FPS quota: skip the render when the panel is not
+            // due (its RTT keeps the last image; pick matrices stay invalid).
+            if (!pacer->context_due(static_cast<cardinal::core::PaceContextId>(i + 1))) continue;
 
             auto* active = pipelines->active();
             if (active != nullptr) {
@@ -2361,7 +2384,10 @@ int main(int argc, char** argv) {
             const float aspect_i = (vh_i > 0)
                 ? static_cast<float>(vw_i) / static_cast<float>(vh_i)
                 : 1.0f;
-            pipelines->render(scene, aspect_i);
+            {
+                cardinal::async::FrameScope _ph_pipe("Pipeline Render");
+                pipelines->render(scene, aspect_i);
+            }
             // Capture the EXACT view/proj this viewport was rasterised with,
             // so a later viewport click unprojects with bit-identical matrices
             // (the placement-offset fix — no aspect/camera re-derivation).
@@ -2381,6 +2407,16 @@ int main(int argc, char** argv) {
                 if (ap->gpu_graph_ms() > 0.0f) {
                     profile_gpu_graph.first += static_cast<double>(ap->gpu_graph_ms());
                     ++profile_gpu_graph.second;
+                }
+                const auto fs = ap->stats();
+                if (fs.phase1_us > 0.0f) {
+                    profile_cpu[0] += fs.cull_us;   profile_cpu[1] += fs.submit_us;
+                    profile_cpu[2] += fs.phase1_us; profile_cpu[3] += fs.phase2_us;
+                    profile_cpu[4] += fs.sort_us;   profile_cpu[5] += fs.lane_latency_us;
+                    profile_cpu[6] += fs.render_total_us;
+                    if (profile_calls_prev != 0) profile_calls_sum += fs.render_calls - profile_calls_prev;
+                    profile_calls_prev = fs.render_calls;
+                    ++profile_cpu_n;
                 }
             }
         }
@@ -3148,23 +3184,23 @@ int main(int argc, char** argv) {
         // dropped viewport stops contributing; then push limits for every
         // currently-visible slot.
         {
+            // A viewport's FPS cap is a render-RATE quota (set_rate): the
+            // render loop skips a viewport that is not due and the panel
+            // keeps its last image. It never paces the main loop — as a
+            // set_limit it did (the pacer takes the strictest cap across
+            // contexts), so one 30 fps panel used to hold the editor at 30.
             auto push_vp_limit = [&](cardinal::core::PaceContextId id, float fps, bool visible) {
-                if (!visible) { pacer->clear_limit(id); return; }
-                cardinal::core::FrameLimit fl{};
-                fl.fps_foreground = fps;          // 0 = unlimited
-                fl.fps_background = 0.0f;         // background = main loop's domain
-                pacer->set_limit(id, fl);
+                if (!visible) { pacer->clear_rate(id); return; }
+                pacer->set_rate(id, fps);          // 0 = unlimited
             };
             // Sweep every slot in [1, kMaxViewports]; current slots push
             // their cap, missing/closed slots get cleared.
             for (int i = 0; i < kMaxViewports; ++i) {
                 const auto id = static_cast<cardinal::core::PaceContextId>(i + 1);
                 if (i < static_cast<int>(viewports.size()) && viewports[i].show) {
-                    // Profile mode lifts every cap: the viewport quota would otherwise
-                    // pace the loop (30 fps when focused) and hide the real frame time.
-                    push_vp_limit(id, profile_seconds > 0 ? 0.0f : viewports[i].fps_cap, true);
+                    push_vp_limit(id, viewports[i].fps_cap, true);
                 } else {
-                    pacer->clear_limit(id);
+                    pacer->clear_rate(id);
                 }
             }
         }
@@ -5148,6 +5184,14 @@ int main(int argc, char** argv) {
                     static_cast<usize>(n), avg, 1000.0 / avg, static_cast<double>(pct(0.50)),
                     static_cast<double>(pct(0.90)), static_cast<double>(pct(0.99)),
                     static_cast<double>(v[n - 1]));
+        if (profile_cpu_n > 0) {
+            const double k = 1.0e-3 / profile_cpu_n;   // us sum -> ms avg
+            clog::infof("profile", "AEGIS CPU: extract %.3f  config+build %.3f  lane execute %.3f (slot wait %.3f)  present %.3f ms  | submit->GPU start %.3f ms",
+                        profile_cpu[0] * k, profile_cpu[1] * k, profile_cpu[2] * k, profile_cpu[3] * k, profile_cpu[4] * k,
+                        profile_cpu[5] * k);
+            clog::infof("profile", "AEGIS CPU: whole render() %.3f ms per call, %.2f render calls per frame",
+                        profile_cpu[6] * k, static_cast<double>(profile_calls_sum) / profile_cpu_n);
+        }
         if (profile_gpu_graph.second > 0) {
             clog::infof("profile", "GPU async lane: graph %.3f ms avg over %u retired submissions",
                         profile_gpu_graph.first / profile_gpu_graph.second, profile_gpu_graph.second);

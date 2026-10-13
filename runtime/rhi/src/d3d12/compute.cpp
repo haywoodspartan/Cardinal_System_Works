@@ -29,6 +29,7 @@
 #if defined(_WIN32) && !defined(CARDINAL_NO_D3D12)
 
 #include "internal.hpp"
+#include <cardinal/core/clock/stopwatch.hpp>
 
 #if CARDINAL_PLATFORM_WINDOWS
 
@@ -246,6 +247,12 @@ public:
         // read once that submission's fence retired. Frequency is the
         // COMPUTE queue's (it can differ from the graphics queue's).
         if (SUCCEEDED(queue->GetTimestampFrequency(&ts_freq_)) && ts_freq_ > 0) {
+            // GPU<->CPU clock pair for submission-start latency (see
+            // last_retired_start_latency_ns); failure just leaves it at 0.
+            LARGE_INTEGER qpf{};
+            QueryPerformanceFrequency(&qpf);
+            qpc_freq_ = static_cast<u64>(qpf.QuadPart);
+            if (FAILED(queue->GetClockCalibration(&cal_gpu_, &cal_cpu_))) { cal_gpu_ = 0; cal_cpu_ = 0; }
             D3D12_QUERY_HEAP_DESC qd{};
             qd.Type  = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
             qd.Count = kRing * kTimestampCap;
@@ -292,6 +299,8 @@ public:
 
     u32 frames_in_flight() const noexcept override { return kRing; }
 
+    u64 last_submit_wait_ns() const noexcept override { return last_wait_ns_; }
+    u64 last_retired_start_latency_ns() const noexcept override { return retired_latency_ns_; }
     u32 timestamp_capacity() const noexcept override { return ts_heap_ ? kTimestampCap : 0u; }
     u64 timestamp_ticks_per_second() const noexcept override { return ts_freq_; }
     bool retired_timestamps(u64& signal_value, cardinal::vector<u64>& ticks) const override {
@@ -309,9 +318,12 @@ public:
 
         // Wait for THIS allocator's previous submission (N - kRing) to retire
         // before resetting it; N-1 keeps executing.
+        last_wait_ns_ = 0;
         if (slot_signal_[slot] != 0 && done_->GetCompletedValue() < slot_signal_[slot]) {
+            const cardinal::core::Stopwatch wait_sw;
             if (SUCCEEDED(done_->SetEventOnCompletion(slot_signal_[slot], done_event_)))
                 WaitForSingleObject(done_event_, INFINITE);
+            last_wait_ns_ = wait_sw.elapsed_ns();
         }
         // That submission's resolved timestamps are final: read its range.
         if (ts_readback_ && slot_ts_written_[slot] > 0) {
@@ -321,6 +333,15 @@ public:
             if (SUCCEEDED(ts_readback_->Map(0, &rr, &p)) && p) {
                 const u64* src = static_cast<const u64*>(p) + first;
                 retired_ticks_.assign(src, src + slot_ts_written_[slot]);
+                retired_latency_ns_ = 0;
+                if (cal_cpu_ != 0 && qpc_freq_ != 0 && slot_submit_qpc_[slot] != 0 && !retired_ticks_.empty()) {
+                    const double gpu_ns = (static_cast<double>(retired_ticks_[0]) - static_cast<double>(cal_gpu_))
+                                        * 1.0e9 / static_cast<double>(ts_freq_);
+                    const double cpu_ns = (static_cast<double>(slot_submit_qpc_[slot]) - static_cast<double>(cal_cpu_))
+                                        * 1.0e9 / static_cast<double>(qpc_freq_);
+                    const double lat = gpu_ns - cpu_ns;
+                    retired_latency_ns_ = lat > 0.0 ? static_cast<u64>(lat) : 0u;
+                }
                 D3D12_RANGE none{ 0, 0 };
                 ts_readback_->Unmap(0, &none);
                 retired_value_ = slot_sig_value_[slot];
@@ -346,6 +367,11 @@ public:
 
         ID3D12CommandList* lists[] = { list_.Get() };
         queue_->ExecuteCommandLists(1, lists);
+        {
+            LARGE_INTEGER now{};
+            QueryPerformanceCounter(&now);
+            slot_submit_qpc_[slot] = static_cast<u64>(now.QuadPart);
+        }
 
         // Caller's cross-queue fence first, then our internal reuse fence.
         if (auto* df = static_cast<D3D12Fence*>(signal_fence); df && df->d3d())
@@ -369,10 +395,14 @@ private:
     ComPtr<ID3D12QueryHeap>           ts_heap_;
     ComPtr<ID3D12Resource>            ts_readback_;
     u64                               ts_freq_{0};
+    u64                               cal_gpu_{0}, cal_cpu_{0}, qpc_freq_{0};   // GetClockCalibration pair
+    u64                               slot_submit_qpc_[kRing]{};
+    u64                               retired_latency_ns_{0};
     u32                               slot_ts_written_[kRing]{};
     u64                               slot_sig_value_[kRing]{};
     u64                               retired_value_{0};
     cardinal::vector<u64>             retired_ticks_;
+    u64                               last_wait_ns_{0};
 };
 
 }  // namespace

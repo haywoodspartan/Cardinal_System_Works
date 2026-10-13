@@ -41,6 +41,23 @@ public:
         limits_.erase(ctx);
     }
 
+    void set_rate(PaceContextId ctx, float fps) override {
+        auto& st = rates_[ctx];
+        st.fps = (fps > 0.0f) ? fps : 0.0f;    // 0 / negative / NaN: always due
+        st.next = Clock::time_point{};         // first ask after a change is due
+    }
+    void clear_rate(PaceContextId ctx) override { rates_.erase(ctx); }
+    bool context_due(PaceContextId ctx) override {
+        auto it = rates_.find(ctx);
+        if (it == rates_.end() || !(it->second.fps > 0.0f)) return true;
+        const auto now = Clock::now();
+        if (now < it->second.next) return false;
+        const auto budget = std::chrono::nanoseconds(
+            static_cast<long long>(1.0e9 / it->second.fps));
+        it->second.next = now + budget;
+        return true;
+    }
+
     bool is_foreground() const noexcept override { return foreground_; }
     float effective_fps_cap() const noexcept override { return effective_cap_; }
 
@@ -138,6 +155,8 @@ private:
     HWND hwnd_{nullptr};
 #endif
     std::unordered_map<PaceContextId, FrameLimit> limits_;
+    struct RateState { float fps{0.0f}; Clock::time_point next{}; };
+    std::unordered_map<PaceContextId, RateState> rates_;   // set_rate: gates context_due only
     Clock::time_point last_frame_start_{Clock::now()};
     bool              foreground_{true};
     float             effective_cap_{0.0f};

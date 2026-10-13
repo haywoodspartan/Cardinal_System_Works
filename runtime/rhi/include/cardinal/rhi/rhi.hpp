@@ -818,6 +818,15 @@ public:
     // buffer the GPU reads must therefore rotate frames_in_flight() + 1
     // copies of it (RhiBackend's imported buffers do).
     virtual u32 frames_in_flight() const noexcept { return 1; }
+    // Host time the last submit() spent blocked on its slot's previous
+    // submission (N - frames_in_flight()) — the part of a frame's cost that
+    // is neither recording nor GPU work but queue latency.
+    virtual u64 last_submit_wait_ns() const noexcept { return 0; }
+    // For the submission whose timestamps last retired: host time from its
+    // queue submission to the GPU reaching its first timestamp (needs a
+    // GPU/CPU clock calibration; 0 = unknown). Separates queue scheduling
+    // latency from GPU execution when a frame waits on the lane.
+    virtual u64 last_retired_start_latency_ns() const noexcept { return 0; }
 
     // ---- Per-submission GPU timestamps ----------------------------------
     // The recorder handed to `record` accepts write_timestamp(0, index) for

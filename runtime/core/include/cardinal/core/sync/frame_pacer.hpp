@@ -65,6 +65,16 @@ public:
     virtual FrameLimit limit(PaceContextId ctx) const = 0;
     virtual void clear_limit(PaceContextId ctx) = 0;
 
+    // Per-context render-RATE quota, for things that render inside the main
+    // loop at their own cadence (editor viewport panels). Unlike set_limit,
+    // a rate never paces the loop: it only answers context_due(). fps 0 =
+    // always due. A quota'd viewport that is not due keeps its last image.
+    virtual void set_rate(PaceContextId ctx, float fps) = 0;
+    virtual void clear_rate(PaceContextId ctx) = 0;
+    // True when ctx's quota allows a render now (and takes the slot); always
+    // true for a context without a rate.
+    virtual bool context_due(PaceContextId ctx) = 0;
+
     // Sleep until the next frame deadline implied by the active limits.
     // No-op when no limit is set or when the previous frame already
     // overran the budget. Returns the time slept (microseconds).

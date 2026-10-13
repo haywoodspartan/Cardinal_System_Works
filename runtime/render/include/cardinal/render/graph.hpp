@@ -411,6 +411,10 @@ public:
     };
     const cardinal::vector<GpuPassTime>& gpu_pass_times() const noexcept { return gpu_times_; }
     f32 gpu_graph_ms() const noexcept { return gpu_graph_ms_; }
+    // Host time the last execute() spent blocked inside the lane's submit
+    // waiting for slot N-2 to retire (0 on the sync path).
+    u64 last_lane_wait_ns() const noexcept;   // ComputeQueue is only forward-declared here
+    u64 last_lane_start_latency_ns() const noexcept;
 
     struct Stats {
         u32 passes_dispatched_real    {0};   // create_compute_pipeline succeeded

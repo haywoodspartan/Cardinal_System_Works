@@ -1,4 +1,5 @@
 #include "vulkan_internal.hpp"
+#include <cardinal/core/clock/stopwatch.hpp>
 
 // Async compute (AEGIS Block 10): timeline-semaphore Fence, compute recorder, ComputeQueue, Device/Swapchain fence ops.
 namespace cardinal::rhi {
@@ -350,6 +351,7 @@ public:
 
     u32 frames_in_flight() const noexcept override { return kRing; }
 
+    u64 last_submit_wait_ns() const noexcept override { return last_wait_ns_; }
     u32 timestamp_capacity() const noexcept override {
         return slots_[0].timestamps != VK_NULL_HANDLE ? kTimestampCap : 0u;
     }
@@ -371,8 +373,11 @@ public:
 
         // Wait for THIS slot's previous submission (N - kRing) to retire before
         // reusing its buffer and descriptor sets; N-1 keeps executing.
+        last_wait_ns_ = 0;
         if (sl.submitted) {
+            const cardinal::core::Stopwatch wait_sw;
             vkWaitForFences(dev_, 1, &sl.done, VK_TRUE, ~0ull);
+            last_wait_ns_ = wait_sw.elapsed_ns();
             vkResetFences(dev_, 1, &sl.done);
             // Its timestamps are final now: read them before the pool is reset.
             if (sl.timestamps != VK_NULL_HANDLE && sl.ts_written > 0) {
@@ -474,6 +479,7 @@ private:
     u32           ts_valid_bits_{0};
     u64           retired_value_{0};        // submission whose stamps are below
     cardinal::vector<u64> retired_ticks_;
+    u64           last_wait_ns_{0};
 };
 
 // ---- VulkanDevice async-compute factories ----

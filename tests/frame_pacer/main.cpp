@@ -18,6 +18,8 @@
 // =============================================================================
 
 #include <cardinal/core/sync/frame_pacer.hpp>
+#include <chrono>
+#include <thread>
 #include <cardinal/core/diag/log.hpp>
 
 #include <limits>
@@ -200,6 +202,25 @@ void test_foreground_stable() {
     p->wait_for_next_frame();
     CHECK(p->is_foreground() == true);
     CHECK(p->effective_fps_cap() == 50000.0f);
+
+    // ---- set_rate / context_due: a quota gates its context, never the loop
+    {
+        p->set_limit(0u, co::FrameLimit{0.0f, 0.0f});
+        p->set_limit(1u, co::FrameLimit{0.0f, 0.0f});
+        p->set_limit(2u, co::FrameLimit{0.0f, 0.0f});
+        p->set_rate(7u, 200.0f);                 // 5 ms budget
+        CHECK(p->context_due(7u));               // first ask after a change is due
+        CHECK(!p->context_due(7u));              // same instant: not again
+        std::this_thread::sleep_for(std::chrono::milliseconds(8));
+        CHECK(p->context_due(7u));               // budget elapsed
+        p->wait_for_next_frame();
+        CHECK(p->effective_fps_cap() == 0.0f);   // the rate never paced the loop
+        p->set_rate(7u, 0.0f);
+        CHECK(p->context_due(7u) && p->context_due(7u));   // 0 = always due
+        p->clear_rate(7u);
+        CHECK(p->context_due(7u));               // no quota: always due
+        CHECK(p->context_due(99u));              // never registered: always due
+    }
 }
 
 }  // namespace

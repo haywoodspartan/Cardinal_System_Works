@@ -489,6 +489,13 @@ void RhiBackend::drain_async_() noexcept {
     async_fence_->wait_cpu(async_submitted_value_, 0);
 }
 
+u64 RhiBackend::last_lane_wait_ns() const noexcept {
+    return async_q_ ? async_q_->last_submit_wait_ns() : 0u;
+}
+u64 RhiBackend::last_lane_start_latency_ns() const noexcept {
+    return async_q_ ? async_q_->last_retired_start_latency_ns() : 0u;
+}
+
 void RhiBackend::collect_gpu_times_() noexcept {
     if (async_q_ == nullptr) return;
     u64 value = 0;

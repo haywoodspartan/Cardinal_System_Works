@@ -120,6 +120,9 @@ struct FrameStats {
     f32 phase2_us{0.0f};
     f32 sort_us{0.0f};
     f32 submit_us{0.0f};
+    f32 lane_latency_us{0.0f};   // async lane: submit -> GPU start of the retired submission
+    f32 render_total_us{0.0f};   // whole Pipeline::render() call (bridge-side stopwatch)
+    u32 render_calls{0};         // cumulative render() calls (diff per frame = viewports rendered)
 };
 
 class Pipeline {

@@ -28,6 +28,7 @@
 #include <cardinal/render/gpu_aegis.hpp>
 #include <cardinal/scene/renderer.hpp>
 #include <cardinal/core/diag/log.hpp>
+#include <cardinal/core/clock/stopwatch.hpp>
 #include <cardinal/core/std/cmath.hpp>   // cardinal::sqrt (camera_dir normalize)
 #include <cardinal/core/std/cstring.hpp>
 #include <cardinal/core/std/utility.hpp>
@@ -482,6 +483,13 @@ public:
 
     void render(scene::Scene& scn, float aspect) override {
         if (!renderer_) return;
+        // Whole-call stopwatch (every return path): the stage timers below
+        // must sum to this, or something untimed is eating the frame.
+        struct TotalGuard {
+            cardinal::core::Stopwatch sw;
+            u64& out;
+            ~TotalGuard() { out = sw.elapsed_ns(); }
+        } total_guard{ {}, t_total_ns_ };
         ++frame_counter_;
         retire_old_buffers();
         // Pick up any editor-driven backend change before this frame's
@@ -495,7 +503,12 @@ public:
                           current_mode_ == AegisBackendMode::Cpu ||
                           current_mode_ == AegisBackendMode::ThreadedCpu;
         zero_copy_ok_ = rhi_backend_ && kb(kidx_.gpu_execute) && rhi_backend_->async_lane();
+        // CPU-side cost breakdown of this render (read back through stats():
+        // cull_us = extract, submit_us = config + build, phase1_us = lane
+        // execute, phase2_us = of which slot wait, sort_us = present record).
+        cardinal::core::Stopwatch sw_stage;
         extract_scene(scn, feed);
+        t_extract_ns_ = sw_stage.elapsed_ns(); sw_stage.restart();
         // Push knob/caps changes (precision tier + GPU features) into the
         // runner config — diff-gated, so it only reconfigures on a real change.
         apply_config();
@@ -609,7 +622,12 @@ public:
         } else if (rhi_backend_) {
             rhi_backend_->set_post_record(nullptr, nullptr);
         }
+        t_config_ns_ = sw_stage.elapsed_ns(); sw_stage.restart();
         runner_->execute();
+        t_execute_ns_ = sw_stage.elapsed_ns(); sw_stage.restart();
+        t_wait_ns_    = rhi_backend_ ? rhi_backend_->last_lane_wait_ns() : 0u;
+        t_latency_ns_ = rhi_backend_ ? rhi_backend_->last_lane_start_latency_ns() : 0u;
+        t_present_ns_ = 0;
         if (rhi_backend_) {   // per-pass GPU times of the retired submission
             const auto& gt = rhi_backend_->gpu_pass_times();
             gpu_times_.resize(gt.size());
@@ -626,6 +644,7 @@ public:
         if (present_want && hook_copied_ && real_dispatches_ > 0 && ensure_blit_pso()) {
             sw_->wait_fence(rhi_backend_->async_fence(), rhi_backend_->async_fence_value());
             draw_present(hook_dst_);
+            t_present_ns_ = sw_stage.elapsed_ns();
             ++ring_next_;
             if (!present_logged_) {
                 present_logged_ = true;
@@ -679,6 +698,15 @@ public:
         s.clusters_total = runner_ ? runner_->compile_stats().passes : 0;
         s.clusters_drawn = real_dispatches_;          // passes that really dispatched on the GPU
         s.triangles_drawn = built_tri_count_;         // triangles fed to the AEGIS graph
+        // CPU stage timers of the last render() (see the comment in render()).
+        s.cull_us   = static_cast<f32>(t_extract_ns_) * 1e-3f;
+        s.submit_us = static_cast<f32>(t_config_ns_)  * 1e-3f;
+        s.phase1_us = static_cast<f32>(t_execute_ns_) * 1e-3f;
+        s.phase2_us = static_cast<f32>(t_wait_ns_)    * 1e-3f;
+        s.sort_us   = static_cast<f32>(t_present_ns_) * 1e-3f;
+        s.lane_latency_us = static_cast<f32>(t_latency_ns_) * 1e-3f;
+        s.render_total_us = static_cast<f32>(t_total_ns_) * 1e-3f;
+        s.render_calls    = frame_counter_;
         return s;
     }
 
@@ -1085,6 +1113,9 @@ private:
     cardinal::u32                     real_dispatches_ {0};
     cardinal::vector<GpuPassTime>     gpu_times_;        // last retired async submission
     f32                               gpu_graph_ms_ {0.0f};
+    u64 t_extract_ns_{0}, t_config_ns_{0}, t_execute_ns_{0}, t_wait_ns_{0}, t_present_ns_{0};
+    u64 t_latency_ns_{0};
+    u64 t_total_ns_{0};
     cardinal::u32                     frame_counter_ {0};
     bool                              zero_copy_ok_ {false};        // per frame: GPU lane live
     cardinal::u32                     zero_copy_frames_ {0};
