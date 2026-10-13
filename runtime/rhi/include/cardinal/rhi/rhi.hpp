@@ -55,7 +55,64 @@ enum class Format : u32 {
     B8G8R8A8_UNORM,
     B8G8R8A8_SRGB,
     D32_Float,             // 32-bit float depth — used by depth attachments
+    // ---- cube / 3D / mip slice: single-channel, HDR and block-compressed ----
+    R8_UNORM,
+    R8G8_UNORM,
+    R16_Float,
+    R16G16B16A16_Float,    // HDR colour targets, prefiltered IBL maps
+    R11G11B10_Float,       // packed HDR colour
+    BC1_UNORM, BC1_SRGB,   // 4x4 blocks,  8 B — RGB + 1-bit alpha
+    BC3_UNORM, BC3_SRGB,   // 4x4 blocks, 16 B — RGBA
+    BC4_UNORM,             // 4x4 blocks,  8 B — R (masks, height)
+    BC5_UNORM,             // 4x4 blocks, 16 B — RG (normal maps)
+    BC6H_UF16,             // 4x4 blocks, 16 B — HDR RGB (environment maps)
+    BC7_UNORM, BC7_SRGB,   // 4x4 blocks, 16 B — RGBA, highest quality
 };
+
+// ---- Texel / block layout (host side: uploads, readbacks, the cooker) ----
+constexpr bool format_is_block_compressed(Format f) noexcept {
+    return f >= Format::BC1_UNORM && f <= Format::BC7_SRGB;
+}
+constexpr u32 format_block_dim(Format f) noexcept {
+    return format_is_block_compressed(f) ? 4u : 1u;
+}
+// Bytes per texel (uncompressed) or per 4x4 block (BC).
+constexpr u32 format_block_bytes(Format f) noexcept {
+    switch (f) {
+        case Format::R8_UNORM:                                            return 1;
+        case Format::R8G8_UNORM: case Format::R16_Float:                  return 2;
+        case Format::R32_Float: case Format::R8G8B8A8_UNORM:
+        case Format::R8G8B8A8_SRGB: case Format::B8G8R8A8_UNORM:
+        case Format::B8G8R8A8_SRGB: case Format::D32_Float:
+        case Format::R11G11B10_Float:                                     return 4;
+        case Format::R32G32_Float: case Format::R16G16B16A16_Float:       return 8;
+        case Format::R32G32B32_Float:                                     return 12;
+        case Format::R32G32B32A32_Float:                                  return 16;
+        case Format::BC1_UNORM: case Format::BC1_SRGB: case Format::BC4_UNORM: return 8;
+        case Format::BC3_UNORM: case Format::BC3_SRGB: case Format::BC5_UNORM:
+        case Format::BC6H_UF16: case Format::BC7_UNORM: case Format::BC7_SRGB: return 16;
+        case Format::Unknown: default:                                    return 0;
+    }
+}
+constexpr u32 mip_extent(u32 full, u32 mip) noexcept {
+    const u32 e = full >> mip;
+    return e > 0 ? e : 1u;
+}
+// Tightly packed byte size of one mip of one layer (3D: the whole slab of
+// slices at that mip). Rows are packed; BC rows are packed 4x4 blocks.
+constexpr usize texture_mip_bytes(Format f, u32 w, u32 h, u32 depth, u32 mip) noexcept {
+    const u32 bd = format_block_dim(f);
+    const u32 bw = (mip_extent(w, mip) + bd - 1u) / bd;
+    const u32 bh = (mip_extent(h, mip) + bd - 1u) / bd;
+    return static_cast<usize>(bw) * bh * mip_extent(depth, mip) * format_block_bytes(f);
+}
+constexpr u32 full_mip_count(u32 w, u32 h, u32 depth = 1u) noexcept {
+    u32 m = w > h ? w : h;
+    m = m > depth ? m : depth;
+    u32 n = 1;
+    while (m > 1u) { m >>= 1u; ++n; }
+    return n;
+}
 
 struct VertexAttrib {
     u32    location;   // matches HLSL semantic order via SV_POSITION/COLOR0 etc
@@ -164,11 +221,19 @@ enum class TextureUsage : u32 {
     ColorRenderTarget = 1u << 2,   // future: off-screen colour (post-process)
 };
 
+enum class TextureDimension : u32 { Tex2D = 0, Tex3D, Cube, Tex2DArray };
+
 struct TextureDesc {
     u32    width{0};
     u32    height{0};
     Format format{Format::D32_Float};
     u32    usage{0};               // bitmask of TextureUsage
+    // ---- cube / 3D / array / mips. Defaults keep every existing caller a
+    // 2D single-mip texture.
+    TextureDimension dimension{TextureDimension::Tex2D};
+    u32    depth{1};               // Tex3D: slices
+    u32    array_layers{1};        // Tex2DArray: layers (a Cube is always 6 faces)
+    u32    mip_levels{1};          // 0 = full chain down to 1x1
 };
 
 class Texture {
@@ -180,12 +245,22 @@ public:
     virtual u32    width()  const noexcept = 0;
     virtual u32    height() const noexcept = 0;
     virtual Format format() const noexcept = 0;
+    virtual u32    mip_levels()   const noexcept { return 1; }
+    virtual u32    array_layers() const noexcept { return 1; }   // Cube: 6
+    virtual u32    depth()        const noexcept { return 1; }   // Tex3D: slices
+    virtual TextureDimension dimension() const noexcept { return TextureDimension::Tex2D; }
 
-    // Upload tightly-packed pixel data (size = width*height*bytes_per_pixel,
-    // R8G8B8A8 => 4 bpp) into mip 0. For a Sampled (non-depth) colour texture.
-    // Synchronous: stages, copies, and waits — for one-time asset/texture loads,
-    // not per-frame. Default no-op so backends without image upload are safe.
-    virtual void upload(const void* /*data*/, usize /*size*/, u32 /*mip_level*/ = 0) {}
+    // Upload one mip of one layer: `size` >= texture_mip_bytes(format, width,
+    // height, depth, mip), rows tightly packed (BC: packed 4x4 blocks). `layer`
+    // is the cube face (0..5, +X -X +Y -Y +Z -Z) or the array layer; a 3D
+    // texture uploads its whole slab per mip and ignores it. Non-depth only.
+    // Synchronous: stages, copies and waits — for asset loads, not per-frame.
+    virtual void upload(const void* /*data*/, usize /*size*/,
+                        u32 /*mip_level*/ = 0, u32 /*layer*/ = 0) {}
+    // Read one mip of one layer back with the same packing. Synchronous.
+    // False when the backend cannot (depth textures, bad size).
+    virtual bool download(void* /*out*/, usize /*size*/,
+                          u32 /*mip_level*/ = 0, u32 /*layer*/ = 0) { return false; }
 
 protected:
     Texture() = default;
@@ -258,6 +333,11 @@ enum class PrimitiveTopology : u32 {
     LineStrip,
     PointList,
 };
+
+// Output blending for render target 0. Alpha = classic straight-alpha
+// over, Premultiplied = source already multiplied by its alpha (UI, particles
+// with premultiplied sprites), Additive = light accumulation.
+enum class BlendMode : u32 { Opaque = 0, Alpha, Additive, Premultiplied };
 
 struct PipelineDesc {
     ShaderBlob               vertex_shader;
@@ -339,6 +419,9 @@ struct PipelineDesc {
     //   [[vk::binding(<storage_slots>,0)]] Texture2D shadow : register(t<n>);
     //   SamplerState shadow_smp : register(s0);
     u32                      sampled_texture_slots{0};
+    // ---- Output blending (render target 0) ------------------------------
+    BlendMode                blend{BlendMode::Opaque};
+    u8                       color_write_mask{0xFu};   // bit0 R, bit1 G, bit2 B, bit3 A
 };
 
 // ---------------------------------------------------------------------------

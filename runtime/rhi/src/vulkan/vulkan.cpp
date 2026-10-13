@@ -443,11 +443,11 @@ bool VulkanDevice::init_vma() {
     sci.sType         = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     sci.magFilter     = VK_FILTER_LINEAR;
     sci.minFilter     = VK_FILTER_LINEAR;
-    sci.mipmapMode    = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sci.mipmapMode    = VK_SAMPLER_MIPMAP_MODE_LINEAR;    // trilinear across the mip chain
     sci.addressModeU  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sci.addressModeV  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sci.addressModeW  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sci.maxLod        = 1.0f;
+    sci.maxLod        = VK_LOD_CLAMP_NONE;                // every mip the texture has
     if (vkCreateSampler(device_, &sci, nullptr, &default_sampler_) != VK_SUCCESS) {
         cardinal::log::errorf("rhi/vk", "vkCreateSampler (default) failed");
         return false;
@@ -796,9 +796,41 @@ bool VulkanPipeline::initialize(const PipelineDesc& desc) {
     const bool depth_only = (desc.color_format == Format::Unknown);
 
     VkPipelineColorBlendAttachmentState att{};
-    att.colorWriteMask =
-        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    att.colorWriteMask = 0;
+    if (desc.color_write_mask & 1u) att.colorWriteMask |= VK_COLOR_COMPONENT_R_BIT;
+    if (desc.color_write_mask & 2u) att.colorWriteMask |= VK_COLOR_COMPONENT_G_BIT;
+    if (desc.color_write_mask & 4u) att.colorWriteMask |= VK_COLOR_COMPONENT_B_BIT;
+    if (desc.color_write_mask & 8u) att.colorWriteMask |= VK_COLOR_COMPONENT_A_BIT;
+    att.blendEnable  = (desc.blend != BlendMode::Opaque) ? VK_TRUE : VK_FALSE;
+    att.colorBlendOp = VK_BLEND_OP_ADD;
+    att.alphaBlendOp = VK_BLEND_OP_ADD;
+    switch (desc.blend) {
+        case BlendMode::Alpha:          // straight alpha over
+            att.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            break;
+        case BlendMode::Additive:
+            att.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            break;
+        case BlendMode::Premultiplied:
+            att.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            break;
+        case BlendMode::Opaque:
+        default:
+            att.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            att.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+            att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            break;
+    }
 
     VkPipelineColorBlendStateCreateInfo cb{};
     cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;

@@ -138,6 +138,20 @@ inline VkFormat to_vk_format(Format f) {
         case Format::B8G8R8A8_UNORM:      return VK_FORMAT_B8G8R8A8_UNORM;
         case Format::B8G8R8A8_SRGB:       return VK_FORMAT_B8G8R8A8_SRGB;
         case Format::D32_Float:           return VK_FORMAT_D32_SFLOAT;
+        case Format::R8_UNORM:            return VK_FORMAT_R8_UNORM;
+        case Format::R8G8_UNORM:          return VK_FORMAT_R8G8_UNORM;
+        case Format::R16_Float:           return VK_FORMAT_R16_SFLOAT;
+        case Format::R16G16B16A16_Float:  return VK_FORMAT_R16G16B16A16_SFLOAT;
+        case Format::R11G11B10_Float:     return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+        case Format::BC1_UNORM:           return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+        case Format::BC1_SRGB:            return VK_FORMAT_BC1_RGBA_SRGB_BLOCK;
+        case Format::BC3_UNORM:           return VK_FORMAT_BC3_UNORM_BLOCK;
+        case Format::BC3_SRGB:            return VK_FORMAT_BC3_SRGB_BLOCK;
+        case Format::BC4_UNORM:           return VK_FORMAT_BC4_UNORM_BLOCK;
+        case Format::BC5_UNORM:           return VK_FORMAT_BC5_UNORM_BLOCK;
+        case Format::BC6H_UF16:           return VK_FORMAT_BC6H_UFLOAT_BLOCK;
+        case Format::BC7_UNORM:           return VK_FORMAT_BC7_UNORM_BLOCK;
+        case Format::BC7_SRGB:            return VK_FORMAT_BC7_SRGB_BLOCK;
         case Format::Unknown:
         default:                          return VK_FORMAT_UNDEFINED;
     }
@@ -840,11 +854,19 @@ public:
     }
 
     bool initialize(const TextureDesc& d) {
-        w_ = d.width; h_ = d.height; fmt_ = d.format;
+        w_ = d.width; h_ = d.height; fmt_ = d.format; dim_ = d.dimension;
         if (w_ == 0 || h_ == 0) return false;
-        depth_ = (d.format == Format::D32_Float);
+        if (to_vk_format(fmt_) == VK_FORMAT_UNDEFINED) return false;
+        depth_   = (d.format == Format::D32_Float);
+        is_cube_ = (dim_ == TextureDimension::Cube);
+        slices_  = (dim_ == TextureDimension::Tex3D) ? (d.depth > 0 ? d.depth : 1u) : 1u;
+        layers_  = is_cube_ ? 6u
+                 : (dim_ == TextureDimension::Tex2DArray ? (d.array_layers > 0 ? d.array_layers : 1u) : 1u);
+        const u32 full = full_mip_count(w_, h_, slices_);
+        mips_ = (d.mip_levels == 0 || d.mip_levels > full) ? full : d.mip_levels;
 
-        VkImageUsageFlags usage = 0;
+        // TRANSFER both ways: upload() and download() stage through buffers.
+        VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         if (d.usage & static_cast<u32>(TextureUsage::DepthRenderTarget))
             usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
         if (d.usage & static_cast<u32>(TextureUsage::ColorRenderTarget))
@@ -854,51 +876,45 @@ public:
 
         VkImageCreateInfo ic{};
         ic.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        ic.imageType     = VK_IMAGE_TYPE_2D;
-        ic.format        = to_vk_format(d.format);
-        ic.extent        = { w_, h_, 1 };
-        ic.mipLevels     = 1;
-        ic.arrayLayers   = 1;
+        ic.flags         = is_cube_ ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0u;
+        ic.imageType     = (dim_ == TextureDimension::Tex3D) ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
+        ic.format        = to_vk_format(fmt_);
+        ic.extent        = { w_, h_, slices_ };
+        ic.mipLevels     = mips_;
+        ic.arrayLayers   = layers_;
         ic.samples       = VK_SAMPLE_COUNT_1_BIT;
         ic.tiling        = VK_IMAGE_TILING_OPTIMAL;
         ic.usage         = usage;
         ic.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         ic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO;             // GPU-local
-        if (!vk_check(
-                vmaCreateImage(dev_.allocator_, &ic, &aci,
-                               &image_, &alloc_, nullptr),
-                "vmaCreateImage (texture)")) {
+        if (!vk_check(vmaCreateImage(dev_.allocator_, &ic, &aci, &image_, &alloc_, nullptr),
+                      "vmaCreateImage (texture)")) {
             return false;
         }
 
         VkImageViewCreateInfo iv{};
-        iv.sType                       = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        iv.image                       = image_;
-        iv.viewType                    = VK_IMAGE_VIEW_TYPE_2D;
-        iv.format                      = to_vk_format(d.format);
-        iv.subresourceRange.aspectMask = depth_
-            ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-        iv.subresourceRange.levelCount = 1;
-        iv.subresourceRange.layerCount = 1;
-        if (!vk_check(
-                vkCreateImageView(dev_.device_, &iv, nullptr, &view_),
-                "vkCreateImageView (texture)")) {
+        iv.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        iv.image    = image_;
+        iv.viewType = (dim_ == TextureDimension::Tex3D)      ? VK_IMAGE_VIEW_TYPE_3D
+                    : is_cube_                               ? VK_IMAGE_VIEW_TYPE_CUBE
+                    : (dim_ == TextureDimension::Tex2DArray) ? VK_IMAGE_VIEW_TYPE_2D_ARRAY
+                                                             : VK_IMAGE_VIEW_TYPE_2D;
+        iv.format   = to_vk_format(fmt_);
+        iv.subresourceRange.aspectMask = aspect_();
+        iv.subresourceRange.levelCount = mips_;
+        iv.subresourceRange.layerCount = layers_;
+        if (!vk_check(vkCreateImageView(dev_.device_, &iv, nullptr, &view_),
+                      "vkCreateImageView (texture)")) {
             return false;
         }
-        // A Sampled texture must not be left in UNDEFINED: the pipeline
-        // statically declares its sampler binding, so the main pass binds
-        // + samples it (descriptor imageLayout = SHADER_READ_ONLY_OPTIMAL)
-        // EVERY frame — even when the producing pass is skipped (the
-        // shadow map in wireframe / no-directional-light / shadows-off /
-        // first frames). Sampling an image whose real layout (UNDEFINED)
-        // doesn't match the descriptor is undefined behaviour + a layout
-        // validation error. Put it in the sampleable layout up front; the
-        // shadow pass legitimately cycles it SHADER_READ_ONLY → DEPTH_
-        // ATTACHMENT → SHADER_READ_ONLY when it does run.
-        if (d.usage & static_cast<u32>(TextureUsage::Sampled)) {
+
+        // Colour images start SHADER_READ_ONLY on every subresource, so a
+        // single layout_ describes the whole image and per-subresource
+        // upload / download transitions can bracket from it. Depth stays
+        // UNDEFINED: the swapchain owns its transitions.
+        if (!depth_) {
             OneShotCmd one(dev_);
             VkImageMemoryBarrier b{};
             b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -907,18 +923,12 @@ public:
             b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             b.image               = image_;
-            b.subresourceRange.aspectMask     = depth_
-                ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-            b.subresourceRange.baseMipLevel   = 0;
-            b.subresourceRange.levelCount     = 1;
-            b.subresourceRange.baseArrayLayer = 0;
-            b.subresourceRange.layerCount     = 1;
+            b.subresourceRange    = { aspect_(), 0, mips_, 0, layers_ };
             b.srcAccessMask       = 0;
             b.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
-            vkCmdPipelineBarrier(one.cmd,
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                0, 0, nullptr, 0, nullptr, 1, &b);
+            vkCmdPipelineBarrier(one.cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
             one.submit_and_wait();
             layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         } else {
@@ -927,81 +937,119 @@ public:
         return true;
     }
 
-    // Texture interface.
     u32    width()  const noexcept override { return w_; }
     u32    height() const noexcept override { return h_; }
     Format format() const noexcept override { return fmt_; }
-
-    // Swapchain-facing handles + mutable layout tracker.
+    u32    mip_levels()   const noexcept override { return mips_; }
+    u32    array_layers() const noexcept override { return layers_; }
+    u32    depth()        const noexcept override { return slices_; }
+    TextureDimension dimension() const noexcept override { return dim_; }
     VkImage       image()    const noexcept { return image_; }
     VkImageView   view()     const noexcept { return view_; }
     VkExtent2D    extent()   const noexcept { return { w_, h_ }; }
     bool          is_depth() const noexcept { return depth_; }
     VkImageLayout layout_{VK_IMAGE_LAYOUT_UNDEFINED};
 
-    // Upload tightly-packed RGBA pixels into mip 0 via a host-visible staging
-    // buffer + a one-shot copy (current layout -> TRANSFER_DST -> SHADER_READ).
-    void upload(const void* data, usize size, u32 /*mip*/) override {
-        if (image_ == VK_NULL_HANDLE || data == nullptr || size == 0 || depth_) return;
-
-        VkBufferCreateInfo bci{};
-        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bci.size  = size;
-        bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-        VmaAllocationCreateInfo aci{};
-        aci.usage = VMA_MEMORY_USAGE_AUTO;
-        aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-                  | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        VkBuffer          staging = VK_NULL_HANDLE;
-        VmaAllocation     salloc  = VK_NULL_HANDLE;
-        VmaAllocationInfo sinfo{};
-        if (vmaCreateBuffer(dev_.allocator_, &bci, &aci, &staging, &salloc, &sinfo) != VK_SUCCESS)
-            return;
-        if (sinfo.pMappedData) std::memcpy(sinfo.pMappedData, data, size);
-
+    void upload(const void* data, usize size, u32 mip, u32 layer) override {
+        if (image_ == VK_NULL_HANDLE || data == nullptr || depth_) return;
+        if (mip >= mips_ || layer >= layers_) return;
+        const usize need = texture_mip_bytes(fmt_, w_, h_, slices_, mip);
+        if (need == 0 || size < need) return;
+        VkBuffer staging = VK_NULL_HANDLE; VmaAllocation salloc = VK_NULL_HANDLE; VmaAllocationInfo sinfo{};
+        if (!make_staging_(need, true, staging, salloc, sinfo)) return;
+        if (sinfo.pMappedData) std::memcpy(sinfo.pMappedData, data, need);
         {
             OneShotCmd one(dev_);
-            auto barrier = [&](VkImageLayout o, VkImageLayout n,
-                               VkAccessFlags sa, VkAccessFlags da,
-                               VkPipelineStageFlags ss, VkPipelineStageFlags ds) {
-                VkImageMemoryBarrier b{};
-                b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                b.oldLayout           = o;
-                b.newLayout           = n;
-                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                b.image               = image_;
-                b.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-                b.srcAccessMask       = sa;
-                b.dstAccessMask       = da;
-                vkCmdPipelineBarrier(one.cmd, ss, ds, 0, 0, nullptr, 0, nullptr, 1, &b);
-            };
-            barrier(layout_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    0, VK_ACCESS_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-            VkBufferImageCopy region{};
-            region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-            region.imageExtent      = { w_, h_, 1 };
-            vkCmdCopyBufferToImage(one.cmd, staging, image_,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-            barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+            transition_(one.cmd, mip, layer, layout_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            const VkBufferImageCopy region = copy_region_(mip, layer);
+            vkCmdCopyBufferToImage(one.cmd, staging, image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            transition_(one.cmd, mip, layer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             one.submit_and_wait();
             layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
         vmaDestroyBuffer(dev_.allocator_, staging, salloc);
     }
 
+    bool download(void* out, usize size, u32 mip, u32 layer) override {
+        if (image_ == VK_NULL_HANDLE || out == nullptr || depth_) return false;
+        if (mip >= mips_ || layer >= layers_) return false;
+        const usize need = texture_mip_bytes(fmt_, w_, h_, slices_, mip);
+        if (need == 0 || size < need) return false;
+        VkBuffer staging = VK_NULL_HANDLE; VmaAllocation salloc = VK_NULL_HANDLE; VmaAllocationInfo sinfo{};
+        if (!make_staging_(need, false, staging, salloc, sinfo)) return false;
+        {
+            OneShotCmd one(dev_);
+            transition_(one.cmd, mip, layer, layout_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            const VkBufferImageCopy region = copy_region_(mip, layer);
+            vkCmdCopyImageToBuffer(one.cmd, image_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging, 1, &region);
+            transition_(one.cmd, mip, layer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+            one.submit_and_wait();
+            layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        vmaInvalidateAllocation(dev_.allocator_, salloc, 0, VK_WHOLE_SIZE);
+        const bool ok = sinfo.pMappedData != nullptr;
+        if (ok) std::memcpy(out, sinfo.pMappedData, need);
+        vmaDestroyBuffer(dev_.allocator_, staging, salloc);
+        return ok;
+    }
+
 private:
-    VulkanDevice&  dev_;
-    VkImage        image_{VK_NULL_HANDLE};
-    VkImageView    view_{VK_NULL_HANDLE};
-    VmaAllocation  alloc_{VK_NULL_HANDLE};
-    u32            w_{0}, h_{0};
-    Format         fmt_{Format::D32_Float};
-    bool           depth_{true};
+    VkImageAspectFlags aspect_() const noexcept {
+        return depth_ ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+    }
+    bool make_staging_(usize bytes, bool for_upload, VkBuffer& buf, VmaAllocation& alloc,
+                       VmaAllocationInfo& info) {
+        VkBufferCreateInfo bci{};
+        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.size  = bytes;
+        bci.usage = for_upload ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT : VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO;
+        aci.flags = (for_upload ? VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+                                : VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT)
+                  | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        return vmaCreateBuffer(dev_.allocator_, &bci, &aci, &buf, &alloc, &info) == VK_SUCCESS;
+    }
+    VkBufferImageCopy copy_region_(u32 mip, u32 layer) const noexcept {
+        VkBufferImageCopy region{};             // bufferRowLength 0 = tightly packed
+        region.imageSubresource = { aspect_(), mip, layer, 1 };
+        region.imageExtent      = { mip_extent(w_, mip), mip_extent(h_, mip), mip_extent(slices_, mip) };
+        return region;
+    }
+    void transition_(VkCommandBuffer cmd, u32 mip, u32 layer, VkImageLayout from, VkImageLayout to,
+                     VkAccessFlags sa, VkAccessFlags da, VkPipelineStageFlags ss, VkPipelineStageFlags ds) {
+        VkImageMemoryBarrier b{};
+        b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout           = from;
+        b.newLayout           = to;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image               = image_;
+        b.subresourceRange    = { aspect_(), mip, 1, layer, 1 };
+        b.srcAccessMask       = (from == VK_IMAGE_LAYOUT_UNDEFINED) ? 0u : sa;
+        b.dstAccessMask       = da;
+        vkCmdPipelineBarrier(cmd, ss, ds, 0, 0, nullptr, 0, nullptr, 1, &b);
+    }
+
+    VulkanDevice&    dev_;
+    VkImage          image_{VK_NULL_HANDLE};
+    VkImageView      view_{VK_NULL_HANDLE};
+    VmaAllocation    alloc_{VK_NULL_HANDLE};
+    u32              w_{0}, h_{0}, slices_{1}, layers_{1}, mips_{1};
+    Format           fmt_{Format::D32_Float};
+    TextureDimension dim_{TextureDimension::Tex2D};
+    bool             depth_{true};
+    bool             is_cube_{false};
 };
 // =============================================================================
 // VulkanPipeline

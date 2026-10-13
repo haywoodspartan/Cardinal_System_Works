@@ -89,12 +89,31 @@ inline const char* hr_str(HRESULT hr) {
 inline DXGI_FORMAT to_dxgi(Format f) {
     switch (f) {
         case Format::R8G8B8A8_UNORM:    return DXGI_FORMAT_R8G8B8A8_UNORM;
+        case Format::R8G8B8A8_SRGB:     return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
         case Format::B8G8R8A8_UNORM:    return DXGI_FORMAT_B8G8R8A8_UNORM;
+        case Format::B8G8R8A8_SRGB:     return DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+        case Format::R32_Float:         return DXGI_FORMAT_R32_FLOAT;
         case Format::R32G32_Float:      return DXGI_FORMAT_R32G32_FLOAT;
         case Format::R32G32B32_Float:   return DXGI_FORMAT_R32G32B32_FLOAT;
         case Format::R32G32B32A32_Float:return DXGI_FORMAT_R32G32B32A32_FLOAT;
+        case Format::D32_Float:         return DXGI_FORMAT_D32_FLOAT;
+        case Format::R8_UNORM:          return DXGI_FORMAT_R8_UNORM;
+        case Format::R8G8_UNORM:        return DXGI_FORMAT_R8G8_UNORM;
+        case Format::R16_Float:         return DXGI_FORMAT_R16_FLOAT;
+        case Format::R16G16B16A16_Float:return DXGI_FORMAT_R16G16B16A16_FLOAT;
+        case Format::R11G11B10_Float:   return DXGI_FORMAT_R11G11B10_FLOAT;
+        case Format::BC1_UNORM:         return DXGI_FORMAT_BC1_UNORM;
+        case Format::BC1_SRGB:          return DXGI_FORMAT_BC1_UNORM_SRGB;
+        case Format::BC3_UNORM:         return DXGI_FORMAT_BC3_UNORM;
+        case Format::BC3_SRGB:          return DXGI_FORMAT_BC3_UNORM_SRGB;
+        case Format::BC4_UNORM:         return DXGI_FORMAT_BC4_UNORM;
+        case Format::BC5_UNORM:         return DXGI_FORMAT_BC5_UNORM;
+        case Format::BC6H_UF16:         return DXGI_FORMAT_BC6H_UF16;
+        case Format::BC7_UNORM:         return DXGI_FORMAT_BC7_UNORM;
+        case Format::BC7_SRGB:          return DXGI_FORMAT_BC7_UNORM_SRGB;
+        case Format::Unknown:
+        default:                        return DXGI_FORMAT_UNKNOWN;
     }
-    return DXGI_FORMAT_UNKNOWN;
 }
 
 inline D3D12_PRIMITIVE_TOPOLOGY_TYPE to_d3d_topology_type(PrimitiveTopology t) {
@@ -212,39 +231,39 @@ private:
 class D3D12Texture final : public Texture {
 public:
     bool initialize(ID3D12Device* dev, const TextureDesc& d) {
-        w_ = d.width; h_ = d.height; fmt_ = d.format;
+        w_ = d.width; h_ = d.height; fmt_ = d.format; dim_ = d.dimension;
         if (w_ == 0 || h_ == 0) return false;
         const bool is_depth = (d.format == Format::D32_Float);
-        // ALLOW_DEPTH_STENCIL — and therefore the DEPTH_WRITE create state
-        // + an optimised depth clear value — is keyed on the *usage*, not
-        // the format. A plain Sampled colour texture has neither flag, and
-        // D3D12 rejects DEPTH_WRITE (or a clear value) on a resource that
-        // lacks ALLOW_DEPTH_STENCIL with E_INVALIDARG. Depth targets must
-        // still start in DEPTH_WRITE so the shadow-pass barrier cycle
-        // (begin/end_shadow_pass) stays balanced.
         const bool is_depth_target =
             (d.usage & static_cast<u32>(TextureUsage::DepthRenderTarget)) != 0u;
+        const DXGI_FORMAT dxgi = is_depth ? DXGI_FORMAT_R32_TYPELESS : to_dxgi(fmt_);
+        if (dxgi == DXGI_FORMAT_UNKNOWN) return false;
+        is_cube_ = (dim_ == TextureDimension::Cube);
+        slices_  = (dim_ == TextureDimension::Tex3D) ? (d.depth > 0 ? d.depth : 1u) : 1u;
+        layers_  = is_cube_ ? 6u
+                 : (dim_ == TextureDimension::Tex2DArray ? (d.array_layers > 0 ? d.array_layers : 1u) : 1u);
+        const u32 full = full_mip_count(w_, h_, slices_);
+        mips_ = (d.mip_levels == 0 || d.mip_levels > full) ? full : d.mip_levels;
 
         D3D12_HEAP_PROPERTIES heap{};
         heap.Type = D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC rd{};
-        rd.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        rd.Dimension        = (dim_ == TextureDimension::Tex3D) ? D3D12_RESOURCE_DIMENSION_TEXTURE3D
+                                                                : D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         rd.Width            = w_;
         rd.Height           = h_;
-        rd.DepthOrArraySize = 1;
-        rd.MipLevels        = 1;
-        rd.Format           = is_depth ? DXGI_FORMAT_R32_TYPELESS
-                                       : DXGI_FORMAT_R8G8B8A8_UNORM;
+        rd.DepthOrArraySize = static_cast<UINT16>((dim_ == TextureDimension::Tex3D) ? slices_ : layers_);
+        rd.MipLevels        = static_cast<UINT16>(mips_);
+        rd.Format           = dxgi;
         rd.SampleDesc.Count = 1;
         rd.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        rd.Flags            = (d.usage & static_cast<u32>(TextureUsage::DepthRenderTarget))
-                            ? D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL
-                            : D3D12_RESOURCE_FLAG_NONE;
-
+        rd.Flags            = is_depth_target ? D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL
+                                              : D3D12_RESOURCE_FLAG_NONE;
+        if (d.usage & static_cast<u32>(TextureUsage::ColorRenderTarget))
+            rd.Flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
         D3D12_CLEAR_VALUE cv{};
         cv.Format             = DXGI_FORMAT_D32_FLOAT;
         cv.DepthStencil.Depth = 1.0f;
-
         state_ = is_depth_target ? D3D12_RESOURCE_STATE_DEPTH_WRITE
                                  : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         if (FAILED(dev->CreateCommittedResource(
@@ -253,8 +272,7 @@ public:
             cardinal::log::errorf("rhi/d3d12", "create_texture resource failed");
             return false;
         }
-
-        if (d.usage & static_cast<u32>(TextureUsage::DepthRenderTarget)) {
+        if (is_depth_target) {
             D3D12_DESCRIPTOR_HEAP_DESC dh{};
             dh.NumDescriptors = 1;
             dh.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
@@ -273,14 +291,7 @@ public:
             sh.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
             if (FAILED(dev->CreateDescriptorHeap(&sh, IID_PPV_ARGS(&srv_heap_))))
                 return false;
-            D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
-            srv.Format                  = is_depth ? DXGI_FORMAT_R32_FLOAT
-                                                   : DXGI_FORMAT_R8G8B8A8_UNORM;
-            srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
-            srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            srv.Texture2D.MipLevels     = 1;
-            dev->CreateShaderResourceView(res_.Get(), &srv,
-                srv_heap_->GetCPUDescriptorHandleForHeapStart());
+            create_srv_in(dev, srv_heap_->GetCPUDescriptorHandleForHeapStart());
         }
         return true;
     }
@@ -288,21 +299,40 @@ public:
     u32    width()  const noexcept override { return w_; }
     u32    height() const noexcept override { return h_; }
     Format format() const noexcept override { return fmt_; }
+    u32    mip_levels()   const noexcept override { return mips_; }
+    u32    array_layers() const noexcept override { return layers_; }
+    u32    depth()        const noexcept override { return slices_; }
+    TextureDimension dimension() const noexcept override { return dim_; }
 
     ID3D12Resource*       resource() const noexcept { return res_.Get(); }
     ID3D12DescriptorHeap* srv_heap() const noexcept { return srv_heap_.Get(); }
 
-    // Write this texture's SRV into an arbitrary (shader-visible) descriptor
-    // slot — lets the swapchain pack several sampled textures into one shared
-    // heap for a multi-SRV descriptor table. Same view the 1-entry srv_heap_
-    // carries (depth -> R32_FLOAT, colour -> R8G8B8A8_UNORM).
+    // Shader-resource view for this texture's shape, written at `dest`
+    // (its own heap at creation; a pipeline's descriptor table at bind).
     void create_srv_in(ID3D12Device* dev, D3D12_CPU_DESCRIPTOR_HANDLE dest) const {
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
-        srv.Format                  = (fmt_ == Format::D32_Float) ? DXGI_FORMAT_R32_FLOAT
-                                                                  : DXGI_FORMAT_R8G8B8A8_UNORM;
-        srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Format                  = (fmt_ == Format::D32_Float) ? DXGI_FORMAT_R32_FLOAT : to_dxgi(fmt_);
         srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srv.Texture2D.MipLevels     = 1;
+        switch (dim_) {
+            case TextureDimension::Tex3D:
+                srv.ViewDimension       = D3D12_SRV_DIMENSION_TEXTURE3D;
+                srv.Texture3D.MipLevels = mips_;
+                break;
+            case TextureDimension::Cube:
+                srv.ViewDimension         = D3D12_SRV_DIMENSION_TEXTURECUBE;
+                srv.TextureCube.MipLevels = mips_;
+                break;
+            case TextureDimension::Tex2DArray:
+                srv.ViewDimension              = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+                srv.Texture2DArray.MipLevels   = mips_;
+                srv.Texture2DArray.ArraySize   = layers_;
+                break;
+            case TextureDimension::Tex2D:
+            default:
+                srv.ViewDimension       = D3D12_SRV_DIMENSION_TEXTURE2D;
+                srv.Texture2D.MipLevels = mips_;
+                break;
+        }
         dev->CreateShaderResourceView(res_.Get(), &srv, dest);
     }
     D3D12_CPU_DESCRIPTOR_HANDLE dsv_handle() const noexcept {
@@ -312,101 +342,156 @@ public:
         return srv_heap_->GetGPUDescriptorHandleForHeapStart();
     }
     D3D12_RESOURCE_STATES state_{D3D12_RESOURCE_STATE_DEPTH_WRITE};
-
-    // Set by create_texture so upload() can stage + copy on a one-shot list.
     void set_upload_context(ID3D12Device* dev, ID3D12CommandQueue* q) noexcept {
         device_ = dev; queue_ = q;
     }
 
-    // Upload tightly-packed RGBA pixels into mip 0: stage in an UPLOAD-heap
-    // buffer (respecting the 256-byte aligned row pitch), CopyTextureRegion on a
-    // one-shot DIRECT list, and barrier back to PIXEL_SHADER_RESOURCE.
-    void upload(const void* data, usize size, u32 /*mip*/) override {
-        if (!res_ || !device_ || !queue_ || data == nullptr || size == 0) return;
+    void upload(const void* data, usize size, u32 mip, u32 layer) override {
+        if (!res_ || !device_ || !queue_ || data == nullptr) return;
+        if (fmt_ == Format::D32_Float || mip >= mips_ || layer >= layers_) return;
+        const usize need = texture_mip_bytes(fmt_, w_, h_, slices_, mip);
+        if (need == 0 || size < need) return;
+        const UINT sub = subresource_(mip, layer);
         const D3D12_RESOURCE_DESC rd = res_->GetDesc();
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};
-        UINT   numRows  = 0;
-        UINT64 rowBytes = 0, total = 0;
-        device_->GetCopyableFootprints(&rd, 0, 1, 0, &fp, &numRows, &rowBytes, &total);
+        UINT numRows = 0; UINT64 rowBytes = 0, total = 0;
+        device_->GetCopyableFootprints(&rd, sub, 1, 0, &fp, &numRows, &rowBytes, &total);
+        ComPtr<ID3D12Resource> staging = make_staging_(total, true);
+        if (!staging) return;
+        u8* mapped = nullptr;
+        if (FAILED(staging->Map(0, nullptr, reinterpret_cast<void**>(&mapped)))) return;
+        // Tight source rows (rowBytes each, slices back to back) into the
+        // 256-byte-pitched footprint, slice by slice.
+        const u8* src = static_cast<const u8*>(data);
+        for (UINT z = 0; z < fp.Footprint.Depth; ++z)
+            for (UINT y = 0; y < numRows; ++y)
+                std::memcpy(mapped + fp.Offset + (static_cast<UINT64>(z) * numRows + y) * fp.Footprint.RowPitch,
+                            src + (static_cast<UINT64>(z) * numRows + y) * rowBytes,
+                            static_cast<size_t>(rowBytes));
+        staging->Unmap(0, nullptr);
+        run_oneshot_([&](ID3D12GraphicsCommandList* cl) {
+            barrier_(cl, state_, D3D12_RESOURCE_STATE_COPY_DEST);
+            D3D12_TEXTURE_COPY_LOCATION dst{};
+            dst.pResource        = res_.Get();
+            dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            dst.SubresourceIndex = sub;
+            D3D12_TEXTURE_COPY_LOCATION srcLoc{};
+            srcLoc.pResource       = staging.Get();
+            srcLoc.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            srcLoc.PlacedFootprint = fp;
+            cl->CopyTextureRegion(&dst, 0, 0, 0, &srcLoc, nullptr);
+            barrier_(cl, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        });
+        state_ = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    }
 
-        D3D12_HEAP_PROPERTIES up{}; up.Type = D3D12_HEAP_TYPE_UPLOAD;
+    bool download(void* out, usize size, u32 mip, u32 layer) override {
+        if (!res_ || !device_ || !queue_ || out == nullptr) return false;
+        if (fmt_ == Format::D32_Float || mip >= mips_ || layer >= layers_) return false;
+        const usize need = texture_mip_bytes(fmt_, w_, h_, slices_, mip);
+        if (need == 0 || size < need) return false;
+        const UINT sub = subresource_(mip, layer);
+        const D3D12_RESOURCE_DESC rd = res_->GetDesc();
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};
+        UINT numRows = 0; UINT64 rowBytes = 0, total = 0;
+        device_->GetCopyableFootprints(&rd, sub, 1, 0, &fp, &numRows, &rowBytes, &total);
+        ComPtr<ID3D12Resource> readback = make_staging_(total, false);
+        if (!readback) return false;
+        if (!run_oneshot_([&](ID3D12GraphicsCommandList* cl) {
+                barrier_(cl, state_, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                D3D12_TEXTURE_COPY_LOCATION srcLoc{};
+                srcLoc.pResource        = res_.Get();
+                srcLoc.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                srcLoc.SubresourceIndex = sub;
+                D3D12_TEXTURE_COPY_LOCATION dst{};
+                dst.pResource       = readback.Get();
+                dst.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+                dst.PlacedFootprint = fp;
+                cl->CopyTextureRegion(&dst, 0, 0, 0, &srcLoc, nullptr);
+                barrier_(cl, D3D12_RESOURCE_STATE_COPY_SOURCE, state_);
+            })) return false;
+        u8* mapped = nullptr;
+        if (FAILED(readback->Map(0, nullptr, reinterpret_cast<void**>(&mapped)))) return false;
+        u8* dstp = static_cast<u8*>(out);
+        for (UINT z = 0; z < fp.Footprint.Depth; ++z)
+            for (UINT y = 0; y < numRows; ++y)
+                std::memcpy(dstp + (static_cast<UINT64>(z) * numRows + y) * rowBytes,
+                            mapped + fp.Offset + (static_cast<UINT64>(z) * numRows + y) * fp.Footprint.RowPitch,
+                            static_cast<size_t>(rowBytes));
+        D3D12_RANGE none{ 0, 0 };
+        readback->Unmap(0, &none);
+        return true;
+    }
+
+private:
+    UINT subresource_(u32 mip, u32 layer) const noexcept {
+        // D3D12CalcSubresource(mip, layer, plane 0): 3D textures have one
+        // subresource per mip (slices live inside it).
+        return (dim_ == TextureDimension::Tex3D) ? mip : (mip + layer * mips_);
+    }
+    ComPtr<ID3D12Resource> make_staging_(UINT64 bytes, bool for_upload) {
+        D3D12_HEAP_PROPERTIES hp{};
+        hp.Type = for_upload ? D3D12_HEAP_TYPE_UPLOAD : D3D12_HEAP_TYPE_READBACK;
         D3D12_RESOURCE_DESC bd{};
         bd.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        bd.Width            = total;
+        bd.Width            = bytes;
         bd.Height           = 1;
         bd.DepthOrArraySize = 1;
         bd.MipLevels        = 1;
         bd.Format           = DXGI_FORMAT_UNKNOWN;
         bd.SampleDesc.Count = 1;
         bd.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        ComPtr<ID3D12Resource> staging;
+        ComPtr<ID3D12Resource> r;
         if (FAILED(device_->CreateCommittedResource(
-                &up, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ,
-                nullptr, IID_PPV_ARGS(&staging)))) return;
-
-        u8* mapped = nullptr;
-        if (FAILED(staging->Map(0, nullptr, reinterpret_cast<void**>(&mapped)))) return;
-        const u8*    src      = static_cast<const u8*>(data);
-        const UINT64 srcPitch = rowBytes;                            // tight source row
-        for (UINT y = 0; y < numRows; ++y)
-            std::memcpy(mapped + fp.Offset + y * fp.Footprint.RowPitch,
-                        src + y * srcPitch, static_cast<size_t>(srcPitch));
-        staging->Unmap(0, nullptr);
-
+                &hp, D3D12_HEAP_FLAG_NONE, &bd,
+                for_upload ? D3D12_RESOURCE_STATE_GENERIC_READ : D3D12_RESOURCE_STATE_COPY_DEST,
+                nullptr, IID_PPV_ARGS(&r)))) return nullptr;
+        return r;
+    }
+    void barrier_(ID3D12GraphicsCommandList* cl, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
+        if (from == to) return;
+        D3D12_RESOURCE_BARRIER rb{};
+        rb.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        rb.Transition.pResource   = res_.Get();
+        rb.Transition.StateBefore = from;
+        rb.Transition.StateAfter  = to;
+        rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        cl->ResourceBarrier(1, &rb);
+    }
+    // Record `fn` on a fresh DIRECT list, execute on the graphics queue, wait.
+    template <class F>
+    bool run_oneshot_(F&& fn) {
         ComPtr<ID3D12CommandAllocator>    alloc;
         ComPtr<ID3D12GraphicsCommandList> cl;
-        if (FAILED(device_->CreateCommandAllocator(
-                D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&alloc)))) return;
-        if (FAILED(device_->CreateCommandList(
-                0, D3D12_COMMAND_LIST_TYPE_DIRECT, alloc.Get(), nullptr,
-                IID_PPV_ARGS(&cl)))) return;
-
-        auto bar = [&](D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
-            D3D12_RESOURCE_BARRIER rb{};
-            rb.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            rb.Transition.pResource   = res_.Get();
-            rb.Transition.StateBefore = from;
-            rb.Transition.StateAfter  = to;
-            rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            cl->ResourceBarrier(1, &rb);
-        };
-        bar(state_, D3D12_RESOURCE_STATE_COPY_DEST);
-        D3D12_TEXTURE_COPY_LOCATION dst{};
-        dst.pResource        = res_.Get();
-        dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        dst.SubresourceIndex = 0;
-        D3D12_TEXTURE_COPY_LOCATION srcLoc{};
-        srcLoc.pResource       = staging.Get();
-        srcLoc.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        srcLoc.PlacedFootprint = fp;
-        cl->CopyTextureRegion(&dst, 0, 0, 0, &srcLoc, nullptr);
-        bar(D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        state_ = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        cl->Close();
-
+        if (FAILED(device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&alloc)))) return false;
+        if (FAILED(device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, alloc.Get(), nullptr,
+                                              IID_PPV_ARGS(&cl)))) return false;
+        fn(cl.Get());
+        if (FAILED(cl->Close())) return false;
         ID3D12CommandList* lists[] = { cl.Get() };
         queue_->ExecuteCommandLists(1, lists);
         ComPtr<ID3D12Fence> fence;
-        if (FAILED(device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return;
+        if (FAILED(device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return false;
         queue_->Signal(fence.Get(), 1);
         if (fence->GetCompletedValue() < 1) {
             HANDLE ev = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-            if (ev) {
-                fence->SetEventOnCompletion(1, ev);
-                WaitForSingleObject(ev, INFINITE);
-                CloseHandle(ev);
-            }
+            if (!ev) return false;
+            fence->SetEventOnCompletion(1, ev);
+            WaitForSingleObject(ev, INFINITE);
+            CloseHandle(ev);
         }
+        return true;
     }
 
-private:
     ComPtr<ID3D12Resource>       res_;
     ComPtr<ID3D12DescriptorHeap> dsv_heap_;
     ComPtr<ID3D12DescriptorHeap> srv_heap_;
     ID3D12Device*                device_{nullptr};
     ID3D12CommandQueue*          queue_{nullptr};
-    u32    w_{0}, h_{0};
-    Format fmt_{Format::D32_Float};
+    u32              w_{0}, h_{0}, slices_{1}, layers_{1}, mips_{1};
+    Format           fmt_{Format::D32_Float};
+    TextureDimension dim_{TextureDimension::Tex2D};
+    bool             is_cube_{false};
 };
 
 // -----------------------------------------------------------------------------

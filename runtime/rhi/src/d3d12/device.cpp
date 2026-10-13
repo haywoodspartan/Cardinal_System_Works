@@ -593,7 +593,32 @@ cardinal::unique_ptr<Pipeline> D3D12Device::create_pipeline(const PipelineDesc& 
     psoDesc.RasterizerState.FrontCounterClockwise = TRUE;
     psoDesc.RasterizerState.DepthClipEnable       = TRUE;
 
-    psoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    {
+        auto& rt = psoDesc.BlendState.RenderTarget[0];
+        rt.RenderTargetWriteMask = static_cast<UINT8>(desc.color_write_mask & 0xFu);
+        rt.BlendEnable  = (desc.blend != BlendMode::Opaque) ? TRUE : FALSE;
+        rt.BlendOp      = D3D12_BLEND_OP_ADD;
+        rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        switch (desc.blend) {
+            case BlendMode::Alpha:          // straight alpha over
+                rt.SrcBlend = D3D12_BLEND_SRC_ALPHA; rt.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+                rt.SrcBlendAlpha = D3D12_BLEND_ONE;  rt.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+                break;
+            case BlendMode::Additive:
+                rt.SrcBlend = D3D12_BLEND_ONE;       rt.DestBlend = D3D12_BLEND_ONE;
+                rt.SrcBlendAlpha = D3D12_BLEND_ONE;  rt.DestBlendAlpha = D3D12_BLEND_ONE;
+                break;
+            case BlendMode::Premultiplied:
+                rt.SrcBlend = D3D12_BLEND_ONE;       rt.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+                rt.SrcBlendAlpha = D3D12_BLEND_ONE;  rt.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+                break;
+            case BlendMode::Opaque:
+            default:
+                rt.SrcBlend = D3D12_BLEND_ONE;       rt.DestBlend = D3D12_BLEND_ZERO;
+                rt.SrcBlendAlpha = D3D12_BLEND_ONE;  rt.DestBlendAlpha = D3D12_BLEND_ZERO;
+                break;
+        }
+    }
 
     // Depth — opt-in per pipeline. When the caller sets depth_format we
     // tell the PSO about the matching DSV format and enable depth test +

@@ -40,7 +40,7 @@ Paths are relative to the repo root. Audited 2026-10-13 against commit
 | D3D12, Vulkan | HAVE | `runtime/rhi/src/{d3d12,vulkan}` | Graphics + compute + async compute, both. No DX11 (not planned). |
 | Day-night cycle | HAVE | `runtime/sky`, `runtime/ui/src/panels/rendering/sky_panel.cpp` | Keyframed sun + ambient into `LightSet`; gradient sky, no physical atmosphere. |
 | Volumetric clouds | MISSING | — | |
-| Environment maps / cube maps / IBL | MISSING | `runtime/scene/src/renderer.cpp` | "no cubemap / IBL yet"; `rhi::TextureDesc` is 2D, one mip; `ibl_*` knobs knob-only. |
+| Environment maps / cube maps / IBL | PARTIAL (RHI ready, no IBL yet) | `runtime/rhi/include/cardinal/rhi/rhi.hpp`, `tests/gpu_textures` | RHI textures are now 2D / 3D / cube / 2D-array with full mip chains, BC1-7 + BC6H + half-float formats, per-mip/per-layer upload and readback on both backends (round-trip pinned). No prefiltered environment, BRDF LUT or renderer sampling of a cube yet; `ibl_*` knobs still knob-only. |
 | Eye shader | MISSING | — | |
 | Real-time GI | PARTIAL | `runtime/render/src/gpu_ssgi.cpp` | One-bounce screen-space diffuse (GPU, wired). No world-space GI, no glossy indirect. |
 | Probe / radiance cache | PARTIAL (CPU, unwired) | `runtime/lighting/src/gpu_radiance_cache.cpp` | `RadianceCachePass`. |
@@ -59,7 +59,7 @@ Paths are relative to the repo root. Audited 2026-10-13 against commit
 | Reflection (SSR, planar, cube) | MISSING | `renderer.cpp` | Hemisphere specular only; `ssr_enabled` knob-only. |
 | Volumetric lighting / fog | PARTIAL (CPU-only, unwired) | `gpu_postvol.cpp` | Froxel `VolumetricFogPass`, unshadowed. |
 | Per-pixel lighting, Cook-Torrance PBR | HAVE | `renderer.cpp`, `VBufResolvePass` | GGX in both paths. |
-| Order-independent transparency | MISSING | `runtime/rhi/include/cardinal/rhi/rhi.hpp` | `PipelineDesc` has no blend state. |
+| Order-independent transparency | MISSING (blend state now exists) | `runtime/rhi/include/cardinal/rhi/rhi.hpp` | `PipelineDesc::blend` (Opaque / Alpha / Additive / Premultiplied) + `color_write_mask` on both backends; no translucency pass or OIT uses it yet, and it is unverified visually (no headless graphics test). |
 | Subsurface scattering (skin, cloth) | MISSING | — | |
 | Mesh LOD / meshlet LOD / virtual geometry | PARTIAL | `runtime/edit`, `gpu_aegis.cpp`, `runtime/vgeom` | `ScreenSpaceErrorPass` writes `out_lod` nothing reads; vgeom cluster DAG used by the forward path only. |
 | glTF / GLB | HAVE | `runtime/import/src/import_gltf.cpp` | Meshes, PBR, nodes, skins; no animations. |
@@ -70,7 +70,7 @@ Paths are relative to the repo root. Audited 2026-10-13 against commit
 | Shadow mapping + PCF | HAVE (forward path only) | `renderer.cpp` | 2048 D32 directional, 3×3 PCF. AEGIS has no shadows; no cascades, no point/spot shadows. |
 | Skin shader | MISSING | — | Roadmap line only. |
 | Tessellation | PARTIAL | `runtime/render/include/cardinal/render/tess.hpp`, `geo.cpp` | Factor maths + CPU PN-triangle subdivide; no hull/domain stages (mesh shaders are the intended route). |
-| 2K/4K/8K textures | PARTIAL | `runtime/cook/src/cook.cpp` | Up to 16384², RGBA8, mip 0 only; BCn size maths only. |
+| 2K/4K/8K textures | PARTIAL | `runtime/cook/src/cook.cpp` | Up to 16384²; the cooker still emits RGBA8 mip 0 only — the RHI now accepts BCn and full mip chains, so the cooker's mip generation + BC encoding is the next piece. |
 | Virtual texturing | PARTIAL | `runtime/vt` | CPU page table + tile cache + async decode; no GPU indirection/feedback. |
 | Colour grading, DoF | PARTIAL (CPU, unwired) | `runtime/render/src/gpu_color.cpp` | 3D LUT grading; CoC-driven DoF. |
 | Bloom, chromatic aberration, vignette, grain | PARTIAL (CPU, unwired) | `runtime/postfx/src/postfx.cpp` | |
@@ -88,9 +88,12 @@ GPU-first rule (every pass lands on AEGIS through RHI + HLSL, never as a CPU
 stub) and the AEGIS cost discipline (per-pass GPU timestamps are the gate:
 a slice reports its ms before it merges).
 
-1. **RHI texture + blend foundations.** Cube / 3D / array textures with mip
-   chains, BC formats in the cooker, a blend state in `PipelineDesc`, FP16
-   swapchain. Everything in rows 4-7 below needs at least one of these.
+1. **RHI texture + blend foundations.** DONE 2026-10-13 for the RHI half:
+   cube / 3D / array textures with mip chains, BC and half-float formats,
+   per-subresource upload + readback, `PipelineDesc` blend state, trilinear
+   default samplers. Still open here: compute-lane texture SRV/UAV binding
+   (needed to prefilter IBL on the GPU), BC encoding + mip generation in the
+   cooker, FP16 swapchain.
 2. **Lighting stack on AEGIS.** Cascaded shadow maps feeding
    `VBufResolvePass` (AEGIS currently has no shadows), IBL (prefiltered
    environment + BRDF LUT), SSR. Then TAA on the GPU (motion vectors are
