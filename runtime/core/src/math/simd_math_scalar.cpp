@@ -146,7 +146,7 @@ void frustum_cull_spheres(u8* out_bits, const f32* planes,
     usize i = 0;
     for (; i + 8 <= count; i += 8) {
         u8 byte = 0;
-        for (int b = 0; b < 8; ++b) {
+        for (usize b = 0; b < 8; ++b) {
             if (test_one(i + b)) byte |= static_cast<u8>(1u << b);
         }
         out_bits[i >> 3] = byte;
@@ -237,7 +237,7 @@ void frustum_cull_aabbs(u8* out_bits, const f32* planes,
     usize i = 0;
     for (; i + 8 <= count; i += 8) {
         u8 byte = 0;
-        for (int b = 0; b < 8; ++b) if (test_one(i + b)) byte |= static_cast<u8>(1u << b);
+        for (usize b = 0; b < 8; ++b) if (test_one(i + b)) byte |= static_cast<u8>(1u << b);
         out_bits[i >> 3] = byte;
     }
     if (i < count) {

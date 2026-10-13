@@ -58,8 +58,14 @@ jobs:
       - name: Configure
         run: cmake --preset windows-msvc-release
 
+      # A second pass after a failure relinks only what failed: the runner
+      # intermittently holds a freshly linked test .exe open ("The process
+      # cannot access the file because it is being used by another process",
+      # Defender scanning it) while the next link of the same target runs.
       - name: Build
-        run: cmake --build --preset windows-msvc-release
+        run: |
+          cmake --build --preset windows-msvc-release
+          if ($LASTEXITCODE -ne 0) { cmake --build --preset windows-msvc-release }
 
       - name: Test (CTest)
         run: ctest --test-dir build/windows-msvc-release --output-on-failure --parallel 4

@@ -163,10 +163,11 @@ Frustum Frustum::from_view_proj(const Mat4& m) noexcept {
     // here means M.m[col][row]).
     auto mk = [&](i32 sgn, i32 row) {
         Plane p{};
-        p.normal.x = m.m[0][3] + sgn * m.m[0][row];
-        p.normal.y = m.m[1][3] + sgn * m.m[1][row];
-        p.normal.z = m.m[2][3] + sgn * m.m[2][row];
-        p.d        = m.m[3][3] + sgn * m.m[3][row];
+        const f32 s = static_cast<f32>(sgn);
+        p.normal.x = m.m[0][3] + s * m.m[0][row];
+        p.normal.y = m.m[1][3] + s * m.m[1][row];
+        p.normal.z = m.m[2][3] + s * m.m[2][row];
+        p.d        = m.m[3][3] + s * m.m[3][row];
         return normalise(p);
     };
     f.planes[0] = mk(+1, 0);  // left
@@ -436,8 +437,8 @@ i32 AabbBvh::build_recursive_(u32 begin, u32 end) {
     const i32 my = static_cast<i32>(nodes_.size() - 1);
     const i32 lc = build_recursive_(begin, mid);
     const i32 rc = build_recursive_(mid, end);
-    nodes_[my].left_child  = lc;
-    nodes_[my].right_child = rc;
+    nodes_[static_cast<usize>(my)].left_child  = lc;
+    nodes_[static_cast<usize>(my)].right_child = rc;
     return my;
 }
 
@@ -471,7 +472,7 @@ void traverse_iter(const std::vector<AabbBvh::Node>& nodes,
     while (!stack.empty()) {
         const i32 idx = stack.back();
         stack.pop_back();
-        const auto& n = nodes[idx];
+        const auto& n = nodes[static_cast<usize>(idx)];
         if (!test_box(n.box)) continue;
         if (n.is_leaf()) {
             for (u32 i = 0; i < n.prim_count; ++i) {
@@ -509,7 +510,7 @@ u32 AabbBvh::traverse_ray(const Ray& r, f32 max_t,
     while (!stack.empty()) {
         const i32 idx = stack.back();
         stack.pop_back();
-        const auto& n = nodes_[idx];
+        const auto& n = nodes_[static_cast<usize>(idx)];
         const Hit h = raycast_aabb(r, n.box, max_t);
         if (!h.hit) continue;
         if (n.is_leaf()) {
