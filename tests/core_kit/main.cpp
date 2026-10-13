@@ -501,7 +501,12 @@ void test_thread() {
     TestThread t;
     CHECK(!t.is_started());
     CHECK(t.start(/*stack_size=*/0) == 0);
-    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    // The worker ticks every 5 ms, but a loaded CI runner (4 vCPUs, four
+    // suites in parallel) can take longer than that to schedule a brand-new
+    // thread at all. Poll up to 2 s: the check still proves the thread ran,
+    // it just stops depending on the scheduler's mood.
+    for (int spin = 0; spin < 400 && t.counter_.load() == 0; ++spin)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     CHECK(t.counter_.load() > 0);
     CHECK(t.stop() == 0);
     CHECK(t.wait(500) == 0);

@@ -12,7 +12,10 @@
         "lua",
         {
             "name": "imgui",
-            "features": ["docking-experimental", "win32-binding"]
+            "features": [
+                "docking-experimental",
+                { "name": "win32-binding", "platform": "windows" }
+            ]
         },
         "imguizmo"
     ]
