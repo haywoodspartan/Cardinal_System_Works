@@ -13,6 +13,7 @@
 
 #include <cardinal/core/sync/jobs.hpp>
 #include <cardinal/core/sync/topology.hpp>
+#include <chrono>
 #include <cardinal/core/diag/log.hpp>
 
 #include <atomic>
@@ -232,6 +233,99 @@ int main() {
         CHECK(ok);
         CHECK(tot == 256);
         js0.shutdown();
+    }
+
+    // ---- T8..T11 run on a fresh system: `js` above is already shut down.
+    {
+        cc::JobSystem js2;
+        js2.start(full);
+        // ---- T8: deep stack use on a fiber. Every frame here is > 4 KB, so
+        //      MSVC emits __chkstk probes, and 48 levels use ~400 KB of the
+        //      1 MiB fiber stack. On the hand-rolled stacks this only works
+        //      because the switch installs the fiber's TIB stack bounds. ------
+        {
+            struct Deep {
+                static int recurse(int depth) noexcept {
+                    volatile char pad[8192];
+                    pad[0] = static_cast<char>(depth);
+                    pad[8191] = 1;
+                    if (depth == 0) return static_cast<int>(pad[0]) + static_cast<int>(pad[8191]);
+                    return recurse(depth - 1) + 1;
+                }
+            };
+            struct Ctx { int out{0}; };
+            Ctx cx;
+            cc::Counter* cnt = js2.acquire_counter();
+            js2.submit([](void* p) { static_cast<Ctx*>(p)->out = Deep::recurse(48); }, &cx, cnt);
+            js2.wait(cnt);
+            js2.release(cnt);
+            CHECK(cx.out == 49);
+        }
+
+        // ---- T9: a C++ exception thrown and caught INSIDE a job unwinds on the
+        //      fiber stack (the unwinder validates frames against the TIB
+        //      bounds the switch maintains). ----------------------------------
+        {
+            struct Ctx { int caught{0}; };
+            Ctx cx;
+            cc::Counter* cnt = js2.acquire_counter();
+            js2.submit([](void* p) {
+                try { throw 42; } catch (int v) { static_cast<Ctx*>(p)->caught = v; }
+            }, &cx, cnt);
+            js2.wait(cnt);
+            js2.release(cnt);
+            CHECK(cx.caught == 42);
+        }
+
+        // ---- T10: floating-point state survives a park / resume. A job holds a
+        //      running sum (the compiler is free to keep it in xmm6..15 across
+        //      the call), parks on children, resumes and finishes the sum; the
+        //      result must equal the single-threaded sequence bit for bit. ----
+        {
+            struct Ctx { cc::JobSystem* js; double sum; bool ok; };
+            Ctx cx{&js2, 0.0, false};
+            cc::Counter* cnt = js2.acquire_counter();
+            js2.submit([](void* p) {
+                auto* c = static_cast<Ctx*>(p);
+                double acc = 0.0;
+                for (int i = 1; i <= 1000; ++i) acc += 1.0 / static_cast<double>(i);
+                const double before = acc;
+                bool ok = false; int tot = 0;
+                run_batch(*c->js, 64, 256, ok, &tot);     // children spin -> a real park
+                for (int i = 1001; i <= 2000; ++i) acc += 1.0 / static_cast<double>(i);
+                c->sum = acc;
+                c->ok  = ok && tot == 64 && acc > before;
+            }, &cx, cnt);
+            js2.wait(cnt);
+            js2.release(cnt);
+            double expect = 0.0;
+            for (int i = 1; i <= 2000; ++i) expect += 1.0 / static_cast<double>(i);
+            CHECK(cx.ok);
+            CHECK(cx.sum == expect);
+        }
+
+        // ---- T11: park / resume round trip cost (informational) --------------
+        {
+            struct Ctx { cc::JobSystem* js; int rounds; };
+            Ctx cx{&js2, 4000};
+            const auto t0 = std::chrono::steady_clock::now();
+            cc::Counter* cnt = js2.acquire_counter();
+            js2.submit([](void* p) {
+                auto* c = static_cast<Ctx*>(p);
+                for (int r = 0; r < c->rounds; ++r) {
+                    cc::Counter* k = c->js->acquire_counter();
+                    c->js->submit([](void*) {}, nullptr, k);   // empty child
+                    c->js->wait(k);                            // park, child runs, resume
+                    c->js->release(k);
+                }
+            }, &cx, cnt);
+            js2.wait(cnt);
+            js2.release(cnt);
+            const auto t1 = std::chrono::steady_clock::now();
+            const double ns = std::chrono::duration<double, std::nano>(t1 - t0).count() / cx.rounds;
+            cardinal::log::infof("jobstest", "park/resume round trip (submit child + wait + resume): %.0f ns", ns);
+        }
+        js2.shutdown();
     }
 
     if (g_fail == 0) {

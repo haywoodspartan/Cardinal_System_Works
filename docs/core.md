@@ -161,6 +161,20 @@ Process-wide wiring without globals:
 
 ---
 
+**Job-system fibers switch through `sync/fiber.hpp`.** `cardinal::fiber` is a
+hand-rolled x86-64 context switch (MASM on MSVC, GAS on Linux) that saves
+exactly the ABI's callee-saved state — RBX RBP RSI RDI R12-R15, XMM6-15,
+MXCSR and the x87 control word on Windows, plus the three NT_TIB stack-bound
+fields so stack probes, SEH / C++ unwinding and minidumps treat the fiber
+stack as a real stack — and runs on guard-paged stacks it allocates itself.
+It replaced Win32 fibers / ucontext, which let jobs.cpp build at `/O2`
+again. The rule the job system follows is that a fiber never derives its
+worker from a `thread_local`: idle fiber slots are handed to whichever worker
+asks, so a fiber's saved stack resumes on a different thread than it last
+ran on, and a TLS address the compiler kept live across the switch would be
+the wrong thread's. `tests/fiber` pins the primitive (about 10 ns per
+switch); `tests/jobs` pins deep stacks, exceptions and FP state on fibers.
+
 ## 9. Diagnostics + errors
 
 - **`diag/`** — logging (`cardinal::log::infof/warnf/errorf`, category-tagged)

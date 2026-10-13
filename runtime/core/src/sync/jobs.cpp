@@ -1,16 +1,16 @@
 #include <cardinal/core/sync/jobs.hpp>
 
 #include <cardinal/core/sync/affinity.hpp>
+#include <cardinal/core/sync/fiber.hpp>
 #include <cardinal/core/platform.hpp>
 
-// Compiler optimization is disabled for this TU because MSVC's /O2 (and
-// likely clang-cl's equivalent) cache memory accesses across SwitchToFiber
-// in ways that break fiber resumption. Atomic members + acquire/release
-// pairing was insufficient. The proper fix is to replace Win32 fibers with
-// a hand-rolled x86_64 fiber switch (in a .asm file) — at that point the
-// compiler can see exactly what's clobbered and we can re-enable /O2.
-// See feedback_msvc_fiber_optimizer.md in agent memory for context.
-#if CARDINAL_COMPILER_MSVC
+// Fiber switching goes through cardinal::fiber (sync/fiber.hpp): a hand-rolled
+// x86-64 context switch the compiler sees as an ordinary call, so this TU
+// builds at /O2 again. Non-x64 targets fall back to Win32 fibers / ucontext
+// and keep optimization off there — MSVC's /O2 broke resumption across
+// SwitchToFiber in a way that was never pinned down (see
+// feedback_msvc_fiber_optimizer.md in agent memory).
+#if CARDINAL_COMPILER_MSVC && !CARDINAL_FIBER_ASM
     #pragma optimize("", off)
 #endif
 
@@ -20,12 +20,15 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <mutex>
 #include <random>
 #include <thread>
 #include <vector>
 
-#if CARDINAL_PLATFORM_WINDOWS
+#if CARDINAL_FIBER_ASM
+    // cardinal::fiber owns the stacks and the switch — no OS fiber headers.
+#elif CARDINAL_PLATFORM_WINDOWS
     #include <Windows.h>
 #elif CARDINAL_PLATFORM_LINUX
     #include <ucontext.h>
@@ -146,15 +149,23 @@ struct Job {
 };
 
 struct FiberSlot {
-    void* native{nullptr};                   // LPVOID on Win, ucontext_t* on Linux
-#if CARDINAL_PLATFORM_LINUX
+    void* native{nullptr};                   // non-null once created (stack base on the asm path,
+                                             // LPVOID on Win32 fibers, ucontext_t* on ucontext)
+#if CARDINAL_FIBER_ASM
+    fiber::Context ctx;                      // saved register frame while suspended
+    fiber::Stack   stack;                    // guard-paged fiber stack
+#elif CARDINAL_PLATFORM_LINUX
     std::vector<u8> stack;
 #endif
     // Atomic because they cross SwitchToFiber boundaries. Acquire/release
     // pairing forces the compiler to emit real memory ops the optimizer
     // cannot cache or reorder across the (opaque-to-it) fiber switch.
     std::atomic<Job*> current_job{nullptr};
+    // Written by the scheduler on the thread about to switch into this
+    // fiber, read by the fiber after the switch (same thread, program
+    // order) — the fiber's only source of "which worker am I on".
     u32 home_worker{0};
+    void* owner{nullptr};                    // JobSystem::Impl* (private type — cast inside Impl)
     FiberSlot* park_next{nullptr};
     Counter* parked_on{nullptr};
     std::atomic<bool> in_use{false};         // pool ownership
@@ -162,7 +173,10 @@ struct FiberSlot {
 
 struct alignas(cl) Worker {
     std::thread thread;
-    void* scheduler_fiber{nullptr};
+    void* scheduler_fiber{nullptr};          // OS-fiber path only
+#if CARDINAL_FIBER_ASM
+    fiber::Context sched_ctx;                // the worker thread's own stack, saved while a fiber runs
+#endif
     // Atomic for the same reason as FiberSlot::current_job above.
     std::atomic<FiberSlot*> current_fiber{nullptr};
     std::atomic<FiberSlot*> releasing_fiber{nullptr};
@@ -275,16 +289,50 @@ struct JobSystem::Impl {
     }
 
     // ------------------------------------------------------------------------
-    // Fiber primitives — Win32 fibers / Linux ucontext.
+    // Fiber primitives.
     //
-    // ucontext is the slow-but-correct path on Linux. It performs a syscall
-    // (rt_sigprocmask) on every switch. TODO(perf): replace with hand-rolled
-    // x86_64 SysV ABI assembly fiber switch (~30 lines, ~10x faster) once we
-    // have a Linux dev machine to validate against.
+    // x86-64: cardinal::fiber — hand-rolled context switch + guard-paged
+    // stacks (sync/fiber.hpp). The switch is an opaque call: everything live
+    // is either in a callee-saved register it preserves or in memory the
+    // compiler reloads afterwards, so no optimization barrier is needed.
+    //
+    // Other targets: Win32 fibers / Linux ucontext (ucontext pays an
+    // rt_sigprocmask syscall per switch).
     // ------------------------------------------------------------------------
-#if CARDINAL_PLATFORM_WINDOWS
+#if CARDINAL_FIBER_ASM
+    static void fiber_entry(void* arg) noexcept {
+        auto* me = static_cast<FiberSlot*>(arg);
+        static_cast<Impl*>(me->owner)->fiber_main_loop(me);   // never returns
+    }
+    static void switch_to(fiber::Context* from, fiber::Context* to) noexcept {
+        fiber::switch_context(*from, *to);
+    }
+    static void to_fiber(Worker& self, FiberSlot* f) noexcept { switch_to(&self.sched_ctx, &f->ctx); }
+    static void to_scheduler(Worker& self, FiberSlot* me) noexcept { switch_to(&me->ctx, &self.sched_ctx); }
+
+    void create_fiber_native(FiberSlot* slot) {
+        slot->stack = fiber::allocate_stack(fiber_stack_bytes);
+        if (slot->stack.base == nullptr) {
+            // 1 MiB + a guard page failed to map: the process is out of
+            // address space or commit; nothing sensible continues from here.
+            std::abort();
+        }
+        slot->owner = this;
+        fiber::make_context(slot->ctx, slot->stack, &fiber_entry, slot);
+        slot->native = slot->stack.base;
+    }
+    void destroy_fiber_native(FiberSlot* slot) {
+        fiber::free_stack(slot->stack);
+        slot->ctx    = fiber::Context{};
+        slot->native = nullptr;
+    }
+
+#elif CARDINAL_PLATFORM_WINDOWS
+    static void to_fiber(Worker& self, FiberSlot* f) noexcept { switch_to(self.scheduler_fiber, f->native); }
+    static void to_scheduler(Worker& self, FiberSlot* me) noexcept { switch_to(me->native, self.scheduler_fiber); }
     static void CALLBACK fiber_proc_win(LPVOID arg) {
-        static_cast<Impl*>(arg)->fiber_main_loop();
+        auto* me = static_cast<FiberSlot*>(arg);
+        static_cast<Impl*>(me->owner)->fiber_main_loop(me);
     }
     // Compiler barrier on both sides — SwitchToFiber is opaque to the
     // optimizer, which would otherwise cache loads/stores across it. The
@@ -296,7 +344,8 @@ struct JobSystem::Impl {
     }
 
     void create_fiber_native(FiberSlot* slot) {
-        slot->native = CreateFiber(fiber_stack_bytes, fiber_proc_win, this);
+        slot->owner  = this;
+        slot->native = CreateFiber(fiber_stack_bytes, fiber_proc_win, slot);
         assert(slot->native != nullptr && "CreateFiber failed");
     }
     void destroy_fiber_native(FiberSlot* slot) {
@@ -305,10 +354,13 @@ struct JobSystem::Impl {
     }
 
 #elif CARDINAL_PLATFORM_LINUX
+    static void to_fiber(Worker& self, FiberSlot* f) noexcept { switch_to(self.scheduler_fiber, f->native); }
+    static void to_scheduler(Worker& self, FiberSlot* me) noexcept { switch_to(me->native, self.scheduler_fiber); }
     static void linux_fiber_entry(int hi, int lo) {
         std::uintptr_t p = (static_cast<std::uintptr_t>(static_cast<u32>(hi)) << 32)
                          |  static_cast<std::uintptr_t>(static_cast<u32>(lo));
-        reinterpret_cast<Impl*>(p)->fiber_main_loop();
+        auto* me = reinterpret_cast<FiberSlot*>(p);
+        static_cast<Impl*>(me->owner)->fiber_main_loop(me);
     }
     static void switch_to(void* from, void* to) noexcept {
         std::atomic_signal_fence(std::memory_order_seq_cst);
@@ -323,7 +375,8 @@ struct JobSystem::Impl {
         ctx->uc_stack.ss_sp   = slot->stack.data();
         ctx->uc_stack.ss_size = slot->stack.size();
         ctx->uc_link          = nullptr;
-        std::uintptr_t p = reinterpret_cast<std::uintptr_t>(this);
+        slot->owner = this;
+        std::uintptr_t p = reinterpret_cast<std::uintptr_t>(slot);
         makecontext(ctx,
             reinterpret_cast<void (*)()>(linux_fiber_entry), 2,
             static_cast<int>(p >> 32),
@@ -411,7 +464,7 @@ struct JobSystem::Impl {
         fiber->current_job.store(job, std::memory_order_relaxed);
         fiber->home_worker = self.worker_id;
         self.current_fiber.store(fiber, std::memory_order_release);
-        switch_to(self.scheduler_fiber, fiber->native);
+        to_fiber(self, fiber);
     }
 
     void worker_main(u32 worker_id) {
@@ -421,7 +474,10 @@ struct JobSystem::Impl {
         Worker& self = workers[worker_id];
         affinity::pin_current_thread(self.logical_core);
 
-#if CARDINAL_PLATFORM_WINDOWS
+#if CARDINAL_FIBER_ASM
+        // The worker's own stack is the scheduler context; the first switch
+        // into a fiber records it. Nothing to convert.
+#elif CARDINAL_PLATFORM_WINDOWS
         self.scheduler_fiber = ConvertThreadToFiber(nullptr);
 #elif CARDINAL_PLATFORM_LINUX
         self.scheduler_fiber = new ucontext_t{};
@@ -444,7 +500,7 @@ struct JobSystem::Impl {
                 // Release-publish current_fiber so the resumed fiber's
                 // acquire load on resume sees us as its assignment.
                 self.current_fiber.store(resumed, std::memory_order_release);
-                switch_to(self.scheduler_fiber, resumed->native);
+                to_fiber(self, resumed);
                 continue;
             }
 
@@ -481,7 +537,9 @@ struct JobSystem::Impl {
             }
         }
 
-#if CARDINAL_PLATFORM_WINDOWS
+#if CARDINAL_FIBER_ASM
+        // Nothing to undo — fibers are torn down with the pool.
+#elif CARDINAL_PLATFORM_WINDOWS
         ConvertFiberToThread();
 #elif CARDINAL_PLATFORM_LINUX
         delete static_cast<ucontext_t*>(self.scheduler_fiber);
@@ -491,14 +549,20 @@ struct JobSystem::Impl {
 
     // Each job fiber loops forever — runs one job, switches back, gets a new
     // job, runs it, etc. Fibers stay resident; only their assignment changes.
-    void fiber_main_loop() {
+    //
+    // `me` is this fiber for its whole life. The worker comes from
+    // me->home_worker, which the scheduler writes on the thread that is
+    // about to switch into us (same thread, program order, the switch is an
+    // opaque call) — NOT from a thread_local. An idle fiber slot is handed
+    // out by acquire_fiber() to whichever worker asks, so a fiber's saved
+    // stack routinely resumes on a different thread than it last ran on;
+    // a thread_local read here is wrong after that migration whenever the
+    // compiler keeps the TLS block address live across the switch, which
+    // /O2 is entitled to do. That was the failure the old
+    // `#pragma optimize("", off)` on this TU was hiding.
+    void fiber_main_loop(FiberSlot* me) {
         while (true) {
-            u32 wid = tls_worker_id;
-            Worker& self = workers[wid];
-            // Acquire load pairs with the release store made by the scheduler
-            // when it published us as the current fiber — guarantees we see
-            // the current_job write that preceded it.
-            FiberSlot* me = self.current_fiber.load(std::memory_order_acquire);
+            Worker& self = workers[me->home_worker];
             Job* job = me->current_job.load(std::memory_order_relaxed);
 
             if (job != nullptr) {
@@ -521,7 +585,7 @@ struct JobSystem::Impl {
             me->current_job.store(nullptr, std::memory_order_relaxed);
             self.releasing_fiber.store(me,    std::memory_order_release);
             self.current_fiber.store(nullptr, std::memory_order_relaxed);
-            switch_to(me->native, self.scheduler_fiber);
+            to_scheduler(self, me);
             // Resumed: scheduler set self.current_fiber = us and assigned a
             // new job (or we're being woken from a park; current_job may be
             // null for that path — see wait()).
@@ -640,6 +704,15 @@ Counter* JobSystem::submit(JobFunc fn, void* user_data, Counter* counter) {
     } else {
         // External — round-robin to a worker's inbox.
         const u32 n = static_cast<u32>(impl_->workers.size());
+        if (n == 0) {
+            // Not started (or already shut down): there is no worker to hand
+            // this to, so run it right here rather than divide by zero on
+            // the round-robin. The counter still balances for wait().
+            fn(user_data);
+            impl_->release_job(j);
+            c->value.fetch_sub(1, std::memory_order_acq_rel);
+            return c;
+        }
         u32 target = impl_->external_rr.fetch_add(1, std::memory_order_relaxed) % n;
         {
             std::lock_guard<std::mutex> lg(impl_->workers[target].inbox_mtx);
@@ -672,7 +745,7 @@ void JobSystem::wait(Counter* counter) {
             impl_->wake_counter_waiters(counter);
         }
 
-        impl_->switch_to(me->native, self.scheduler_fiber);
+        Impl::to_scheduler(self, me);
         // Resumed by scheduler from ready_fibers.
         return;
     }

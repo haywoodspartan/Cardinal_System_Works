@@ -62,6 +62,7 @@ set(CARDINAL_CORE_HEADERS
     # autoscaler + frame_pacer + lock/access/worker_thread.
     # ---------------------------------------------------------------------
     include/cardinal/core/sync/jobs.hpp
+    include/cardinal/core/sync/fiber.hpp
     include/cardinal/core/sync/async.hpp
     include/cardinal/core/sync/affinity.hpp
     include/cardinal/core/sync/topology.hpp
@@ -155,6 +156,7 @@ set(CARDINAL_CORE_SOURCES
     src/math/simd_math_dispatch.cpp
     # sync/
     src/sync/jobs.cpp
+    src/sync/fiber.cpp                      # user-level context switch (x86-64 asm below)
     src/sync/async.cpp
     src/sync/topology.cpp
     src/sync/frame_pacer.cpp
@@ -193,6 +195,22 @@ elseif(UNIX AND NOT APPLE)
         src/sync/affinity_linux.cpp
         src/budget/memory_linux.cpp
     )
+endif()
+
+# ---- Hand-rolled x86-64 context switch for the job system ------------------
+# jobs.cpp switches fibers through cardinal::fiber (sync/fiber.hpp), whose
+# register save / restore lives in assembly so the compiler sees an ordinary
+# call and /O2 is safe on that TU (the Win32-fiber path had optimization
+# forced off). x86-64 only: the ARM64 presets keep the OS primitives
+# (CARDINAL_FIBER_ASM == 0 in fiber.hpp) and the pragma with them.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|amd64|x86_64|X86_64")
+    if(WIN32)
+        enable_language(ASM_MASM)
+        list(APPEND CARDINAL_CORE_SOURCES src/sync/fiber_switch_x64_win.asm)
+    elseif(UNIX AND NOT APPLE)
+        enable_language(ASM)
+        list(APPEND CARDINAL_CORE_SOURCES src/sync/fiber_switch_x64_sysv.S)
+    endif()
 endif()
 
 add_library(cardinal_core STATIC ${CARDINAL_CORE_SOURCES} ${CARDINAL_CORE_HEADERS})

@@ -52,18 +52,10 @@ target_compile_definitions(cardinal_compile_flags INTERFACE
 )
 
 if(MSVC)
+    # C++ only: the interface target also feeds ml64 (the job system's
+    # fiber switch is MASM), which rejects /permissive-, /Zc:*, /EHsc ...
     target_compile_options(cardinal_compile_flags INTERFACE
-        /W4 /WX
-        /permissive-
-        /Zc:__cplusplus
-        /Zc:preprocessor
-        /Zc:inline
-        /Zc:throwingNew
-        /EHsc
-        /MP
-        /utf-8
-        /diagnostics:caret
-        /wd4324  # structure padded due to alignas
+        $<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/permissive-;/Zc:__cplusplus;/Zc:preprocessor;/Zc:inline;/Zc:throwingNew;/EHsc;/MP;/utf-8;/diagnostics:caret;/wd4324>
     )
     target_compile_definitions(cardinal_compile_flags INTERFACE
         _CRT_SECURE_NO_WARNINGS
@@ -73,24 +65,23 @@ if(MSVC)
         UNICODE _UNICODE
     )
     target_compile_options(cardinal_compile_flags INTERFACE
-        $<$<CONFIG:Release>:/O2 /Oi /Ot /GL>
-        $<$<CONFIG:RelWithDebInfo>:/O2 /Oi /Ot /Zi>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:/O2;/Oi;/Ot;/GL>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:RelWithDebInfo>>:/O2;/Oi;/Ot;/Zi>
     )
+    # No embedded manifests: nothing here needs one, and skipping mt.exe
+    # removes the CI flake where the manifest tool hits "Access is denied"
+    # on a freshly linked binary that Defender is still scanning.
     target_link_options(cardinal_compile_flags INTERFACE
+        /MANIFEST:NO
         $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>
     )
 else()
+    # C++ only (the fiber switch is a GAS .S file assembled through the
+    # same driver; -W* options are meaningless or "unused" errors there).
     target_compile_options(cardinal_compile_flags INTERFACE
-        -Wall -Wextra -Wpedantic -Werror
-        -Wshadow
-        -Wcast-align
-        -Wnull-dereference
-        -Wdouble-promotion
-        -Wformat=2
-        -Wconversion
-        -Wsign-conversion
-        $<$<CONFIG:Release>:-O3 -ffunction-sections -fdata-sections>
-        $<$<CONFIG:RelWithDebInfo>:-O2 -g -ffunction-sections -fdata-sections>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Wpedantic;-Werror;-Wshadow;-Wcast-align;-Wnull-dereference;-Wdouble-promotion;-Wformat=2;-Wconversion;-Wsign-conversion>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3;-ffunction-sections;-fdata-sections>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:RelWithDebInfo>>:-O2;-g;-ffunction-sections;-fdata-sections>
     )
     target_link_options(cardinal_compile_flags INTERFACE
         $<$<CONFIG:Release>:-Wl,--gc-sections>
