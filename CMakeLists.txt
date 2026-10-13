@@ -71,9 +71,15 @@ if(MSVC)
     # No embedded manifests: nothing here needs one, and skipping mt.exe
     # removes the CI flake where the manifest tool hits "Access is denied"
     # on a freshly linked binary that Defender is still scanning.
+    # /DEBUG is pinned for the same reason NDEBUG is above: the cached
+    # CMAKE_EXE_LINKER_FLAGS_<CONFIG> can be blank, and then RelWithDebInfo
+    # objects compiled with /Zi are linked WITHOUT a PDB — every crash report
+    # from a release binary resolved against a stale .pdb and printed noise.
+    # /OPT:REF /OPT:ICF are spelled out so /DEBUG does not switch them off.
     target_link_options(cardinal_compile_flags INTERFACE
         /MANIFEST:NO
-        $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>
+        $<$<NOT:$<CONFIG:Debug>>:/DEBUG:FULL /INCREMENTAL:NO /OPT:REF /OPT:ICF>
+        $<$<CONFIG:Release>:/LTCG>
     )
 else()
     # C++ only (the fiber switch is a GAS .S file assembled through the

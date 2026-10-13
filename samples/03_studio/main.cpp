@@ -96,12 +96,14 @@ namespace cardinal::input {
 #include <imgui.h>
 #include <imgui_internal.h>     // for DockBuilder
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -281,6 +283,13 @@ static bool has_arg(int argc, char** argv, const char* flag) {
     for (int i = 1; i < argc; ++i)
         if (std::strcmp(argv[i], flag) == 0) return true;
     return false;
+}
+// "--name=123" -> 123; absent or malformed -> dflt.
+static long arg_value(int argc, char** argv, const char* prefix, long dflt) {
+    const std::size_t n = std::strlen(prefix);
+    for (int i = 1; i < argc; ++i)
+        if (std::strncmp(argv[i], prefix, n) == 0) return std::strtol(argv[i] + n, nullptr, 10);
+    return dflt;
 }
 static const char* backend_label(rhi::Backend b) {
     switch (b) {
@@ -495,6 +504,9 @@ int main(int argc, char** argv) {
         cardinal::core::FrameLimit main_limit{};
         main_limit.fps_foreground = 0.0f;     // 0 = uncapped
         main_limit.fps_background = 30.0f;
+        // --profile-seconds: the benchmark must not depend on which window
+        // has focus, so the background cap is lifted for the run.
+        if (arg_value(argc, argv, "--profile-seconds=", 0) > 0) main_limit.fps_background = 0.0f;
         pacer->set_limit(cardinal::core::kPaceMainLoop, main_limit);
     }
     // ----- Variable viewport set -----------------------------------------
@@ -619,7 +631,10 @@ int main(int argc, char** argv) {
     // If Reflex is supported on this adapter, default to ON (no boost, no
     // cap) — gives latency benefits without fighting any user-set FPS cap.
     if (sw->reflex_supported()) {
-        sw->set_reflex_mode(rhi::Swapchain::ReflexMode::On);
+        // --no-reflex: Reflex trades frames-in-flight for input latency; for a
+        // throughput benchmark (--profile-seconds) that is the wrong trade.
+        if (!has_arg(argc, argv, "--no-reflex"))
+            sw->set_reflex_mode(rhi::Swapchain::ReflexMode::On);
         clog::infof("sample", "Reflex: ON by default (no boost, no FPS cap)");
     } else {
         clog::infof("sample", "Reflex: not supported on this adapter");
@@ -673,6 +688,15 @@ int main(int argc, char** argv) {
     bool first_layout   = true;
     bool relayout_request = false;   // View/Settings > Reset window layout
     bool want_quit      = false;
+    // --profile-seconds=N: run N seconds, then log frame-time percentiles +
+    // the per-phase FrameScope averages and quit. Frames are recorded after a
+    // 120-frame warm-up (shader compiles, first-touch allocations).
+    const long  profile_seconds = arg_value(argc, argv, "--profile-seconds=", 0);
+    std::vector<float> profile_ms;
+    cardinal::u32      profile_warmup = 0;
+    if (profile_seconds > 0) profile_ms.reserve(200000);
+    struct PhaseAcc { double total_ms{0.0}; double max_ms{0.0}; cardinal::u32 frames{0}; };
+    std::vector<std::pair<std::string, PhaseAcc>> profile_phases;   // exact, whole run
     u32  selected_id    = 0;
     bool open_terrain_modal = false;
     bool open_save_as_modal = false;
@@ -1051,12 +1075,12 @@ int main(int argc, char** argv) {
     world_desc.render_distance_y  = 4;
     wld::WorldGrid     world_grid(world_desc);
     wld::WorldStreamer world_streamer(world_grid);
-    world_streamer.set_on_load([](wld::ChunkCoord c) {
-        clog::infof("world", "load chunk (%d, %d, %d)", c.x, c.y, c.z);
-    });
-    world_streamer.set_on_unload([](wld::ChunkCoord c) {
-        clog::infof("world", "unload chunk (%d, %d, %d)", c.x, c.y, c.z);
-    });
+    // Per-chunk log lines were ~25k/s across a chunk-boundary crossing (one
+    // fprintf + fflush each): counted here, summarised once a second below.
+    static cardinal::u32 ws_loads = 0, ws_unloads = 0;
+    world_streamer.set_on_load([](wld::ChunkCoord) { ++ws_loads; });
+    world_streamer.set_on_unload([](wld::ChunkCoord) { ++ws_unloads; });
+    auto ws_log_t = std::chrono::steady_clock::now();
     // World-panel mirror state.
     ui::Studio::WorldPanelState wpanel{};
     wpanel.chunk_size          = world_grid.chunk_size();
@@ -2143,6 +2167,16 @@ int main(int argc, char** argv) {
                 static_cast<cardinal::usize>(applied));
         }
     }
+    if (profile_seconds > 0) {
+        // The saved cvars just re-applied last session's caps over the
+        // --profile-seconds override at startup; a benchmark is uncapped
+        // whatever the settings file says and whichever window has focus.
+        auto lim = pacer->limit(cardinal::core::kPaceMainLoop);
+        lim.fps_foreground = 0.0f;
+        lim.fps_background = 0.0f;
+        pacer->set_limit(cardinal::core::kPaceMainLoop, lim);
+        clog::infof("studio", "profile: frame caps lifted (settings file ignored for the run)");
+    }
 
     // AEGIS Pipeline 2.0 is the default on every start (RhiBackend-driven via
     // its own knob default). render::Registry already defaults to it, but the
@@ -2172,8 +2206,11 @@ int main(int argc, char** argv) {
         // Reflex sleep MUST come first — it's where the driver decides
         // when to begin the new frame for minimum input-to-photon
         // latency. Pacer's own sleep follows (honours user-side caps).
-        sw->reflex_sleep();
-        pacer->wait_for_next_frame();
+        {
+            cardinal::async::FrameScope _ph_pace("Frame Pacing");
+            sw->reflex_sleep();
+            pacer->wait_for_next_frame();
+        }
 
         // SimulationStart marker — must be the first marker of each
         // frame. InputSample is between Sim Start/End and brackets
@@ -2181,7 +2218,10 @@ int main(int argc, char** argv) {
         // command submission.
         sw->reflex_marker(rhi::Swapchain::ReflexMarker::SimulationStart, reflex_frame);
 
-        window->poll_events();
+        {
+            cardinal::async::FrameScope _ph_ev("Poll Events");
+            window->poll_events();
+        }
         sw->reflex_marker(rhi::Swapchain::ReflexMarker::InputSample, reflex_frame);
 
         // ---- Resize handling -----------------------------------------------
@@ -2211,6 +2251,24 @@ int main(int argc, char** argv) {
         const float dt     = (dt_raw > 0.1f) ? 0.1f : (dt_raw < 0.0f ? 0.0f : dt_raw);
         prev_t = now;
         last_frame_ms_for_profiler = dt * 1000.0f;
+        if (profile_seconds > 0) {
+            if (profile_warmup < 120) ++profile_warmup;
+            else {
+                profile_ms.push_back(dt_raw * 1000.0f);
+                // Exact per-phase sums for the previous frame (frame_advance()
+                // just published it): the panel's EMA only reflects the tail.
+                for (const auto& ps : cardinal::async::phase_samples()) {
+                    PhaseAcc* acc = nullptr;
+                    for (auto& kv : profile_phases) if (kv.first == ps.name) { acc = &kv.second; break; }
+                    if (!acc) { profile_phases.emplace_back(ps.name, PhaseAcc{}); acc = &profile_phases.back().second; }
+                    acc->total_ms += ps.ms_last;
+                    if (ps.ms_last > acc->max_ms) acc->max_ms = ps.ms_last;
+                    ++acc->frames;
+                }
+            }
+            if (std::chrono::duration<double>(now - t0).count() >= static_cast<double>(profile_seconds))
+                want_quit = true;
+        }
         // End-of-frame tick for cardinal::async — rolls per-phase running
         // totals into the published snapshot the Profiler panel reads.
         cardinal::async::frame_advance();
@@ -2253,6 +2311,8 @@ int main(int argc, char** argv) {
         // Reset the per-viewport captured matrices each frame (entries stay
         // invalid for viewports not rendered below, so a pick over them is
         // rejected rather than silently using a stale/foreign projection).
+        std::optional<cardinal::async::FrameScope> ph_;
+        ph_.emplace("Scene Render");
         rendered_vp.assign(viewports.size(), cardinal::cmd::ViewProj{});
         // XSI current-pass preview: apply the pass's partition overrides
         // (visibility / matte tint) around the whole viewport render, then
@@ -2306,6 +2366,7 @@ int main(int argc, char** argv) {
                     { scene.camera().view(), scene.camera().proj(aspect_i), true };
         }
         if (rpass_applied.active) render_passes.restore(scene, rpass_applied);
+        ph_.reset();
         // NOTE: set_viewport_camera does NOT re-derive aspect — it just
         // stores the view/proj it is given. The per-panel overlay camera
         // is set inside the viewport-panel draw loop below (each panel
@@ -2314,6 +2375,7 @@ int main(int argc, char** argv) {
 
         // ---- Editor UI -----------------------------------------------------
         studio->begin_frame();
+        ph_.emplace("Editor Panels");
         // Hand the dockspace builder the boot-time viewport list so the
         // first-run layout docks every initial viewport into the central
         // tab strip. Slots added later via the View menu inherit that node
@@ -3081,7 +3143,9 @@ int main(int argc, char** argv) {
             for (int i = 0; i < kMaxViewports; ++i) {
                 const auto id = static_cast<cardinal::core::PaceContextId>(i + 1);
                 if (i < static_cast<int>(viewports.size()) && viewports[i].show) {
-                    push_vp_limit(id, viewports[i].fps_cap, true);
+                    // Profile mode lifts every cap: the viewport quota would otherwise
+                    // pace the loop (30 fps when focused) and hide the real frame time.
+                    push_vp_limit(id, profile_seconds > 0 ? 0.0f : viewports[i].fps_cap, true);
                 } else {
                     pacer->clear_limit(id);
                 }
@@ -4186,6 +4250,8 @@ int main(int argc, char** argv) {
                                                 "Shader Compiler",
                                                 &show_shader_cc);
         }
+        ph_.reset();
+        ph_.emplace("Subsystem Ticks");
         // Drive shader hot-reload polling once per frame.
         if (shader_compiler) shader_compiler->tick();
 
@@ -4488,15 +4554,32 @@ int main(int argc, char** argv) {
         //    to the WorldGrid (chunk size, per-axis extents, render dists).
         // 5. Push the overlay state into Studio so the viewport draws the
         //    grid lines on the camera's current Y plane.
-        cardinal::async::FrameScope _phase_world("World Streaming");
+        ph_.reset();
+        ph_.emplace("World Streaming");
         scene.assign_chunks(world_grid.chunk_size());
         const auto cam_p = scene.camera().position;
-        world_streamer.tick(cam_p.x, cam_p.y, cam_p.z);
+        const bool ws_changed = world_streamer.tick(cam_p.x, cam_p.y, cam_p.z);
 
-        scene.clear_visible_chunks();
-        if (wpanel.cull_outside_render_distance) {
-            for (const auto& c : world_streamer.active())
-                scene.mark_chunk_visible(c.x, c.y, c.z);
+        // The visible set is a function of the streamer's active set and the
+        // cull toggle: rebuild it only when either changed (it was ~2.6k hash
+        // inserts every frame for a static camera).
+        static bool ws_cull_last = !wpanel.cull_outside_render_distance;
+        if (ws_changed || ws_cull_last != wpanel.cull_outside_render_distance) {
+            ws_cull_last = wpanel.cull_outside_render_distance;
+            scene.clear_visible_chunks();
+            if (wpanel.cull_outside_render_distance) {
+                for (const auto& c : world_streamer.active())
+                    scene.mark_chunk_visible(c.x, c.y, c.z);
+            }
+        }
+        if (ws_loads || ws_unloads) {
+            const auto t_now = std::chrono::steady_clock::now();
+            if (std::chrono::duration<double>(t_now - ws_log_t).count() >= 1.0) {
+                clog::infof("world", "streamer: +%u / -%u chunks (active %zu)",
+                            ws_loads, ws_unloads, static_cast<usize>(world_streamer.active_count()));
+                ws_loads = ws_unloads = 0;
+                ws_log_t = t_now;
+            }
         }
 
         wpanel.camera_chunk_x     = world_streamer.camera_chunk().x;
@@ -4527,6 +4610,8 @@ int main(int argc, char** argv) {
         if (wpanel.extent_z           != world_grid.extent_z())           { world_grid.set_extent_z(wpanel.extent_z);                     world_streamer.invalidate(); }
         if (wpanel.evict_all_clicked) world_streamer.evict_all();
 
+        ph_.reset();
+        ph_.emplace("Overlay/Plugins/HUD");
         // Push the overlay state into Studio every frame.
         ui::Studio::WorldGridOverlay ov{};
         ov.show               = wpanel.show_grid_overlay;
@@ -4607,7 +4692,11 @@ int main(int argc, char** argv) {
             hud.render(ImGui::GetForegroundDrawList());
         }
 
-        studio->end_frame();
+        ph_.reset();
+        {
+            cardinal::async::FrameScope _ph_imgui("ImGui Render");
+            studio->end_frame();
+        }
 
         // Writeback: the Studio gizmo / inspector edit the scene::Entity
         // (the render surface). Push those edits onto each placement's
@@ -4622,7 +4711,10 @@ int main(int argc, char** argv) {
         // time). After end_frame, this frame's Reflex slot is complete;
         // bump the frame_id for the next iteration.
         sw->reflex_marker(rhi::Swapchain::ReflexMarker::RenderSubmitEnd, reflex_frame);
-        sw->end_frame();
+        {
+            cardinal::async::FrameScope _ph_present("Present");
+            sw->end_frame();
+        }
         ++reflex_frame;
 
         // Pump ImGui's secondary OS windows (panels the user dragged out
@@ -5018,19 +5110,49 @@ int main(int argc, char** argv) {
     // Snapshot every cvar (vsync, render flags, FPS caps, …) to the settings
     // file so the next launch restores them (see load_cvars at startup). Done
     // before teardown so the cvar getters still read live engine state.
-    {
+    if (profile_seconds == 0) {   // a profile run lifted the caps; never persist that
         const cardinal::usize saved =
             cardinal::console::Registry::instance().save_cvars("studio_settings.cfg");
         clog::infof("studio", "settings: saved %zu cvars to studio_settings.cfg",
                     static_cast<cardinal::usize>(saved));
     }
 
+    if (profile_seconds > 0 && !profile_ms.empty()) {
+        std::vector<float> v = profile_ms;
+        std::sort(v.begin(), v.end());
+        const usize n = v.size();
+        double sum = 0.0;
+        for (float x : v) sum += static_cast<double>(x);
+        const double avg = sum / static_cast<double>(n);
+        auto pct = [&](double q) {
+            return v[std::min(n - 1, static_cast<usize>(q * static_cast<double>(n - 1)))];
+        };
+        clog::infof("profile", "frames=%zu  avg=%.3f ms (%.0f fps)  p50=%.3f  p90=%.3f  p99=%.3f  max=%.3f ms",
+                    static_cast<usize>(n), avg, 1000.0 / avg, static_cast<double>(pct(0.50)),
+                    static_cast<double>(pct(0.90)), static_cast<double>(pct(0.99)),
+                    static_cast<double>(v[n - 1]));
+        std::sort(profile_phases.begin(), profile_phases.end(),
+                  [](const std::pair<std::string, PhaseAcc>& a, const std::pair<std::string, PhaseAcc>& b) {
+                      return a.second.total_ms > b.second.total_ms;
+                  });
+        for (const auto& kv : profile_phases) {
+            const double avg_ms = kv.second.frames ? kv.second.total_ms / kv.second.frames : 0.0;
+            clog::infof("profile", "  %-22s avg %7.3f ms   max %7.3f ms   (%u frames)",
+                        kv.first.c_str(), avg_ms, kv.second.max_ms, kv.second.frames);
+        }
+    }
+
+    clog::infof("studio", "teardown: watchdog");
     cardinal::crash::watchdog_stop();   // teardown stalls are not hangs
+    clog::infof("studio", "teardown: plugins");
     plg::Registry::instance().shutdown();
     // Drain async work + tear down the JobSystem before destroying everything
     // it might have referenced.
+    clog::infof("studio", "teardown: async pool");
     cardinal::async::set_pool(nullptr);
+    clog::infof("studio", "teardown: job system");
     job_system.shutdown();
+    clog::infof("studio", "teardown: job system done");
 
     // Detach the swapchain rebuild callback we installed earlier. The
     // callback captured `studio` by reference; once `studio` starts

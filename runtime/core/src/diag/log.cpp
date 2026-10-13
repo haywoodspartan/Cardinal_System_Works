@@ -3,6 +3,7 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <chrono>
 #include <mutex>
 #include <vector>
 
@@ -47,11 +48,23 @@ const AbortSilencer g_abort_silencer{};
 // preserves existing console output.
 class StderrSink final : public Sink {
 public:
-    void on_message(Level lvl, const char* cat, const char* msg) override {
-        std::fprintf(stderr, "[%s] [%s] %s\n",
-                     level_name(lvl), cat ? cat : "", msg ? msg : "");
-        std::fflush(stderr);
+    StderrSink() {
+        // Fully buffered: an fflush per line was a write syscall per line
+        // (25k/s during a world-streaming burst). Flushes happen below.
+        std::setvbuf(stderr, nullptr, _IOFBF, 1 << 16);
     }
+    void on_message(Level lvl, const char* cat, const char* msg) override {
+        const int n = std::fprintf(stderr, "[%s] [%s] %s\n",
+                                   level_name(lvl), cat ? cat : "", msg ? msg : "");
+        pending_ += n > 0 ? static_cast<usize>(n) : 0u;
+        const auto now = std::chrono::steady_clock::now();
+        const bool due = lvl >= Level::Warn || pending_ >= (32u << 10) ||
+                         (now - last_flush_) >= std::chrono::milliseconds(250);
+        if (due) { std::fflush(stderr); pending_ = 0; last_flush_ = now; }
+    }
+private:
+    usize                                 pending_{0};
+    std::chrono::steady_clock::time_point last_flush_{std::chrono::steady_clock::now()};
 };
 
 struct GlobalLog {
@@ -129,6 +142,12 @@ void vemitf(Level lvl, const char* category, const char* fmt, va_list args) {
     char     stackbuf[1024];
     va_list  args_copy;
     va_copy (args_copy, args);
+    // fmt is the printf-style format the public API takes; clang's
+    // -Wformat-nonliteral (from -Wformat=2) cannot see that here.
+#if defined(__clang__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wformat-nonliteral"
+#endif
     int needed = std::vsnprintf(stackbuf, sizeof(stackbuf), fmt, args_copy);
     va_end(args_copy);
 
@@ -143,6 +162,9 @@ void vemitf(Level lvl, const char* category, const char* fmt, va_list args) {
     } else if (needed < 0) {
         out = "<log format error>";
     }
+#if defined(__clang__)
+#  pragma clang diagnostic pop
+#endif
 
     // Snapshot sinks under lock, then dispatch outside the lock so a sink
     // calling back into the log API doesn't deadlock.

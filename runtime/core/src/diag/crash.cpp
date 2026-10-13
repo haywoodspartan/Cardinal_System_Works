@@ -66,8 +66,8 @@ namespace cardinal::crash {
 namespace {
 
 CrashConfig          g_cfg{};
-std::atomic<bool>    g_installed{false};
-std::atomic<bool>    g_in_handler{false};       // re-entrancy guard
+[[maybe_unused]] std::atomic<bool> g_installed{false};
+[[maybe_unused]] std::atomic<bool> g_in_handler{false};   // re-entrancy guard (Windows handlers)
 std::mutex           g_path_mtx;
 std::string          g_last_dump_path;
 
@@ -142,6 +142,21 @@ void write_stack_trace(FILE* lp, CONTEXT* ctx) {
     }
 
     STACKFRAME64 sf{};
+    // A call through a null (or unmapped) function pointer faults with
+    // RIP == 0: the walker cannot unwind from there, but the `call` pushed its
+    // return address at [RSP]. Recover it so the frame that made the bad
+    // call is the first one in the report.
+    if (ctx->Rip == 0 && ctx->Rsp != 0) {
+        u64 ret = 0;
+        SIZE_T got = 0;
+        if (::ReadProcessMemory(::GetCurrentProcess(),
+                                reinterpret_cast<LPCVOID>(ctx->Rsp), &ret, sizeof(ret), &got) &&
+            got == sizeof(ret) && ret != 0) {
+            std::fprintf(lp, "  (faulting RIP was 0: null function pointer; walking from the return address)\n");
+            ctx->Rip  = ret;
+            ctx->Rsp += 8;
+        }
+    }
     sf.AddrPC.Offset    = ctx->Rip; sf.AddrPC.Mode    = AddrModeFlat;
     sf.AddrFrame.Offset = ctx->Rbp; sf.AddrFrame.Mode = AddrModeFlat;
     sf.AddrStack.Offset = ctx->Rsp; sf.AddrStack.Mode = AddrModeFlat;
@@ -392,6 +407,8 @@ void __cdecl on_invalid_parameter(const wchar_t*, const wchar_t*,
 }
 
 LONG WINAPI top_level_filter(EXCEPTION_POINTERS* eptr) {
+    std::fflush(stderr);   // the log sink is buffered: land the last lines before the report
+
     // Re-entrancy guard — if our own dump-writing crashes, don't loop.
     bool expected = false;
     if (!g_in_handler.compare_exchange_strong(expected, true)) {

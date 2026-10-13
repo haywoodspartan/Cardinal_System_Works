@@ -180,7 +180,11 @@ void System::prefetch_(TileKey key) {
         const TileLookup lk = vt->page_table().lookup(k.mip(), k.y(), k.x());
         if (lk.status == TileStatus::Resident || lk.status == TileStatus::Pending) return;
         vt->page_table().mark_pending(k.mip(), k.y(), k.x());
-        if (enqueue_request(k)) stat_prefetch_.fetch_add(1, cardinal::memory_order_relaxed);
+        if (enqueue_request(k)) {
+            stat_prefetch_.fetch_add(1, cardinal::memory_order_relaxed);
+            cardinal::lock_guard<cardinal::mutex> lg(prefetched_mtx_);
+            prefetched_.insert(k.raw);
+        }
     };
 
     // 4-neighbour at the same mip
@@ -231,7 +235,20 @@ void System::tick(u64 now_ms) {
             });
         // Synthesise prefetch requests AFTER the batch resolves (don't
         // pollute the same batch with predictions that weren't asked for).
-        for (const auto& k : batch) prefetch_(k);
+        // Only EXPLICIT requests seed prefetches: a prefetched tile that
+        // prefetched its own neighbours was an unbounded wave across the
+        // whole tile space (32 decodes per frame, forever, for a static
+        // camera). prefetched_ holds the keys prefetch_() enqueued; they are
+        // consumed here and never re-seed.
+        for (const auto& k : batch) {
+            bool from_prefetch = false;
+            {
+                cardinal::lock_guard<cardinal::mutex> lg(prefetched_mtx_);
+                auto it = prefetched_.find(k.raw);
+                if (it != prefetched_.end()) { prefetched_.erase(it); from_prefetch = true; }
+            }
+            if (!from_prefetch) prefetch_(k);
+        }
     }
 }
 

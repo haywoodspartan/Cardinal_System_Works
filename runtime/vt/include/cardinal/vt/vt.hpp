@@ -159,6 +159,11 @@ private:
     cardinal::atomic<u64> stat_processed_{0};
     cardinal::atomic<u64> stat_dropped_  {0};
     cardinal::atomic<u64> stat_prefetch_ {0};
+    // Keys enqueued by prefetch_(): consumed in tick() so a prefetched tile
+    // never seeds further prefetches (bounded wave). Sized by in-flight
+    // prefetches, i.e. at most the request ring.
+    cardinal::mutex             prefetched_mtx_;
+    cardinal::unordered_set<u64> prefetched_;
 
     // budget broker subscription id (set when register_with_budget_broker)
     u32 budget_sub_id_{0};

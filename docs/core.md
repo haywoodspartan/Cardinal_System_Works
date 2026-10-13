@@ -178,7 +178,14 @@ switch); `tests/jobs` pins deep stacks, exceptions and FP state on fibers.
 ## 9. Diagnostics + errors
 
 - **`diag/`** — logging (`cardinal::log::infof/warnf/errorf`, category-tagged)
-  and assertions. Studio's Log/Console panels are sinks on top of this.
+  and assertions. Studio's Log/Console panels are sinks on top of this. The
+  default stderr sink is fully buffered and flushes on Warn/Error, at 32 KiB
+  pending, or 250 ms after the last flush; the crash handler flushes it
+  before writing its report. `diag/crash` writes `<exe>/crashes/<time>_PID.log`
+  + a full-thread minidump; a fault at RIP 0 (call through a null function
+  pointer) is walked from the return address at RSP, so the frame that made
+  the bad call heads the report. Release links are pinned to `/DEBUG:FULL`
+  (root CMakeLists) so the report resolves against a matching PDB.
 - **`error/`** — result/error types for fallible APIs (`error_code` is aliased
   from `<system_error>` in `std/filesystem.hpp`).
 - **`trace/`** (separate module) — execution tracing / profiling surfaced in
