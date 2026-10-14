@@ -97,7 +97,9 @@ bool aegis_config_equal(const gpu::AegisConfig& a, const gpu::AegisConfig& b) no
            a.ssgi.radius == b.ssgi.radius && a.ssgi.intensity == b.ssgi.intensity &&
            a.ssgi.ao_strength == b.ssgi.ao_strength && a.ssgi.steps == b.ssgi.steps &&
            a.ssgi.base_step_px == b.ssgi.base_step_px &&
-           a.hiz_occlusion == b.hiz_occlusion;
+           a.hiz_occlusion == b.hiz_occlusion &&
+           a.binned_raster == b.binned_raster && a.bin_capacity == b.bin_capacity &&
+           a.adaptive_shading_rate == b.adaptive_shading_rate;
 }
 
 graph::Graph& AegisPipelineRunner::begin_build() {

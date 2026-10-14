@@ -202,12 +202,12 @@ void register_engine_console_commands(const ConsoleSetupContext& ctx) {
         [pipelines](i64 v){ if (auto* k = aegis_knob(pipelines, "max_tier")) k->e = static_cast<int>(v); });
     CARDINAL_CVAR_FLOAT("r.aegis.exposure",
         "AEGIS tonemap exposure (EV)",
-        0.0, 4.0,
+        0.05, 8.0,   // mirrors the knob range
         [pipelines]() -> f64 { auto* k = aegis_knob(pipelines, "exposure"); return k ? static_cast<f64>(k->f) : 1.0; },
         [pipelines](f64 v){ if (auto* k = aegis_knob(pipelines, "exposure")) k->f = static_cast<float>(v); });
     CARDINAL_CVAR_FLOAT("r.aegis.resolution_scale",
         "AEGIS internal resolution scale (0.5 = quarter pixels, 2.0 = SSAA x2)",
-        0.5, 2.0,
+        0.25, 2.0,   // mirrors the knob range
         [pipelines]() -> f64 { auto* k = aegis_knob(pipelines, "resolution_scale"); return k ? static_cast<f64>(k->f) : 1.0; },
         [pipelines](f64 v){ if (auto* k = aegis_knob(pipelines, "resolution_scale")) k->f = static_cast<float>(v); });
 

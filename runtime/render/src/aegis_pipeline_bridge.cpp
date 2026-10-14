@@ -101,7 +101,9 @@ public:
             bindless_resources {-1}, direct_storage {-1}, gpu_execute {-1},
             view_mode {-1}, aegis_present {-1},
             ssgi_enabled {-1}, ssgi_radius {-1}, ssgi_intensity {-1},
-            ssgi_ao_strength {-1}, ssgi_steps {-1}, hiz_occlusion {-1};
+            ssgi_ao_strength {-1}, ssgi_steps {-1}, hiz_occlusion {-1},
+            exposure {-1}, resolution_scale {-1}, binned_raster {-1},
+            bin_capacity {-1}, adaptive_shading_rate {-1};
     };
     void cache_knob_indices() {
         auto find = [&](const char* id) -> int {
@@ -126,6 +128,11 @@ public:
         kidx_.ssgi_ao_strength      = find("ssgi_ao_strength");
         kidx_.ssgi_steps            = find("ssgi_steps");
         kidx_.hiz_occlusion         = find("hiz_occlusion");
+        kidx_.exposure              = find("exposure");
+        kidx_.resolution_scale      = find("resolution_scale");
+        kidx_.binned_raster         = find("binned_raster");
+        kidx_.bin_capacity          = find("bin_capacity");
+        kidx_.adaptive_shading_rate = find("adaptive_shading_rate");
     }
     bool kb(int idx) const {
         return idx >= 0 && knobs_[static_cast<cardinal::usize>(idx)].kind == KnobKind::Bool
@@ -204,19 +211,77 @@ public:
     // (rebuilding the AEGIS pipeline every frame would be wasteful). This is
     // what makes FP8/FP4 escalation + the feature flags actually take effect.
     void apply_config() {
-        const cardinal::u32 w = sw_ ? sw_->width()  : 0u;
-        const cardinal::u32 h = sw_ ? sw_->height() : 0u;
+        // Resolution scale: the graph renders at scale x swapchain size and
+        // the present blit stretches it back (nearest), so this is a real
+        // GPU-cost knob. Clamped so a stray value cannot allocate 4x buffers.
+        float rs = kf(kidx_.resolution_scale, 1.0f);
+        if (!(rs >= 0.25f)) rs = 0.25f;
+        if (rs > 2.0f)      rs = 2.0f;
+        auto scaled = [rs](cardinal::u32 v) {
+            const cardinal::u32 o = static_cast<cardinal::u32>(static_cast<float>(v) * rs + 0.5f);
+            return v == 0 ? 0u : (o < 1u ? 1u : o);
+        };
+        const cardinal::u32 w = sw_ ? scaled(sw_->width())  : 0u;
+        const cardinal::u32 h = sw_ ? scaled(sw_->height()) : 0u;
         gpu::AegisConfig want =
             aegis_resolve_config(runner_->config(), dev_caps_, read_request(), w, h);
-        // Real scene feed: the palette sizes are baked into the graph
-        // (buffer sizes + push constants), so a change reconfigures — which
-        // invalidates the persistent graph and forces the rebuild below.
         want.material_count = mat_count_;
         want.light_count    = light_count_;
+        // Knobs the resolver does not cover: read straight into the config.
+        // aegis_config_equal compares every one of them, so a change here
+        // reconfigures (and rebuilds the graph) exactly once.
+        want.exposure              = kf(kidx_.exposure, 1.0f);
+        want.binned_raster         = kidx_.binned_raster >= 0 ? kb(kidx_.binned_raster) : true;
+        {
+            int cap = ki(kidx_.bin_capacity, 256);
+            if (cap < 64) cap = 64;
+            if (cap > 4096) cap = 4096;
+            want.bin_capacity = static_cast<cardinal::u32>(cap);
+        }
+        want.adaptive_shading_rate = kb(kidx_.adaptive_shading_rate);
         if (!aegis_config_equal(want, runner_->config()))
             runner_->reconfigure(want);
     }
-    // ---- Real scene feed --------------------------------------------------
+
+    // ---- Presets ---------------------------------------------------------
+    u32 preset_count() const noexcept override { return 3; }
+    const char* preset_name(u32 i) const noexcept override {
+        static const char* names[3] = { "Performance", "Balanced", "Quality" };
+        return i < 3 ? names[i] : "";
+    }
+    void apply_preset(u32 i) override {
+        // Only Live knobs: a preset never pretends to change a planned one.
+        switch (i) {
+            case 0:   // Performance: fewer GI taps, 3/4 resolution, coarse quads
+                set_f_("resolution_scale", 0.75f);
+                set_i_("ssgi_steps", 2);
+                set_f_("ssgi_radius", 0.75f);
+                set_b_("adaptive_shading_rate", true);
+                set_b_("binned_raster", true);
+                set_i_("bin_capacity", 256);
+                set_b_("hiz_occlusion", true);
+                set_e_("max_tier", 1);
+                break;
+            case 2:   // Quality: full-rate everything, wider GI gather
+                set_f_("resolution_scale", 1.0f);
+                set_i_("ssgi_steps", 8);
+                set_f_("ssgi_radius", 1.5f);
+                set_b_("adaptive_shading_rate", false);
+                set_b_("binned_raster", true);
+                set_i_("bin_capacity", 1024);
+                set_b_("hiz_occlusion", true);
+                set_e_("max_tier", 0);
+                break;
+            case 1:   // Balanced = the knob defaults
+            default:
+                for (auto& k : knobs_)
+                    if (k.status == Knob::Status::Live &&
+                        k.id != "view_mode" && k.id != "backend_mode" &&
+                        k.id != "gpu_execute" && k.id != "aegis_present" && k.id != "async_compute")
+                        k.reset_to_default();
+                break;
+        }
+    }    // ---- Real scene feed --------------------------------------------------
     // Flattens the scene into the AEGIS input streams every frame, in place
     // (the persistent graph keeps raw pointers into these vectors; they only
     // reallocate when a COUNT changes, which also forces a graph rebuild):
@@ -718,7 +783,7 @@ private:
                     const char* tip, bool def) {
         Knob k;
         k.id = id; k.label = label; k.group = group; k.tooltip = tip;
-        k.kind = KnobKind::Bool; k.b = def;
+        k.kind = KnobKind::Bool; k.b = def; k.b_def = def;
         knobs_.push_back(cardinal::move(k));
         return knobs_.back();
     }
@@ -726,7 +791,7 @@ private:
                    const char* tip, int def, int lo, int hi) {
         Knob k;
         k.id = id; k.label = label; k.group = group; k.tooltip = tip;
-        k.kind = KnobKind::Int; k.i = def; k.i_min = lo; k.i_max = hi;
+        k.kind = KnobKind::Int; k.i = def; k.i_def = def; k.i_min = lo; k.i_max = hi;
         knobs_.push_back(cardinal::move(k));
         return knobs_.back();
     }
@@ -736,7 +801,7 @@ private:
         Knob k;
         k.id = id; k.label = label; k.group = group; k.tooltip = tip;
         k.kind = KnobKind::Float;
-        k.f = def; k.f_min = lo; k.f_max = hi; k.f_step = step;
+        k.f = def; k.f_def = def; k.f_min = lo; k.f_max = hi; k.f_step = step;
         knobs_.push_back(cardinal::move(k));
         return knobs_.back();
     }
@@ -745,67 +810,116 @@ private:
                     std::initializer_list<const char*> labels) {
         Knob k;
         k.id = id; k.label = label; k.group = group; k.tooltip = tip;
-        k.kind = KnobKind::Enum; k.e = def;
+        k.kind = KnobKind::Enum; k.e = def; k.e_def = def;
         for (const char* s : labels) k.enum_labels.push_back(s);
         knobs_.push_back(cardinal::move(k));
         return knobs_.back();
     }
+    // Mark a knob as not yet consumed by anything: the panel greys it and
+    // shows `note` (which slice has to land first). Nothing silently lies.
+    static Knob& planned_(Knob& k, const char* note) {
+        k.status       = Knob::Status::Planned;
+        k.planned_note = note;
+        return k;
+    }
+    Knob* knob_(const char* id) {
+        for (auto& k : knobs_) if (k.id == id) return &k;
+        return nullptr;
+    }
+    void set_b_(const char* id, bool v)  { if (auto* k = knob_(id)) k->b = v; }
+    void set_i_(const char* id, int v)   { if (auto* k = knob_(id)) k->i = v; }
+    void set_f_(const char* id, float v) { if (auto* k = knob_(id)) k->f = v; }
+    void set_e_(const char* id, int v)   { if (auto* k = knob_(id)) k->e = v; }
 
     void build_knobs() {
         knobs_.clear();
+        // Every knob is either LIVE (read by render()/apply_config each frame)
+        // or PLANNED (shown greyed with the slice that will consume it).
+        // Duplicates of real controls and knobs for features AEGIS will never
+        // have (MSAA on a visibility buffer, pacing that belongs to the
+        // Studio) were removed rather than left to lie.
 
-        // ---- Visualisation -------------------------------------------
+        // ---- Visualisation ---------------------------------------------
         // Per-viewport view mode. The Studio pushes the focused viewport's
         // scene::ViewMode into this knob each frame (by id "view_mode", the
         // same contract ForwardBaseline uses), and render() forwards it to the
-        // on-screen ForwardRenderer — so Solid / Wireframe / Polygons /
-        // Heightmap / Normals / RTX Preview all work under AEGIS. Indices
-        // match scene::ViewMode exactly.
+        // on-screen ForwardRenderer. Indices match scene::ViewMode exactly.
         add_enum_("view_mode", "View Mode", "Visualisation",
             "How the on-screen forward draw shades each fragment. Driven by the "
             "viewport toolbar (per-viewport); mirrored here for reference.",
             0, {"Solid", "Wireframe", "Polygons", "Heightmap", "Normals", "RTX Preview"});
 
-        // ---- AEGIS core ----------------------------------------------
+        // ---- AEGIS core --------------------------------------------------
         add_enum_("backend_mode", "Graph Backend", "AEGIS",
             "Which graph::Backend the AEGIS runner executes against. "
             "Null = topology only (per-frame stats, no buffers). "
             "Cpu / ThreadedCpu = full virtual-GPU simulation. "
-            "Rhi = real GPU compute dispatch (default; degrades to recording-"
-            "only telemetry until the device implements compute pipelines).",
+            "Rhi = real GPU compute dispatch (default).",
             3, {"CpuBackend", "Null (topology)", "ThreadedCpuBackend", "RhiBackend"});
-        add_enum_("max_tier", "Max Geometry Tier", "AEGIS",
-            "Maximum precision tier the math-division engine is allowed to "
-            "escalate to. FP4 (Blackwell) = 8 micro-tris per source triangle; "
-            "FP32 = no subdivision.",
-            1, {"FP32", "FP16", "FP8", "FP4"});
-        add_bool_("virtual_geometry", "Virtual Geometry", "AEGIS",
-            "GPU-driven cluster-LOD geometry pipeline (Nanite-style): classify -> "
-            "meshlet -> screen-space-error LOD select per cluster.", true);
-        add_bool_("meshlet_culling", "Meshlet Culling", "AEGIS",
-            "Per-cluster frustum + backface-cone + small-feature culling before "
-            "the V-Buffer rasterizer.", true);
-        add_bool_("hiz_occlusion", "Hi-Z Occlusion Culling", "AEGIS",
-            "Two-pass hierarchical-Z occlusion test against last frame's depth so "
-            "hidden clusters never reach the rasterizer.", true);
+        add_bool_("async_compute", "Async Compute Lane", "AEGIS",
+            "Run the AEGIS graph on the dedicated compute queue, two submissions "
+            "in flight, overlapping the graphics queue. Required for GPU execute.",
+            false);
         add_bool_("gpu_execute", "GPU Compute Execute", "AEGIS",
             "Dispatch the AEGIS compute graph on the GPU (real scene triangles, "
             "materials and lights) through RhiBackend on the async compute lane. "
-            "Requires the Async Compute knob; without it the graph stays "
-            "recording-only telemetry.", false);
+            "Without the lane the graph stays recording-only telemetry.", false);
         add_bool_("aegis_present", "Present AEGIS Output", "AEGIS",
             "Show the AEGIS composite (tile-binned V-Buffer -> tile-lit PBR resolve "
-            "-> tonemap) in the viewport instead of the ForwardRenderer draw. Needs "
-            "GPU Compute Execute + Async Compute. Editor gizmos are not drawn in "
-            "this mode yet.", false);
+            "-> screen-space GI -> tonemap) in the viewport instead of the "
+            "ForwardRenderer draw. Needs GPU Compute Execute. Editor gizmos are "
+            "not drawn over it yet.", false);
+        add_enum_("max_tier", "Max Geometry Tier", "AEGIS",
+            "Maximum precision tier the math-division engine may escalate to. "
+            "FP4 (Blackwell) = 8 micro-tris per source triangle; FP32 = none.",
+            1, {"FP32", "FP16", "FP8", "FP4"});
+        add_bool_("max_tier_fp8", "Allow FP8 Tier", "AEGIS",
+            "Permit escalation to FP8 (Hopper / Ada / RDNA4) when the device has it.", false);
+        add_bool_("max_tier_fp4", "Allow FP4 Tier", "AEGIS",
+            "Permit escalation to FP4 (Blackwell / RDNA5) when the device has it.", false);
 
-        // ---- Global Illumination (AEGIS Block 8) ----------------------
+        // ---- Geometry ----------------------------------------------------
+        add_bool_("hiz_occlusion", "Hi-Z Occlusion Culling", "Geometry",
+            "Test every meshlet against last frame's hierarchical-Z pyramid and "
+            "skip binning the ones it hides. One build dispatch per mip + one test.",
+            true);
+        add_bool_("binned_raster", "Tile-Binned Raster", "Geometry",
+            "Bin triangles into 16x16 tiles before the visibility-buffer raster "
+            "(160-230x the brute per-pixel loop). Off = brute loop, for A/B only.",
+            true);
+        add_int_("bin_capacity", "Bin Capacity (tris / tile)", "Geometry",
+            "Triangle ids a 16x16 tile can hold before it overflows to the "
+            "every-triangle fallback (slower, never wrong). Raise for dense scenes.",
+            256, 64, 4096);
+        planned_(add_bool_("virtual_geometry", "Virtual Geometry (cluster LOD)", "Geometry",
+            "GPU-driven cluster-LOD selection from the vgeom DAG inside the AEGIS "
+            "graph. Today ScreenSpaceErrorPass writes a LOD nothing reads.", true),
+            "Needs vgeom cluster streams fed to the graph and the LOD cut consumed by binning (feature_coverage: LOD).");
+
+        // ---- Shading & resolution -----------------------------------------
+        add_float_("resolution_scale", "Resolution Scale", "Shading & Resolution",
+            "AEGIS renders at this fraction of the viewport and the present blit "
+            "stretches it back. 0.5 = quarter the pixels; above 1 = supersampling.",
+            1.0f, 0.25f, 2.0f, 0.05f);
+        add_bool_("adaptive_shading_rate", "2x2 Adaptive Shading Rate", "Shading & Resolution",
+            "Shade a 2x2 quad once and replicate when all four pixels share a "
+            "primitive; edges, sky and borders stay full-rate. Pays off when "
+            "shading dominates.", false);
+        add_bool_("variable_rate_shading", "Variable Rate Shading (HW)", "Shading & Resolution",
+            "Hardware VRS tier 1 for coarse shading away from the focus. Requested "
+            "from the device; the resolver drops it where unsupported.", false);
+        planned_(add_enum_("anisotropic_filter", "Anisotropic Filter", "Shading & Resolution",
+            "Texture filtering for sampled material textures.",
+            1, {"Bilinear", "Trilinear", "Aniso 2x", "Aniso 4x", "Aniso 8x", "Aniso 16x"}),
+            "Needs sampler objects in the RHI; both backends use one trilinear clamp sampler today.");
+
+        // ---- Global Illumination (AEGIS Block 8) ---------------------------
         add_bool_("ssgi_enabled", "Screen-Space GI + AO", "Global Illumination",
             "Screen-space final gather after the V-Buffer resolve: marches 8 "
             "directions through the depth buffer, darkens the flat ambient term "
             "by ambient occlusion and adds one bounce of the direct radiance "
-            "already shaded on screen (colour bleed). One compute dispatch; needs "
-            "the PBR resolve (inverse view-proj + camera position).", true);
+            "already shaded on screen (colour bleed). About 60% of the graph's GPU time.",
+            true);
         add_float_("ssgi_radius", "GI Gather Radius (m)", "Global Illumination",
             "World-space radius a pixel gathers occlusion and bounce from. Larger "
             "= softer, wider contact darkening and bleed, more off-screen misses.",
@@ -819,247 +933,181 @@ private:
         add_int_("ssgi_steps", "GI Steps per Direction", "Global Illumination",
             "Taps per direction (8 directions). 4 = 32 taps per pixel; 8 = 64.",
             4, 1, 8);
+        planned_(add_bool_("restir_di", "ReSTIR Direct Lighting", "Global Illumination",
+            "Reservoir-resampled direct light with spatial + temporal reuse.", false),
+            "The three ReSTIR passes are CPU-only and gated on a world-position input the bridge never feeds; GPU port blocked on splitmix32 bit parity.");
+        planned_(add_enum_("gi_probes", "World-Space GI", "Global Illumination",
+            "Probe / radiance-cache indirect lighting for what the screen cannot see.",
+            0, {"Off", "Radiance Cache", "Distance Field"}),
+            "RadianceCachePass is CPU-only and unwired; world-space GI is build-order item 5.");
 
-        // ---- Quality / Resolution -------------------------------------
-        add_float_("resolution_scale", "Resolution Scale", "Quality",
-            "Internal render-target resolution multiplier before upscaling. "
-            "0.5 = quarter pixels (huge perf); 2.0 = SSAA x2 (huge quality cost).",
-            1.0f, 0.50f, 2.0f, 0.05f);
-        add_enum_("msaa_samples", "MSAA Samples", "Quality",
-            "Multi-sample anti-aliasing for the forward path. Ignored when a "
-            "temporal upscaler (DLSS / FSR) is active.",
-            0, {"1x (off)", "2x", "4x", "8x"});
-        add_enum_("anisotropic_filter", "Anisotropic Filter", "Quality",
-            "Texture filtering for sampled material textures.",
-            3, {"Bilinear", "Trilinear", "Aniso 2x", "Aniso 4x", "Aniso 8x", "Aniso 16x"});
-        // ---- Shadows --------------------------------------------------
-        add_enum_("shadow_resolution", "Shadow Atlas", "Shadows",
-            "Per-light shadow-map dimensions. 8k is for cinematic captures.",
-            2, {"512", "1024", "2048", "4096", "8192"});
-        add_int_("shadow_cascades", "Shadow Cascades", "Shadows",
-            "Number of cascaded shadow-map slices for the sun directional.",
-            3, 1, 4);
-        add_enum_("shadow_filter", "Shadow Filtering", "Shadows",
-            "Hard = aliased edges (cheapest). PCF = percentage-closer soft edges. "
-            "PCSS = contact-hardening soft shadows (penumbra grows with distance).",
-            1, {"Hard", "PCF", "PCSS (soft)"});
-        add_float_("shadow_distance", "Shadow Distance (m)", "Shadows",
-            "Max world distance the sun cascades cover; beyond it geometry is unshadowed.",
-            150.0f, 10.0f, 2000.0f, 10.0f);
-        add_bool_("contact_shadows", "Contact Shadows", "Shadows",
-            "Screen-space short-range ray-march that fills the gaps small geometry "
-            "leaves in cascaded shadow maps.", true);
-        add_bool_("ray_traced_shadows", "Ray-Traced Shadows", "Shadows",
-            "Hardware-RT shadow rays for pixel-accurate penumbra. Needs an RT GPU.",
-            false);
+        // ---- Lighting -----------------------------------------------------
+        planned_(add_bool_("ibl_diffuse", "IBL Diffuse", "Lighting",
+            "Irradiance from a prefiltered environment cube instead of the flat ambient.", false),
+            "Needs compute-lane texture binding to prefilter the cube; RHI cube textures landed 2026-10-13.");
+        planned_(add_bool_("ibl_specular", "IBL Specular", "Lighting",
+            "Split-sum specular from a roughness-prefiltered environment cube + BRDF LUT.", false),
+            "Same prerequisite as IBL Diffuse; then VBufResolve samples the cube.");
 
-        // ---- Frame pacing ---------------------------------------------
-        add_enum_("vsync_mode", "VSync", "Frame Pacing",
-            "Off = uncapped (tear allowed). On = wait for vblank. Adaptive = "
-            "off when below refresh, on when above (G-Sync / FreeSync feel).",
-            0, {"Off", "On", "Adaptive"});
-        add_enum_("fps_limit", "FPS Limit", "Frame Pacing",
-            "Hard cap on rendered frames per second. None = no cap (relies on "
-            "VSync or vendor-side limiter).",
-            0, {"None", "30", "60", "90", "120", "144", "165", "240"});
-        add_float_("frame_pacing_smoothing", "Pacing Smoothing", "Frame Pacing",
-            "How aggressively the engine smooths frame-time jitter. 0 = raw, "
-            "1 = heavy averaging (smoother but laggier).",
-            0.3f, 0.0f, 1.0f, 0.05f);
+        // ---- Reflections --------------------------------------------------
+        planned_(add_bool_("ssr_enabled", "Screen-Space Reflections", "Reflections",
+            "Depth-buffer ray march for glossy reflections of what is on screen.", false),
+            "No SSR pass exists; build-order item 2 after IBL.");
+        planned_(add_enum_("ssr_quality", "SSR Quality", "Reflections",
+            "March step count / resolution.", 1, {"Low", "Medium", "High"}),
+            "Follows the SSR pass.");
+        planned_(add_bool_("rt_reflections", "Ray-Traced Reflections", "Reflections",
+            "Hardware ray-traced reflections for off-screen and glossy surfaces.", false),
+            "Needs RT shader stages, TLAS on both backends and DXR on D3D12 (build-order item 5).");
+        planned_(add_enum_("reflection_quality", "RT Reflection Quality", "Reflections",
+            "Rays per pixel / denoiser strength.", 1, {"Low", "Medium", "High"}),
+            "Follows ray-traced reflections.");
 
-        // ---- Post-FX --------------------------------------------------
+        // ---- Shadows -------------------------------------------------------
+        planned_(add_enum_("shadow_resolution", "Shadow Atlas", "Shadows",
+            "Shadow map atlas size.", 1, {"1024", "2048", "4096", "8192"}),
+            "AEGIS has no shadow pass yet; the forward path owns a single 2048 directional map. Cascaded shadows are build-order item 2.");
+        planned_(add_int_("shadow_cascades", "Shadow Cascades", "Shadows",
+            "Directional-light cascade count.", 4, 1, 8),
+            "Same prerequisite: the cascaded shadow pass feeding VBufResolve.");
+        planned_(add_enum_("shadow_filter", "Shadow Filtering", "Shadows",
+            "Soft-shadow filter.", 1, {"Hard", "PCF 3x3", "PCSS"}),
+            "Follows the cascaded shadow pass.");
+        planned_(add_float_("shadow_distance", "Shadow Distance (m)", "Shadows",
+            "Farthest distance that receives dynamic shadows.", 200.0f, 10.0f, 2000.0f, 10.0f),
+            "Follows the cascaded shadow pass.");
+        planned_(add_bool_("contact_shadows", "Contact Shadows", "Shadows",
+            "Short screen-space ray toward each light for contact hardening.", false),
+            "Follows the cascaded shadow pass.");
+        planned_(add_bool_("ray_traced_shadows", "Ray-Traced Shadows", "Shadows",
+            "Hardware ray-traced shadows (area lights, no cascades).", false),
+            "Needs the RT pipeline (build-order item 5).");
+
+        // ---- Post-FX -------------------------------------------------------
         add_float_("exposure", "Exposure (EV)", "Post-FX",
-            "TonemapPass exposure multiplier (linear stops above middle grey).",
-            1.0f, 0.0f, 4.0f, 0.05f);
-        add_enum_("tonemap_operator", "Tonemap Operator", "Post-FX",
-            "How linear HDR is mapped to LDR display range. AgX is the modern "
-            "preference; ACES is the film-industry standard; Reinhard is the "
-            "classic; Uncharted2 is Hable's curve.",
-            1, {"Reinhard", "ACES Fitted", "AgX", "Uncharted 2", "PBR Neutral"});
-        add_bool_("bloom_enabled", "Bloom", "Post-FX",
-            "Bright-pass blur composited back over the HDR target.", true);
-        add_float_("bloom_threshold", "Bloom Threshold", "Post-FX",
-            "Minimum luminance (cd/m²-ish) that contributes to bloom.",
-            1.0f, 0.0f, 5.0f, 0.05f);
-        add_float_("bloom_intensity", "Bloom Intensity", "Post-FX",
-            "Scale on the bloom mip-chain composite.",
-            0.5f, 0.0f, 2.0f, 0.05f);
-        add_float_("sharpness", "CAS Sharpness", "Post-FX",
-            "AMD Contrast-Adaptive Sharpening strength applied post-upscale.",
-            0.25f, 0.0f, 1.0f, 0.05f);
-        add_float_("chromatic_aberration", "Chromatic Aberration", "Post-FX",
-            "Per-channel screen-space offset (in screen units × 1000).",
-            0.0f, 0.0f, 1.0f, 0.05f);
-        add_float_("vignette", "Vignette", "Post-FX",
-            "Edge-darkening intensity.",
-            0.0f, 0.0f, 1.0f, 0.05f);
-        add_bool_("motion_blur", "Motion Blur", "Post-FX",
-            "Per-object + camera velocity blur reconstructed from the motion-vector "
-            "buffer.", false);
-        add_float_("motion_blur_amount", "Motion Blur Amount", "Post-FX",
-            "Shutter-angle scale on the velocity blur.",
-            0.5f, 0.0f, 1.0f, 0.05f);
-        add_bool_("depth_of_field", "Depth of Field", "Post-FX",
-            "Physically-based bokeh DoF (circle-of-confusion from focus + aperture).",
-            false);
-        add_float_("dof_focus_distance", "DoF Focus (m)", "Post-FX",
-            "World distance the lens is focused at.",
-            10.0f, 0.1f, 1000.0f, 0.5f);
-        add_float_("dof_aperture", "DoF Aperture (f-stop)", "Post-FX",
-            "Lens f-number — smaller = shallower depth of field + larger bokeh.",
-            5.6f, 1.0f, 22.0f, 0.1f);
-        add_float_("film_grain", "Film Grain", "Post-FX",
-            "Animated luminance noise overlaid for a filmic feel.",
-            0.0f, 0.0f, 1.0f, 0.05f);
+            "Linear exposure multiplier applied before the ACES tonemap.",
+            1.0f, 0.05f, 8.0f, 0.05f);
+        planned_(add_enum_("tonemap_operator", "Tonemap Operator", "Post-FX",
+            "Tone curve applied to HDR radiance.", 0, {"ACES", "Reinhard", "Uncharted 2", "AgX"}),
+            "The GPU TonemapPass is ACES-only; the operator registry exists on the CPU side (algos.cpp).");
+        planned_(add_bool_("auto_exposure", "Auto Exposure", "Post-FX",
+            "Histogram-based eye adaptation driving the exposure.", false),
+            "Needs a luminance histogram pass; exposure is manual today.");
+        planned_(add_bool_("bloom_enabled", "Bloom", "Post-FX",
+            "Bright-pass blur added back over the image.", false),
+            "postfx::make_bloom_pass is CPU-only and unwired; the post stack port is build-order item 2.");
+        planned_(add_float_("bloom_threshold", "Bloom Threshold", "Post-FX",
+            "Luminance above which pixels bloom.", 1.0f, 0.0f, 8.0f, 0.05f),
+            "Follows Bloom.");
+        planned_(add_float_("bloom_intensity", "Bloom Intensity", "Post-FX",
+            "Strength of the added bloom.", 0.3f, 0.0f, 2.0f, 0.01f),
+            "Follows Bloom.");
+        planned_(add_float_("sharpness", "CAS Sharpness", "Post-FX",
+            "Contrast-adaptive sharpening after upscaling.", 0.0f, 0.0f, 1.0f, 0.01f),
+            "Part of the post stack port.");
+        planned_(add_float_("chromatic_aberration", "Chromatic Aberration", "Post-FX",
+            "Lens colour fringing at the edges.", 0.0f, 0.0f, 1.0f, 0.01f),
+            "postfx::make_chromatic_aberration_pass is CPU-only and unwired.");
+        planned_(add_float_("vignette", "Vignette", "Post-FX",
+            "Edge darkening.", 0.0f, 0.0f, 1.0f, 0.01f),
+            "Part of the post stack port.");
+        planned_(add_bool_("motion_blur", "Motion Blur", "Post-FX",
+            "Per-pixel blur along the motion vectors.", false),
+            "MotionVectorPass is live on the GPU; nothing blurs with it yet.");
+        planned_(add_float_("motion_blur_amount", "Motion Blur Amount", "Post-FX",
+            "Shutter fraction.", 0.5f, 0.0f, 1.0f, 0.01f),
+            "Follows Motion Blur.");
+        planned_(add_bool_("depth_of_field", "Depth of Field", "Post-FX",
+            "Circle-of-confusion blur from the depth buffer.", false),
+            "DepthOfFieldPass is CPU-only and unwired.");
+        planned_(add_float_("dof_focus_distance", "DoF Focus (m)", "Post-FX",
+            "Distance in focus.", 5.0f, 0.1f, 500.0f, 0.1f),
+            "Follows Depth of Field.");
+        planned_(add_float_("dof_aperture", "DoF Aperture (f-stop)", "Post-FX",
+            "Smaller = shallower focus.", 2.8f, 0.7f, 22.0f, 0.1f),
+            "Follows Depth of Field.");
+        planned_(add_float_("film_grain", "Film Grain", "Post-FX",
+            "Animated noise overlay.", 0.0f, 0.0f, 1.0f, 0.01f),
+            "Part of the post stack port.");
 
-        // ---- Lighting -------------------------------------------------
-        add_bool_("ibl_diffuse",  "IBL Diffuse", "Lighting",
-            "Image-based diffuse from the irradiance probe volume.", true);
-        add_bool_("ibl_specular", "IBL Specular", "Lighting",
-            "Image-based specular from the pre-filtered environment cube.", true);
-        add_bool_("ssao_enabled", "SSAO", "Lighting",
-            "Screen-space ambient occlusion (GTAO-style).", true);
-        add_enum_("ssao_quality", "SSAO Quality", "Lighting",
-            "Sample count + radius per AO probe.",
-            1, {"Low (4 taps)", "Med (8 taps)", "High (16 taps)", "Ultra (32 taps)"});
-        // ---- Reflections ----------------------------------------------
-        add_bool_("ssr_enabled", "Screen-Space Reflections", "Reflections",
-            "Screen-space reflections (linear ray-march + Hi-Z accelerator).", false);
-        add_enum_("ssr_quality", "SSR Quality", "Reflections",
-            "Reflection ray step count + roughness importance sampling.",
-            1, {"Low", "Med", "High"});
-        add_bool_("rt_reflections", "Ray-Traced Reflections", "Reflections",
-            "Hardware-RT reflections for off-screen + rough surfaces SSR can't reach. "
-            "Needs an RT GPU.", false);
-        add_enum_("reflection_quality", "RT Reflection Quality", "Reflections",
-            "Ray count + denoiser strength for ray-traced reflections.",
-            1, {"Low", "Med", "High", "Ultra"});
+        // ---- Anti-Aliasing ---------------------------------------------------
+        planned_(add_enum_("aa_mode", "Anti-Aliasing", "Anti-Aliasing",
+            "Edge anti-aliasing. AEGIS resolves a visibility buffer, so MSAA does not apply; "
+            "TAA reprojects with the motion vectors that already exist.",
+            0, {"Off", "FXAA", "TAA"}),
+            "TAAPass has no GPU kernel yet and FXAA is a CPU postfx pass; GPU TAA is build-order item 2.");
+        planned_(add_float_("taa_sharpness", "TAA Sharpness", "Anti-Aliasing",
+            "Counter-blur after temporal accumulation.", 0.5f, 0.0f, 1.0f, 0.01f),
+            "Follows TAA.");
+        planned_(add_bool_("taa_upsampling", "TAA Upsampling", "Anti-Aliasing",
+            "Render below the viewport resolution and let TAA reconstruct.", false),
+            "Follows TAA.");
 
-        // ---- Global Illumination --------------------------------------
-        add_enum_("gi_mode", "Global Illumination", "Global Illumination",
-            "Indirect-light technique. SSGI is screen-space (no HW RT). RTGI + "
-            "ReSTIR GI trace real rays (need an RT GPU) for off-screen bounce light.",
-            1, {"Off", "SSGI", "RTGI", "ReSTIR GI"});
-        add_int_("gi_bounces", "GI Bounces", "Global Illumination",
-            "Indirect light bounces traced per frame (RT modes).",
-            1, 1, 4);
-        add_float_("gi_intensity", "GI Intensity", "Global Illumination",
-            "Scale on the gathered indirect irradiance.",
-            1.0f, 0.0f, 4.0f, 0.05f);
-        add_bool_("restir_di", "ReSTIR DI", "Global Illumination",
-            "Reservoir spatiotemporal importance resampling for many-light direct "
-            "lighting (the AEGIS DI pass). Needs an RT GPU.", false);
+        // ---- Upscaler ---------------------------------------------------------
+        planned_(add_enum_("dlss_upscaler", "DLSS", "Upscaler",
+            "NVIDIA DLSS super resolution through Streamline.",
+            0, {"Off", "Quality", "Balanced", "Performance", "Ultra Performance", "DLAA"}),
+            "Streamline is vendored and initialised, but the DLSS feature is not wired to the AEGIS output.");
+        planned_(add_enum_("fsr_upscaler", "FSR 3", "Upscaler",
+            "AMD FidelityFX Super Resolution 3.",
+            0, {"Off", "Quality", "Balanced", "Performance", "Ultra Performance"}),
+            "FSR 3 is not integrated.");
+        planned_(add_bool_("frame_generation", "DLSS / FSR Frame Generation", "Upscaler",
+            "Interpolate a generated frame between rendered ones.", false),
+            "Follows the upscaler integration.");
 
-        // ---- Upscaler -------------------------------------------------
-        add_enum_("dlss_upscaler", "DLSS", "Upscaler",
-            "NVIDIA Deep Learning Super Sampling. Quality > Balanced > "
-            "Performance trade screen-space samples for speed.",
-            0, {"Off", "DLAA (native)", "Quality", "Balanced", "Performance", "Ultra Performance"});
-        add_enum_("fsr_upscaler", "FSR 3", "Upscaler",
-            "AMD FidelityFX Super Resolution. Quality > Balanced > Performance.",
-            0, {"Off", "Native AA", "Quality", "Balanced", "Performance"});
-        add_bool_("frame_generation", "DLSS / FSR Frame Generation", "Upscaler",
-            "Synthesise an interpolated frame between every rendered pair. "
-            "Doubles displayed FPS at the cost of input latency.", false);
+        // ---- Color Grading --------------------------------------------------
+        planned_(add_float_("cg_temperature", "Temperature", "Color Grading",
+            "White balance shift, warm to cool.", 0.0f, -1.0f, 1.0f, 0.01f),
+            "ColorGradingPass (3D LUT) is CPU-only and unwired; part of the post stack port.");
+        planned_(add_float_("cg_tint", "Tint", "Color Grading",
+            "Green to magenta shift.", 0.0f, -1.0f, 1.0f, 0.01f),
+            "Follows colour grading.");
+        planned_(add_float_("cg_saturation", "Saturation", "Color Grading",
+            "Colour intensity.", 1.0f, 0.0f, 2.0f, 0.01f),
+            "Follows colour grading.");
+        planned_(add_float_("cg_contrast", "Contrast", "Color Grading",
+            "Tonal contrast around middle grey.", 1.0f, 0.5f, 2.0f, 0.01f),
+            "Follows colour grading.");
+        planned_(add_bool_("cg_lut_enabled", "Apply Color LUT", "Color Grading",
+            "Apply the project's 3D colour lookup table after grading.", false),
+            "Follows colour grading.");
 
-        // ---- GPU Features (feature-gated via on_caps()) ---------------
-        add_bool_("async_compute", "Async Compute", "GPU Features",
-            "Run compute passes on a dedicated GPU queue concurrent with the "
-            "graphics queue. Effective on hardware with multiple compute engines.",
-            false);
-        add_bool_("variable_rate_shading", "Variable Rate Shading", "GPU Features",
-            "Coarse-shade screen regions the eye doesn't focus on. Big win in "
-            "VR foveated rendering and post-FX shaders.", false);
-        add_bool_("mesh_shaders", "Mesh Shaders", "GPU Features",
-            "Use mesh + task shaders instead of vertex + geometry pipelines. "
-            "Required for the Block 4 GPU-driven cluster pipeline.", false);
-        add_bool_("bindless_resources", "Bindless Resources", "GPU Features",
-            "Replace per-draw descriptor binding with a single huge descriptor "
-            "heap indexed in-shader. Required for Block 8 material extensions.",
-            false);
-        add_bool_("ray_tracing", "Ray Tracing Pipeline", "GPU Features",
-            "Hardware RT — required for ReSTIR DI / GI and ray-traced shadows.",
-            false);
-        add_bool_("direct_storage", "DirectStorage / RTX IO", "GPU Features",
-            "GPU-decompressed asset streaming straight from NVMe to VRAM, "
-            "bypassing the CPU.", false);
-        add_bool_("max_tier_fp8", "Allow FP8 Tier", "GPU Features",
-            "Permit the math-division engine to escalate to FP8 (Hopper / Ada / RDNA4).",
-            false);
-        add_bool_("max_tier_fp4", "Allow FP4 Tier", "GPU Features",
-            "Permit the math-division engine to escalate to FP4 (Blackwell / RDNA5).",
-            false);
+        // ---- Atmosphere -----------------------------------------------------
+        planned_(add_bool_("fog_enabled", "Fog", "Atmosphere",
+            "Exponential height + distance fog.", false),
+            "No fog in the AEGIS resolve yet (build-order item 4).");
+        planned_(add_float_("fog_density", "Fog Density", "Atmosphere",
+            "Extinction coefficient for the distance fog.", 0.02f, 0.0f, 1.0f, 0.005f),
+            "Follows Fog.");
+        planned_(add_bool_("volumetric_fog", "Volumetric Fog", "Atmosphere",
+            "Froxel-based volumetric fog that scatters light through participating media.", false),
+            "VolumetricFogPass is CPU-only, unshadowed and unwired.");
+        planned_(add_bool_("volumetric_lighting", "Volumetric Lighting", "Atmosphere",
+            "Light shafts through the volumetric fog.", false),
+            "Follows volumetric fog plus shadow maps.");
 
-        // ---- Anti-Aliasing --------------------------------------------
-        add_enum_("aa_mode", "Anti-Aliasing", "Anti-Aliasing",
-            "Edge AA technique. FXAA = cheap post blur. SMAA = sharper morphological. "
-            "TAA = temporal accumulation (best, but needs motion vectors + jitter).",
-            3, {"Off", "FXAA", "SMAA", "TAA"});
-        add_float_("taa_sharpness", "TAA Sharpness", "Anti-Aliasing",
-            "Post-resolve sharpening to counter TAA's inherent softness.",
-            0.5f, 0.0f, 1.0f, 0.05f);
-        add_bool_("taa_upsampling", "TAA Upsampling", "Anti-Aliasing",
-            "Let TAA also upscale from the internal resolution scale (TAAU).",
-            false);
+        // ---- Detail & Streaming --------------------------------------------
+        planned_(add_int_("lod_bias", "LOD Bias", "Detail & Streaming",
+            "Bias on the screen-space-error LOD selection.", 0, -2, 2),
+            "Needs the vgeom LOD cut inside AEGIS (see Virtual Geometry).");
+        planned_(add_enum_("texture_quality", "Texture Quality", "Detail & Streaming",
+            "Highest mip the streamer keeps resident.", 3, {"Low", "Medium", "High", "Ultra"}),
+            "The cooker emits mip 0 only; mip generation + BC encoding is the next cooker slice.");
+        planned_(add_float_("mip_bias", "Mip Bias", "Detail & Streaming",
+            "Sampler LOD bias.", 0.0f, -2.0f, 2.0f, 0.05f),
+            "Needs sampler objects in the RHI.");
+        planned_(add_int_("texture_streaming_budget", "Texture Pool (MB)", "Detail & Streaming",
+            "VRAM budget for streamed textures.", 2048, 256, 16384),
+            "The virtual-texture cache is CPU-resident; no GPU pool to budget yet.");
+        planned_(add_bool_("virtual_texturing", "Virtual Texturing", "Detail & Streaming",
+            "Page-table texturing with GPU feedback.", false),
+            "runtime/vt has the page table and decoder; no GPU indirection or feedback pass.");
 
-        // ---- Color Grading --------------------------------------------
-        add_float_("cg_temperature", "Temperature", "Color Grading",
-            "White-balance Kelvin shift: negative = cooler/blue, positive = warmer/orange.",
-            0.0f, -1.0f, 1.0f, 0.05f);
-        add_float_("cg_tint", "Tint", "Color Grading",
-            "White-balance green<->magenta axis.",
-            0.0f, -1.0f, 1.0f, 0.05f);
-        add_float_("cg_saturation", "Saturation", "Color Grading",
-            "Chroma scale: 0 = greyscale, 1 = unchanged, 2 = vivid.",
-            1.0f, 0.0f, 2.0f, 0.05f);
-        add_float_("cg_contrast", "Contrast", "Color Grading",
-            "Tonal contrast about middle grey.",
-            1.0f, 0.0f, 2.0f, 0.05f);
-        add_bool_("cg_lut_enabled", "Apply Color LUT", "Color Grading",
-            "Apply the project's 3D colour lookup table after grading.", false);
-
-        // ---- Atmosphere -----------------------------------------------
-        add_bool_("fog_enabled", "Fog", "Atmosphere",
-            "Exponential height + distance fog.", false);
-        add_float_("fog_density", "Fog Density", "Atmosphere",
-            "Extinction coefficient for the distance fog.",
-            0.02f, 0.0f, 1.0f, 0.005f);
-        add_bool_("volumetric_fog", "Volumetric Fog", "Atmosphere",
-            "Froxel-based volumetric fog that scatters light through participating media.",
-            false);
-        add_bool_("volumetric_lighting", "Volumetric Lighting", "Atmosphere",
-            "Light-shaft / god-ray scattering from shadowed light sources.", false);
-
-        // ---- Detail & Streaming ---------------------------------------
-        add_int_("lod_bias", "LOD Bias", "Detail & Streaming",
-            "Shifts mesh LOD selection: negative = hold higher detail longer "
-            "(costlier), positive = drop sooner (faster).",
-            0, -3, 3);
-        add_enum_("texture_quality", "Texture Quality", "Detail & Streaming",
-            "Highest resident mip level for streamed textures.",
-            3, {"Low", "Medium", "High", "Ultra"});
-        add_float_("mip_bias", "Mip Bias", "Detail & Streaming",
-            "Global sampler mip LOD bias; negative sharpens (more aliasing), "
-            "positive softens.",
-            0.0f, -2.0f, 2.0f, 0.1f);
-        add_int_("texture_streaming_budget", "Texture Pool (MB)", "Detail & Streaming",
-            "VRAM budget for the streamed-texture pool.",
-            2048, 256, 16384);
-        add_bool_("virtual_texturing", "Virtual Texturing", "Detail & Streaming",
-            "Stream only the texture tiles visible this frame (cardinal::vt) — "
-            "decouples texture memory from texture resolution.", true);
-
-        // ---- Debug (pipeline-global only) -----------------------------
-        // The per-viewport visualisation CHOICE is made in the VIEWPORT
-        // TOOLBAR — each viewport carries its own scene::ViewMode, pushed
-        // into the "view_mode" knob above each frame (see render()). These
-        // Debug knobs, by contrast, affect the whole engine simulation /
-        // cull state regardless of viewport.
-        add_bool_("pause_simulation", "Pause Simulation", "Debug",
-            "Freeze the scene update; rendering continues.", false);
-        add_bool_("freeze_culling", "Freeze Culling Frustum", "Debug",
-            "Hold the previous-frame cull frustum so you can fly the camera "
-            "OUTSIDE it to see what's being culled.", false);
+        // ---- Debug ------------------------------------------------------------
+        planned_(add_bool_("freeze_culling", "Freeze Culling Frustum", "Debug",
+            "Keep culling against the frustum of the moment this was enabled.", false),
+            "Needs the frustum snapshot fed to MeshletCull instead of the live camera.");
     }
 
 public:

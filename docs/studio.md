@@ -140,24 +140,48 @@ snapshot-based per edit.
 
 ## 6. AEGIS render settings
 
-The **Render Pipeline** panel exposes the AEGIS pipeline as grouped *knobs*
-(checkbox / slider / combo), each with a tooltip; hardware-gated knobs grey
-out with a reason on unsupported GPUs. Groups:
+The **Render Pipeline** panel (docked on the right by default) is the one
+place every AEGIS setting lives, and it tells the truth about each one.
 
-- **Visualisation** (view mode), **AEGIS** (graph backend, max geometry tier,
-  virtual geometry / meshlet / Hi-Z, **GPU Compute Execute (experimental)**)
-- **Quality**, **Shadows**, **Anti-Aliasing**, **Reflections**, **Lighting**,
-  **Global Illumination**, **Post-FX**, **Color Grading**, **Atmosphere**,
-  **Detail & Streaming**, **Frame Pacing**, **Upscaler**, **GPU Features**,
-  **Debug**.
+**Header.** The active pipeline picker, then a live status strip: whether the
+async GPU lane is live or the graph is telemetry only, passes dispatched /
+total, triangles fed, GPU graph time (last retired submission) and the CPU
+cost of the last `render()`.
 
-Knobs that map to real config (max tier, FP8/FP4, async compute, VRS, bindless,
-DirectStorage) drive the pipeline; the rest persist + display and take effect
-as the renderer consumes them.
+**Toolbar.** A text filter over setting names, ids and groups; a preset
+combo (**Performance / Balanced / Quality**) with *Apply preset* (presets only
+touch live settings); *Reset all*; and *Show planned*.
 
-> **GPU Compute Execute** is experimental + off by default. Enabling it routes
-> the AEGIS graph through real GPU compute dispatch (`RhiBackend`); leave it off
-> for the stable ForwardRenderer path.
+**Settings.** Grouped under collapsing headers that show their live / planned
+counts. Each row is label, control, state:
+
+- **live** (no badge) — the pipeline reads it every frame. A *reset* button
+  appears when the value differs from its default. Hover for the description,
+  the id, the default and the range.
+- **planned** (amber, greyed) — the setting exists for a feature that is not
+  wired yet. Its tooltip names the slice that has to land first (the build
+  order in `docs/feature_coverage.md`). The value is kept but has no effect.
+- **n/a** (grey) — the device lacks the feature (`Pipeline::on_caps`), with the
+  reason on hover.
+
+Live today: view mode; graph backend, async compute lane, GPU compute
+execute, present AEGIS output, max geometry tier + FP8/FP4 permits; Hi-Z
+occlusion, tile-binned raster, bin capacity; resolution scale, 2x2 adaptive
+shading rate, hardware VRS; screen-space GI + AO (radius, intensity, AO
+strength, steps); exposure. Everything under Lighting, Reflections, Shadows,
+Anti-Aliasing, Color Grading, Atmosphere, Detail & Streaming and Upscaler is
+planned and greyed. Duplicates were removed (SSAO vs SSGI AO, GI mode vs
+SSGI, MSAA on a visibility buffer, frame pacing which Settings owns).
+
+**Telemetry.** Pass counts, the CPU breakdown of `render()` (extract, config,
+lane execute with its slot wait, present) and the per-pass GPU time table
+with a share bar.
+
+**GPU Feature Matrix.** What the device reports, collapsed by default.
+
+All live settings are also console cvars (`r.aegis.*`), saved to
+`studio_settings.cfg` on exit, and settable at boot with
+`--cvar=r.aegis.resolution_scale=0.5` (repeatable; profile runs never save).
 
 ---
 

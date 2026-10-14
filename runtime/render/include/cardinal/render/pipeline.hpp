@@ -71,6 +71,29 @@ struct Knob {
     // greys the knob out and shows the reason as a tooltip.
     bool         available{true};
     cardinal::string  unavailable_reason;
+
+    // Honesty marker. Live = the pipeline reads it every frame. Planned =
+    // the panel shows it greyed with `planned_note` (what has to land first,
+    // see docs/feature_coverage.md); the value is kept but has no effect.
+    enum class Status : u32 { Live = 0, Planned };
+    Status            status{Status::Live};
+    cardinal::string  planned_note;
+
+    // Defaults captured when the knob is built (Reset / presets).
+    bool  b_def{false};
+    int   i_def{0};
+    float f_def{0.0f};
+    int   e_def{0};
+    void reset_to_default() noexcept { b = b_def; i = i_def; f = f_def; e = e_def; }
+    bool is_default() const noexcept {
+        switch (kind) {
+            case KnobKind::Bool:  return b == b_def;
+            case KnobKind::Int:   return i == i_def;
+            case KnobKind::Float: return f == f_def;
+            case KnobKind::Enum:  return e == e_def;
+        }
+        return true;
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -175,6 +198,13 @@ public:
         return none;
     }
     virtual f32 gpu_graph_ms() const noexcept { return 0.0f; }
+
+    // Named knob presets (Performance / Balanced / Quality). The panel lists
+    // them; apply_preset writes knob values and the next render() picks them
+    // up like any edit.
+    virtual u32         preset_count() const noexcept { return 0; }
+    virtual const char* preset_name(u32 /*i*/) const noexcept { return ""; }
+    virtual void        apply_preset(u32 /*i*/) {}
 
 protected:
     Pipeline() = default;

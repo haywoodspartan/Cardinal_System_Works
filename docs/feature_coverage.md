@@ -8,7 +8,7 @@ missing pieces should land in. Status words:
 - **HAVE** — runs in the engine on the GPU path a user sees (AEGIS or the
   forward fallback), with tests.
 - **PARTIAL** — exists but is CPU-only, unwired (never added by
-  `AegisPipeline::build`), knob-only (a Studio setting nothing reads), or
+  `AegisPipeline::build`), planned (a Studio setting the pipeline does not read yet; the Render Pipeline panel greys it and says what has to land first), or
   covers a fraction of the feature. The row says which.
 - **MISSING** — nothing beyond a comment or a roadmap line.
 
@@ -19,14 +19,14 @@ Paths are relative to the repo root. Audited 2026-10-13 against commit
 
 | Feature | Status | Where | Evidence |
 |---|---|---|---|
-| SSAO | HAVE (GPU, wired) | `runtime/render/src/gpu_ssgi.cpp` | AO term of `ScreenSpaceGIPass`. The separate `ssao_enabled` knob is knob-only. |
+| SSAO | HAVE (GPU, wired) | `runtime/render/src/gpu_ssgi.cpp` | AO term of `ScreenSpaceGIPass` (`ssgi_ao_strength`). The duplicate `ssao_enabled` knob was removed 2026-10-13. |
 | Spherical-harmonics ambient | MISSING | `runtime/lighting/include/cardinal/lighting/bake.hpp` | 6-axis ambient cubes only; CPU; tests only. |
 | Skeletal animation | PARTIAL | `runtime/scene/src/skin.cpp`, `runtime/render/src/gpu_skin.cpp`, `runtime/import/src/import_gltf.cpp` | CPU skinning in ForwardRenderer + bridge; GPU `SkinPass` unwired; glTF skins import but no animation channels; nothing writes `Entity::pose`. |
 | Animation state machines / blend trees | MISSING | `runtime/anim/include/cardinal/anim/anim.hpp` | Generic `Curve`/`Clip`/`Player` only. |
 | Full-body IK, procedural animation | MISSING | — | |
 | Facial (muscle) animation, blendshapes | MISSING | `runtime/import/src/import_fbx.cpp` | FBX blendshapes deferred; glTF morph targets not imported. |
 | Motion capture / facial capture import | MISSING | — | |
-| MSAA | MISSING | `runtime/rhi/src/vulkan/vulkan.cpp`, `runtime/rhi/src/d3d12/device.cpp` | Sample count hard-coded to 1; `msaa_samples` knob-only. |
+| MSAA | MISSING | `runtime/rhi/src/vulkan/vulkan.cpp`, `runtime/rhi/src/d3d12/device.cpp` | Sample count hard-coded to 1. The `msaa_samples` knob was removed: a visibility-buffer pipeline does not MSAA; the AA plan is TAA (planned knob `aa_mode`). |
 | FXAA / image-based AA | PARTIAL (CPU, unwired) | `runtime/postfx/src/postfx.cpp` | `make_fxaa_pass`; `postfx::Chain` used only by `tests/postfx`. |
 | TAA | PARTIAL (CPU-only, unwired) | `runtime/render/src/gpu_postvol.cpp` | `TAAPass` has no `compute_hlsl`. Motion vectors ARE wired (`MotionVectorPass`). |
 | Reactive AI (perception) | HAVE (basic) | `runtime/ai/include/cardinal/ai/ai.hpp` | Sight-cone + hearing sensors, stimuli. |
@@ -56,7 +56,7 @@ Paths are relative to the repo root. Audited 2026-10-13 against commit
 | Exposure | PARTIAL | `runtime/scene/include/cardinal/scene/light.hpp` | Manual only; AEGIS `exposure` knob not read into config; no auto-exposure. |
 | HDR display output | MISSING | `runtime/rhi/src/vulkan/swapchain.cpp` | sRGB only. |
 | Refraction, glass | MISSING | — | No transmission/IOR, no blend state. |
-| Reflection (SSR, planar, cube) | MISSING | `renderer.cpp` | Hemisphere specular only; `ssr_enabled` knob-only. |
+| Reflection (SSR, planar, cube) | MISSING | `renderer.cpp` | Hemisphere specular only; `ssr_enabled` is a planned knob (greyed). |
 | Volumetric lighting / fog | PARTIAL (CPU-only, unwired) | `gpu_postvol.cpp` | Froxel `VolumetricFogPass`, unshadowed. |
 | Per-pixel lighting, Cook-Torrance PBR | HAVE | `renderer.cpp`, `VBufResolvePass` | GGX in both paths. |
 | Order-independent transparency | MISSING (blend state now exists) | `runtime/rhi/include/cardinal/rhi/rhi.hpp` | `PipelineDesc::blend` (Opaque / Alpha / Additive / Premultiplied) + `color_write_mask` on both backends; no translucency pass or OIT uses it yet, and it is unverified visually (no headless graphics test). |

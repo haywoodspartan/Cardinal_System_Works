@@ -3547,82 +3547,186 @@ public:
     void draw_render_pipeline_panel(render::Registry& reg,
                                     const char* title, bool* p_open) override
     {
-        if (!ImGui::Begin(title ? title : "Render Pipeline", p_open,
-                          0)) {
+        if (!ImGui::Begin(title ? title : "Render Pipeline", p_open, 0)) {
             ImGui::End(); return;
         }
+        auto* p = reg.active();
+        const ImVec4 col_live  (0.40f, 1.00f, 0.40f, 1.0f);
+        const ImVec4 col_plan  (1.00f, 0.72f, 0.30f, 1.0f);
+        const ImVec4 col_grey  (0.55f, 0.55f, 0.55f, 1.0f);
 
-        // Active-pipeline picker.
-        auto pipelines = reg.all();
-        const char* current_name = reg.active() ? reg.active()->name() : "?";
-        if (ImGui::BeginCombo("Active pipeline", current_name)) {
-            for (auto* p : pipelines) {
-                const bool is_sel = (reg.active() == p);
-                if (ImGui::Selectable(p->name(), is_sel)) reg.set_active(p->id());
-                if (is_sel) ImGui::SetItemDefaultFocus();
+        // ---- Header: pipeline picker + live status strip -------------------
+        {
+            auto pipelines = reg.all();
+            ImGui::SetNextItemWidth(240.0f);
+            if (ImGui::BeginCombo("##pipeline", p ? p->name() : "?")) {
+                for (auto* q : pipelines) {
+                    const bool is_sel = (p == q);
+                    if (ImGui::Selectable(q->name(), is_sel)) reg.set_active(q->id());
+                    if (is_sel) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
             }
-            ImGui::EndCombo();
+            if (p) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::PushTextWrapPos(420.0f);
+                    ImGui::TextUnformatted(p->description());
+                    ImGui::PopTextWrapPos();
+                    ImGui::EndTooltip();
+                }
+            }
         }
-        if (auto* p = reg.active()) {
-            ImGui::TextWrapped("%s", p->description());
+        if (p) {
+            const auto  fs = p->stats();
+            const auto& gt = p->gpu_pass_times();
+            const bool  gpu_lane = !gt.empty();
+            ImGui::TextColored(gpu_lane ? col_live : col_grey, gpu_lane ? "GPU lane live" : "GPU lane: telemetry only");
+            if (fs.clusters_total > 0) {
+                ImGui::SameLine(0.0f, 14.0f);
+                ImGui::Text("passes %u / %u", fs.clusters_drawn, fs.clusters_total);
+                ImGui::SameLine(0.0f, 14.0f);
+                ImGui::Text("tris %u", fs.triangles_drawn);
+            }
+            if (gpu_lane) {
+                ImGui::SameLine(0.0f, 14.0f);
+                ImGui::Text("GPU %.2f ms", static_cast<double>(p->gpu_graph_ms()));
+            }
+            if (fs.render_total_us > 0.0f) {
+                ImGui::SameLine(0.0f, 14.0f);
+                ImGui::Text("CPU %.2f ms", static_cast<double>(fs.render_total_us) * 1e-3);
+            }
         }
         ImGui::Separator();
 
-        // Optional: per-frame statistics published by the active pipeline.
-        // Pipelines that don't compute stats return zeros; we hide the box
-        // when nothing meaningful is reported.
-        if (auto* p = reg.active()) {
-            const auto fs = p->stats();
-            if (fs.clusters_total > 0) {
-                ImGui::SeparatorText("Frame Stats");
-                ImGui::Text("Clusters total : %u", fs.clusters_total);
-                const float culled_pct = fs.clusters_total > 0
-                    ? 100.0f * static_cast<float>(fs.clusters_culled) /
-                                static_cast<float>(fs.clusters_total)
-                    : 0.0f;
-                ImGui::Text("Clusters culled: %u  (%.1f%%)",
-                            fs.clusters_culled, static_cast<double>(culled_pct));
-                ImGui::Text("Clusters drawn : %u", fs.clusters_drawn);
-                ImGui::Text("Triangles drawn: %u", fs.triangles_drawn);
-                if (fs.tessellation_factor_avg > 0)
-                    ImGui::Text("Tess factor avg: %u", fs.tessellation_factor_avg);
+        // ---- Toolbar: filter / presets / reset / planned toggle -----------
+        ImGui::SetNextItemWidth(170.0f);
+        ImGui::InputTextWithHint("##pipe_filter", "filter settings…", pipe_filter_, sizeof pipe_filter_);
+        ImGui::SameLine();
+        if (p && p->preset_count() > 0) {
+            const u32 n = p->preset_count();
+            if (pipe_preset_ < 0 || pipe_preset_ >= static_cast<int>(n)) pipe_preset_ = 0;
+            ImGui::SetNextItemWidth(120.0f);
+            if (ImGui::BeginCombo("##pipe_preset", p->preset_name(static_cast<u32>(pipe_preset_)))) {
+                for (u32 i = 0; i < n; ++i) {
+                    const bool sel = (static_cast<int>(i) == pipe_preset_);
+                    if (ImGui::Selectable(p->preset_name(i), sel)) pipe_preset_ = static_cast<int>(i);
+                    if (sel) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
             }
-            // Per-pass GPU times from the async compute lane (AEGIS on the
-            // GPU). The lane reports the submission that retired two
-            // submits ago, so this is live but lags by two frames.
+            ImGui::SameLine();
+            if (ImGui::Button("Apply preset")) p->apply_preset(static_cast<u32>(pipe_preset_));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Writes the preset's values into the live settings. Planned settings are never touched.");
+            ImGui::SameLine();
+        }
+        if (p && ImGui::Button("Reset all")) {
+            for (auto& k : p->knobs()) k.reset_to_default();
+        }
+        ImGui::SameLine();
+        ImGui::Checkbox("Show planned", &pipe_show_planned_);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Planned settings are greyed out: the pipeline does not read them yet.\n"
+                              "Their tooltip names the slice that has to land first.");
+
+        // ---- Settings, grouped ---------------------------------------------
+        if (p) {
+            auto& knobs = p->knobs();
+            cardinal::vector<cardinal::string> groups;
+            for (const auto& k : knobs) {
+                bool seen = false;
+                for (const auto& g : groups) if (g == k.group) { seen = true; break; }
+                if (!seen) groups.push_back(k.group);
+            }
+            const bool filtering = pipe_filter_[0] != '\0';
+            auto visible = [&](const render::Knob& k) {
+                if (k.status == render::Knob::Status::Planned && !pipe_show_planned_) return false;
+                if (!filtering) return true;
+                return ci_contains_(k.label, pipe_filter_) || ci_contains_(k.id, pipe_filter_) ||
+                       ci_contains_(k.group, pipe_filter_);
+            };
+            for (const auto& g : groups) {
+                u32 live = 0, planned = 0;
+                for (const auto& k : knobs) {
+                    if (k.group != g || !visible(k)) continue;
+                    if (k.status == render::Knob::Status::Planned) ++planned; else ++live;
+                }
+                if (live + planned == 0) continue;
+                char hdr[160];
+                if (planned > 0)
+                    cardinal::snprintf(hdr, sizeof hdr, "%s   (%u live, %u planned)###pg_%s", g.c_str(), live, planned, g.c_str());
+                else
+                    cardinal::snprintf(hdr, sizeof hdr, "%s   (%u live)###pg_%s", g.c_str(), live, g.c_str());
+                const ImGuiTreeNodeFlags fl = (live > 0 || filtering) ? ImGuiTreeNodeFlags_DefaultOpen : 0;
+                if (!ImGui::CollapsingHeader(hdr, fl)) continue;
+                ImGui::PushID(g.c_str());
+                if (ImGui::BeginTable("knobs", 3,
+                        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg |
+                        ImGuiTableFlags_NoSavedSettings | ImGuiTableFlags_PadOuterX)) {
+                    ImGui::TableSetupColumn("Setting", ImGuiTableColumnFlags_WidthStretch, 0.40f);
+                    ImGui::TableSetupColumn("Value",   ImGuiTableColumnFlags_WidthStretch, 0.46f);
+                    ImGui::TableSetupColumn("##state", ImGuiTableColumnFlags_WidthStretch, 0.14f);
+                    for (auto& k : knobs) {
+                        if (k.group != g || !visible(k)) continue;
+                        draw_knob_row_(k, col_plan, col_grey);
+                    }
+                    ImGui::EndTable();
+                }
+                ImGui::PopID();
+            }
+        }
+
+        // ---- Telemetry ------------------------------------------------------
+        if (p && ImGui::CollapsingHeader("Telemetry", ImGuiTreeNodeFlags_DefaultOpen)) {
+            const auto  fs = p->stats();
             const auto& gt = p->gpu_pass_times();
+            if (fs.clusters_total > 0) {
+                const float culled_pct = 100.0f * static_cast<float>(fs.clusters_culled) /
+                                         static_cast<float>(fs.clusters_total);
+                ImGui::Text("Passes: %u total, %u dispatched, %u culled (%.1f%%)",
+                            fs.clusters_total, fs.clusters_drawn, fs.clusters_culled,
+                            static_cast<double>(culled_pct));
+                ImGui::Text("Triangles fed: %u", fs.triangles_drawn);
+            }
+            if (fs.render_total_us > 0.0f) {
+                ImGui::Text("CPU per render(): %.3f ms  = extract %.3f + config %.3f + lane %.3f (wait %.3f) + present %.3f",
+                            static_cast<double>(fs.render_total_us) * 1e-3,
+                            static_cast<double>(fs.cull_us) * 1e-3,  static_cast<double>(fs.submit_us) * 1e-3,
+                            static_cast<double>(fs.phase1_us) * 1e-3, static_cast<double>(fs.phase2_us) * 1e-3,
+                            static_cast<double>(fs.sort_us) * 1e-3);
+                if (fs.lane_latency_us > 0.0f)
+                    ImGui::Text("Lane submit -> GPU start: %.3f ms", static_cast<double>(fs.lane_latency_us) * 1e-3);
+            }
             if (!gt.empty()) {
-                ImGui::SeparatorText("GPU Pass Times (async lane)");
-                ImGui::Text("Graph total: %.3f ms", static_cast<double>(p->gpu_graph_ms()));
-                if (ImGui::BeginTable("gpu_pass_times", 2,
-                                      ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
+                ImGui::Text("GPU graph: %.3f ms (last retired submission, two frames behind)",
+                            static_cast<double>(p->gpu_graph_ms()));
+                if (ImGui::BeginTable("gpu_pass_times", 3,
+                                      ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg |
+                                      ImGuiTableFlags_NoSavedSettings)) {
+                    ImGui::TableSetupColumn("Pass",  ImGuiTableColumnFlags_WidthStretch, 0.55f);
+                    ImGui::TableSetupColumn("ms",    ImGuiTableColumnFlags_WidthStretch, 0.20f);
+                    ImGui::TableSetupColumn("share", ImGuiTableColumnFlags_WidthStretch, 0.25f);
+                    ImGui::TableHeadersRow();
+                    const float total = p->gpu_graph_ms() > 0.0f ? p->gpu_graph_ms() : 1.0f;
                     for (const auto& t : gt) {
                         ImGui::TableNextRow();
                         ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(t.name.c_str());
-                        ImGui::TableSetColumnIndex(1); ImGui::Text("%7.3f ms", static_cast<double>(t.ms));
+                        ImGui::TableSetColumnIndex(1); ImGui::Text("%7.3f", static_cast<double>(t.ms));
+                        ImGui::TableSetColumnIndex(2);
+                        const float frac = t.ms / total;
+                        ImGui::ProgressBar(frac < 0.0f ? 0.0f : (frac > 1.0f ? 1.0f : frac), ImVec2(-1.0f, 0.0f), "");
                     }
                     ImGui::EndTable();
                 }
             }
         }
 
-        // Knobs grouped by Knob::group.
-        if (auto* p = reg.active()) {
-            auto& knobs = p->knobs();
-            cardinal::string current_group;
-            for (auto& k : knobs) {
-                if (k.group != current_group) {
-                    ImGui::SeparatorText(k.group.c_str());
-                    current_group = k.group;
-                }
-                draw_knob(k);
-            }
-        }
-
-        ImGui::Separator();
-        ImGui::SeparatorText("GPU Feature Matrix");
-        ImGui::TextDisabled("Knobs above are auto-greyed when their feature isn't supported.");
-        if (device_) {
+        // ---- GPU feature matrix (what the device can do) --------------------
+        if (device_ && ImGui::CollapsingHeader("GPU Feature Matrix")) {
+            ImGui::TextDisabled("Settings are greyed automatically when their feature is unsupported.");
             render::FeatureGate gate(device_->capabilities());
             cardinal::string cur_group;
             for (u32 i = 0; i < static_cast<u32>(render::Feature::Count_); ++i) {
@@ -3632,10 +3736,7 @@ public:
                 if (cur_group != g) { ImGui::SeparatorText(g); cur_group = g; }
                 ImGui::TextDisabled("  %-26s", render::FeatureGate::feature_name(f));
                 ImGui::SameLine(280.0f);
-                ImGui::TextColored(st.available
-                    ? ImVec4(0.40f, 1.0f, 0.40f, 1.0f)
-                    : ImVec4(0.55f, 0.55f, 0.55f, 1.0f),
-                    "%s", st.available ? "yes" : "no");
+                ImGui::TextColored(st.available ? col_live : col_grey, "%s", st.available ? "yes" : "no");
                 if (!st.available && !st.reason.empty()) {
                     ImGui::SameLine(0.0f, 16.0f);
                     ImGui::TextDisabled("(%s)", st.reason.c_str());
@@ -3645,28 +3746,53 @@ public:
         ImGui::End();
     }
 
-    void draw_knob(render::Knob& k) {
-        const bool was_enabled = k.available;
-        if (!was_enabled) ImGui::BeginDisabled();
+    static bool ci_contains_(const cardinal::string& hay, const char* needle) {
+        if (!needle || !*needle) return true;
+        auto lower = [](char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c; };
+        const cardinal::usize n = cardinal::strlen(needle);
+        if (hay.size() < n) return false;
+        for (cardinal::usize i = 0; i + n <= hay.size(); ++i) {
+            cardinal::usize j = 0;
+            while (j < n && lower(hay[i + j]) == lower(needle[j])) ++j;
+            if (j == n) return true;
+        }
+        return false;
+    }
+
+    // One settings row: label | control | state (planned / n/a / reset).
+    void draw_knob_row_(render::Knob& k, const ImVec4& col_plan, const ImVec4& col_grey) {
+        const bool planned  = (k.status == render::Knob::Status::Planned);
+        const bool disabled = planned || !k.available;
+        ImGui::TableNextRow();
         ImGui::PushID(k.id.c_str());
+
+        ImGui::TableSetColumnIndex(0);
+        if (disabled) ImGui::BeginDisabled();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(k.label.c_str());
+        if (disabled) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) knob_tooltip_(k, col_plan);
+
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        if (disabled) ImGui::BeginDisabled();
         switch (k.kind) {
             case render::KnobKind::Bool:
-                ImGui::Checkbox(k.label.c_str(), &k.b);
+                ImGui::Checkbox("##v", &k.b);
                 break;
             case render::KnobKind::Int:
-                ImGui::SliderInt(k.label.c_str(), &k.i, k.i_min, k.i_max);
+                ImGui::SliderInt("##v", &k.i, k.i_min, k.i_max);
                 break;
             case render::KnobKind::Float:
-                ImGui::SliderFloat(k.label.c_str(), &k.f, k.f_min, k.f_max,
-                                   "%.3f", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SliderFloat("##v", &k.f, k.f_min, k.f_max, "%.3f", ImGuiSliderFlags_AlwaysClamp);
                 break;
             case render::KnobKind::Enum: {
-                const char* preview = (k.e >= 0 && k.e < (int)k.enum_labels.size())
-                    ? k.enum_labels[k.e].c_str() : "?";
-                if (ImGui::BeginCombo(k.label.c_str(), preview)) {
-                    for (int i = 0; i < (int)k.enum_labels.size(); ++i) {
+                const char* preview = (k.e >= 0 && k.e < static_cast<int>(k.enum_labels.size()))
+                    ? k.enum_labels[static_cast<cardinal::usize>(k.e)].c_str() : "?";
+                if (ImGui::BeginCombo("##v", preview)) {
+                    for (int i = 0; i < static_cast<int>(k.enum_labels.size()); ++i) {
                         const bool sel = (k.e == i);
-                        if (ImGui::Selectable(k.enum_labels[i].c_str(), sel)) k.e = i;
+                        if (ImGui::Selectable(k.enum_labels[static_cast<cardinal::usize>(i)].c_str(), sel)) k.e = i;
                         if (sel) ImGui::SetItemDefaultFocus();
                     }
                     ImGui::EndCombo();
@@ -3674,21 +3800,46 @@ public:
                 break;
             }
         }
-        ImGui::PopID();
-        if (!was_enabled) ImGui::EndDisabled();
+        if (disabled) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) knob_tooltip_(k, col_plan);
 
-        // Tooltip — both the Knob's own + the unavailability reason.
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::BeginTooltip();
-            if (!k.tooltip.empty()) ImGui::TextWrapped("%s", k.tooltip.c_str());
-            if (!was_enabled && !k.unavailable_reason.empty()) {
-                ImGui::Separator();
-                ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.4f, 1.0f),
-                    "Unavailable: %s", k.unavailable_reason.c_str());
-            }
-            ImGui::EndTooltip();
+        ImGui::TableSetColumnIndex(2);
+        if (planned) {
+            ImGui::TextColored(col_plan, "planned");
+        } else if (!k.available) {
+            ImGui::TextColored(col_grey, "n/a");
+        } else if (!k.is_default()) {
+            if (ImGui::SmallButton("reset")) k.reset_to_default();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back to the default value");
         }
+        ImGui::PopID();
     }
+
+    void knob_tooltip_(const render::Knob& k, const ImVec4& col_plan) {
+        ImGui::BeginTooltip();
+        ImGui::PushTextWrapPos(420.0f);
+        if (!k.tooltip.empty()) ImGui::TextUnformatted(k.tooltip.c_str());
+        if (k.status == render::Knob::Status::Planned) {
+            ImGui::Separator();
+            ImGui::TextColored(col_plan, "Planned — not read by the pipeline yet.");
+            if (!k.planned_note.empty()) ImGui::TextUnformatted(k.planned_note.c_str());
+        }
+        if (!k.available && !k.unavailable_reason.empty()) {
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.4f, 1.0f), "Unavailable: %s", k.unavailable_reason.c_str());
+        }
+        ImGui::Separator();
+        switch (k.kind) {
+            case render::KnobKind::Bool:  ImGui::TextDisabled("id %s   default %s", k.id.c_str(), k.b_def ? "on" : "off"); break;
+            case render::KnobKind::Int:   ImGui::TextDisabled("id %s   default %d   range %d..%d", k.id.c_str(), k.i_def, k.i_min, k.i_max); break;
+            case render::KnobKind::Float: ImGui::TextDisabled("id %s   default %.3f   range %.2f..%.2f", k.id.c_str(), static_cast<double>(k.f_def), static_cast<double>(k.f_min), static_cast<double>(k.f_max)); break;
+            case render::KnobKind::Enum:  ImGui::TextDisabled("id %s   default %s", k.id.c_str(),
+                (k.e_def >= 0 && k.e_def < static_cast<int>(k.enum_labels.size())) ? k.enum_labels[static_cast<cardinal::usize>(k.e_def)].c_str() : "?"); break;
+        }
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
+
 
     // Used by the Stack Tracer's "captured at" line.
     static cardinal::string current_timestamp() {
@@ -4263,6 +4414,10 @@ private:
     rhi::Device*            device_{nullptr};
     rhi::Swapchain*         swapchain_{nullptr};
     window::Window*         window_{nullptr};
+    // Render Pipeline panel state.
+    char                    pipe_filter_[64]{};
+    bool                    pipe_show_planned_{true};
+    int                     pipe_preset_{1};
 
     VkDescriptorPool        desc_pool_{VK_NULL_HANDLE};
     VkRenderPass            render_pass_{VK_NULL_HANDLE};

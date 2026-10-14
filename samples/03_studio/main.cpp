@@ -2201,6 +2201,27 @@ int main(int argc, char** argv) {
         if (want_vp > 0 && want_vp < static_cast<long>(viewports.size()))
             viewports.resize(static_cast<usize>(want_vp));
     }
+    // --cvar=name=value (repeatable): apply console variables at boot, AFTER
+    // the saved settings, so a smoke or benchmark can pin any setting the
+    // console exposes (r.aegis.resolution_scale, r.aegis.exposure, ...)
+    // without editing studio_settings.cfg. Profile runs never save, so a
+    // pinned value does not leak into the next session.
+    for (int i = 1; i < argc; ++i) {
+        if (std::strncmp(argv[i], "--cvar=", 7) != 0) continue;
+        const std::string spec(argv[i] + 7);
+        const auto eq = spec.find('=');
+        if (eq == std::string::npos) {
+            clog::warnf("sample", "--cvar: expected name=value, got %s", spec.c_str());
+            continue;
+        }
+        // Console syntax is "<cvar> <value>" (no set keyword; a bare name prints).
+        const std::string line = spec.substr(0, eq) + " " + spec.substr(eq + 1);
+        std::string acc;
+        cv::Output sink([&](const std::string& t) { if (!acc.empty()) acc += '\n'; acc += t; });
+        const bool ok = cv::Registry::instance().execute(line.c_str(), sink);
+        clog::infof("sample", "--cvar %s -> %s%s%s", spec.c_str(), ok ? "ok" : "FAILED",
+                    acc.empty() ? "" : ": ", acc.c_str());
+    }
 
     // AEGIS Pipeline 2.0 is the default on every start (RhiBackend-driven via
     // its own knob default). render::Registry already defaults to it, but the
